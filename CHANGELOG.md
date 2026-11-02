@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.1] - 2026-11-03
+
+### Changed
+- Clarified static key vs. dynamic `ApiKeyProvider` validation structure in `GeminiRequestHeaders.Create`.
+- Expanded XML documentation exception contracts on `IGeminiClient` and `GeminiClientExtensions` (`GeminiApiException`, `TimeoutException`, `OperationCanceledException`, `HttpRequestException`, `InvalidOperationException`).
+- Added failure mode and exception boundary tables, production deployment checklist, and API scope/compatibility notes to `README.md` and `docs/USAGE.md`.
+
 ## [2.0.0] - 2026-11-02
 
 ### Added
