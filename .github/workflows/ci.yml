@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main, v2 ]
+  pull_request:
+    branches: [ master, main, v2 ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build (warnings as errors)
+        run: dotnet build --no-restore -c Release -warnaserror
+
+      - name: Run unit tests
+        run: dotnet test --no-build -c Release --verbosity normal
+
+      - name: Pack NuGet package
+        run: dotnet pack GeminiAPIWrapper/GeminiAPIWrapper.csproj --no-build -c Release -o artifacts
+
+      - name: Verify package contents
+        run: |
+          unzip -l artifacts/GeminiAPIWrapper.2.0.0.nupkg | grep -E "README.md|GeminiAPIWrapper.xml|LICENSE.txt"
