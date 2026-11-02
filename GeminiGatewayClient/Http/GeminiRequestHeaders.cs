@@ -39,7 +39,8 @@ internal sealed class GeminiRequestHeaders
         }
 
         var hasStaticKey = !string.IsNullOrWhiteSpace(options.ApiKey);
-        if (hasStaticKey && options.ApiKeyProvider is not null)
+        var hasDynamicKeyProvider = options.ApiKeyProvider is not null;
+        if (hasStaticKey && hasDynamicKeyProvider)
         {
             throw new ArgumentException(
                 "GeminiClientOptions.ApiKey and GeminiClientOptions.ApiKeyProvider are mutually exclusive.",
@@ -50,17 +51,18 @@ internal sealed class GeminiRequestHeaders
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using var probe = new HttpRequestMessage();
 
-        if (hasStaticKey || options.ApiKeyProvider is not null)
+        if (hasStaticKey)
         {
-            // Validate the header name (and the static value when known) up front.
-            var probeValue = hasStaticKey ? $"{options.ApiKeyPrefix}{options.ApiKey}" : $"{options.ApiKeyPrefix}probe";
-            Validate(probe, options.ApiKeyHeader, probeValue, nameof(GeminiClientOptions.ApiKeyHeader));
+            var headerValue = $"{options.ApiKeyPrefix}{options.ApiKey}";
+            Validate(probe, options.ApiKeyHeader, headerValue, nameof(GeminiClientOptions.ApiKeyHeader));
             seenNames.Add(options.ApiKeyHeader);
-
-            if (hasStaticKey)
-            {
-                headers.Add(new KeyValuePair<string, string>(options.ApiKeyHeader, probeValue));
-            }
+            headers.Add(new KeyValuePair<string, string>(options.ApiKeyHeader, headerValue));
+        }
+        else if (hasDynamicKeyProvider)
+        {
+            // Validate the header name and prefix up front; the actual key is resolved per request by ApiKeyProvider.
+            Validate(probe, options.ApiKeyHeader, $"{options.ApiKeyPrefix}probe", nameof(GeminiClientOptions.ApiKeyHeader));
+            seenNames.Add(options.ApiKeyHeader);
         }
 
         if (options.AdditionalHeaders is { } additionalHeaders)

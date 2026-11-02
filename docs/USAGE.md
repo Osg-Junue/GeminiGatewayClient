@@ -13,7 +13,7 @@ This guide provides practical usage patterns for `GeminiGatewayClient`, modeled 
 7. [`Microsoft.Extensions.AI` (`IChatClient`) & Automatic Tool Chains](#7-microsoftextensionsai-ichatclient--automatic-tool-chains)
 8. [Manual Multi-Step & Parallel Function Calling (`GeminiClient`)](#8-manual-multi-step--parallel-function-calling-geminiclient)
 9. [Multi-Turn Conversations & Database Persistence](#9-multi-turn-conversations--database-persistence)
-10. [Safety Blocks & Error Handling (`GeminiApiException`)](#10-safety-blocks--error-handling-geminiapiexception)
+10. [Safety Blocks, Timeouts & Error Handling](#10-safety-blocks-timeouts--error-handling)
 11. [`GeminiClientOptions` Reference](#11-geminiclientoptions-reference)
 
 ---
@@ -440,16 +440,29 @@ Simply serialize and deserialize `ChatMessage.Contents` (including `AdditionalPr
 
 ---
 
-## 10. Safety Blocks & Error Handling (`GeminiApiException`)
+## 10. Safety Blocks, Timeouts & Error Handling
 
-Non-2xx responses—as well as in-stream `{"error": ...}` payloads that arrive after an HTTP 200 header—throw `GeminiApiException`:
+### Exception & Failure Modes Matrix
+
+`GeminiClient` and `GeminiChatClient` distinguish between validation errors, upstream API errors, idle stream stalls, and request cancellation:
+
+| Exception | When It Is Thrown | Key Properties & Recovery Guidance |
+|---|---|---|
+| `GeminiApiException` | • Non-2xx HTTP status from Gemini or the gateway<br>• In-stream `{"error": ...}` payload arriving after an HTTP 200 header<br>• Empty or malformed JSON response body | Inspect `StatusCode`, `ErrorStatus` (e.g., `RESOURCE_EXHAUSTED`, `UNAVAILABLE`), `ErrorCode`, `ErrorMessage`, and `ErrorContent` (up to 64 KB). Retry when `IsTransient == true`, honoring `RetryAfter` when present. |
+| `TimeoutException` | No response body or streaming chunk bytes arrive within `GeminiClientOptions.StreamIdleTimeout` (default: **2 minutes**). | Indicates a stalled stream or hung upstream connection after headers were received. Safe to retry if the operation is idempotent. |
+| `OperationCanceledException` / `TaskCanceledException` | • The caller's `CancellationToken` was canceled (`ex.CancellationToken == ct`)<br>• `HttpClient.Timeout` (`GeminiClientOptions.Timeout`, default: **5 minutes**) elapsed before response headers arrived | Distinguish caller cancellation (`ct.IsCancellationRequested`) from initial header timeout (`!ct.IsCancellationRequested`). Increase `GeminiClientOptions.Timeout` for deep thinking requests. |
+| `HttpRequestException` | Transport-level DNS, socket, or TLS failure before an HTTP response is received. | Check gateway reachability, TLS certificates, or proxy settings. |
+| `InvalidOperationException` | • Neither per-call `model` nor `GeminiClientOptions.Model` was set<br>• `ApiKeyProvider` returned an empty, whitespace-only, or newline-containing token | Fix client configuration or token provider implementation. |
+| `ArgumentException` / `ArgumentNullException` | Invalid `GenerateContentRequest` or `GeminiClientOptions` (thrown **eagerly** before network I/O, including when calling `StreamGenerateContentAsync` before enumeration starts). | Fix request parameters (e.g., empty `Contents`, conflicting `ThinkingLevel` and `ThinkingBudget`, or `Unknown` wire enum values). |
+
+### Handling `GeminiApiException`, `TimeoutException`, and Safety Blocks
 
 ```csharp
 using GeminiGatewayClient;
 
 try
 {
-    var response = await client.GenerateContentAsync(prompt);
+    var response = await client.GenerateContentAsync(prompt, cancellationToken: ct);
 
     if (response.BlockReason is { } blockReason)
     {
@@ -470,7 +483,23 @@ catch (GeminiApiException ex)
         Console.Error.WriteLine($"Retry after {retryAfter.TotalSeconds:F0}s");
     }
 }
+catch (TimeoutException ex)
+{
+    // StreamIdleTimeout elapsed while reading the response or streaming chunks
+    Console.Error.WriteLine($"Response stream stalled: {ex.Message}");
+}
+catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+{
+    // HttpClient.Timeout (GeminiClientOptions.Timeout) elapsed before headers arrived
+    Console.Error.WriteLine("Request timed out waiting for response headers.");
+}
 ```
+
+### Operational Note: Caller-Supplied `HttpClient` Instances
+
+When you pass your own `HttpClient` to `new GeminiClient(options, httpClient)`, `GeminiClient` does **not** mutate or dispose that instance:
+- `GeminiClientOptions.Timeout` is not applied to a caller-supplied `HttpClient`—configure `httpClient.Timeout` directly (or via `IHttpClientBuilder`).
+- Configure `SocketsHttpHandler.AllowAutoRedirect = false` on your custom handler so credentials in custom headers (`x-goog-api-key`, `Ocp-Apim-Subscription-Key`) are never forwarded across cross-host redirects (`services.AddGeminiClient(...)` and internally created clients configure this automatically).
 
 ---
 
