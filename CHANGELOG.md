@@ -5,42 +5,43 @@ All notable changes to this project are documented in this file.
 ## [2.0.0] - 2026-11-02
 
 ### Added
-- **`Microsoft.Extensions.AI` (`IChatClient`) support**: `GeminiService` implements `IChatClient` directly, supporting `GetResponseAsync`, `GetStreamingResponseAsync`, tool/function declarations (`AIFunctionDeclaration` via `parametersJsonSchema`), parallel function call IDs (`FunctionCall.Id` / `FunctionResponse.Id`), structured JSON output (`responseJsonSchema`), `ChatOptions.ModelId` per-request model overrides, `ChatOptions.Reasoning` mapping, reasoning content (`TextReasoningContent` with `ProtectedData` thought signatures), and full token usage (`UsageDetails` including `ReasoningTokenCount` and `CachedInputTokenCount`).
-- **`IHttpClientFactory` & Dependency Injection integration**: added `IServiceCollection.AddGeminiService(...)` in `GeminiAPIWrapper.DependencyInjection` returning `IHttpClientBuilder` for chaining resilience and handler pipelines.
-- **Gateway-friendly authentication and transport options** on `GenerativeLanguageOptions`:
-  - `KeyPrefix`: prepend a prefix such as `"Bearer "` to `ApiKey` in `KeyHeader`.
-  - `AdditionalHeaders`: send extra request headers (e.g., `cf-aig-authorization` for Cloudflare AI Gateway or custom routing/tracing headers) alongside or instead of `KeyHeader`, with eager validation in the constructor.
-  - `ApiKey` is now optional (`string?`); when `null` or empty, no key header is sent (for gateways that inject the Gemini API key upstream).
-  - `Timeout`: configurable timeout for internally created `HttpClient` instances (defaults to 5 minutes for thinking models), backed by `SocketsHttpHandler` with a 2-minute `PooledConnectionLifetime`.
-  - `StreamingFormat`: defaults to `GeminiStreamingFormat.ServerSentEvents` (`?alt=sse`) with `GeminiStreamingFormat.JsonArray` available when needed.
-  - `AllowInsecureHttp`: blocks accidental cleartext `http://` credential transmission to non-loopback hosts unless explicitly enabled.
-  - Redacted `ToString()`: `GenerativeLanguageOptions.ToString()` masks `ApiKey` and `AdditionalHeaders` values so options are never leaked in logs.
-- **External `HttpClient` support**: `GeminiServiceBuilder.Build(GenerativeLanguageOptions, HttpClient)` accepts a caller-managed `HttpClient`. Request headers are attached per `HttpRequestMessage` so `HttpClient.DefaultRequestHeaders` is never mutated, and caller-provided `HttpClient` instances are not disposed when `GeminiService` is disposed.
-- **Rich error parsing on `GeminiApiException`**: parses Google RPC `error.status` (`ErrorStatus`), `error.message` (`ErrorMessage`), and `RetryAfter` (from `google.rpc.RetryInfo.retryDelay` or the HTTP `Retry-After` header) while bounding raw `ErrorContent` to 64 KB.
-- **Official Gemini API model alignment**:
-  - `ThinkingConfig`: added `ThinkingLevel` (`Minimal`, `Low`, `Medium`, `High`) for Gemini 3+ models, made `ThinkingBudget` and `IncludeThoughts` nullable, and fixed the `includeThoughts` property name.
-  - `GeminiResponse`: added `PromptFeedback` (`BlockReason`, `SafetyRatings`) and `ResponseId`, plus `GetBlockReason()` and `GetFinishReason()` extension methods.
-  - `UsageMetadata`: added `ThoughtsTokenCount`, `CachedContentTokenCount`, and `ToolUsePromptTokenCount`.
-  - `GenerationConfig.ResponseJsonSchema` and `FunctionDeclaration.ParametersJsonSchema` / `ResponseJsonSchema` for lossless standard JSON Schema support.
-  - Lenient response enum deserialization (`LenientStringEnumConverter<T>`): unrecognized server enum values for `FinishReason`, `HarmCategory`, `HarmProbability`, and `BlockReason` map to `Unknown` instead of throwing `JsonException`.
-- **NativeAOT & trim compatibility**: enabled `<IsAotCompatible>true</IsAotCompatible>` and removed runtime reflection (`GenerateOptionAttribute`).
+- **Unified `GeminiClient` & `IGeminiClient` architecture**:
+  - Added `IGeminiClient` for unit testing and dependency injection (`Endpoint`, `DefaultModel`, `GenerateContentAsync`, `StreamGenerateContentAsync`).
+  - Added `GeminiClient` with convenience constructor `new GeminiClient(apiKey, model)` and full options constructor `new GeminiClient(GeminiClientOptions, HttpClient?)`.
+  - Added `GeminiClientExtensions` (`GenerateContentAsync(prompt, ...)`, `StreamGenerateContentAsync(prompt, ...)`, and `AsIChatClient(...)`).
+- **Gateway-first `GeminiClientOptions`**:
+  - Separated `Endpoint` (`Uri`, defaults to `https://generativelanguage.googleapis.com/v1beta`) and `Model` (`string?`, supports bare IDs like `"gemini-2.5-flash"` and resource paths like `"models/..."` or `"tunedModels/..."`).
+  - Added `ApiKeyProvider` (`Func<CancellationToken, ValueTask<string>>?`) for per-request dynamic OAuth/JWT token rotation.
+  - Added `ApiKeyHeader` (default `"x-goog-api-key"`), `ApiKeyPrefix` (e.g. `"Bearer "`), and `AdditionalHeaders` with eager CRLF/duplicate/content-header validation.
+  - Added `StreamIdleTimeout` (default 2 minutes) to detect stalled SSE / JSON-array streams via a per-chunk read watchdog and throw `TimeoutException`.
+  - Added `Timeout` (default 5 minutes), `AllowInsecureHttp`, `StreamingFormat` (`ServerSentEvents` default or `JsonArray`), and credential-redacting `ToString()`.
+- **`IOptions<GeminiClientOptions>` & `IHttpClientFactory` DI integration**:
+  - `IServiceCollection.AddGeminiClient(Action<GeminiClientOptions>?)` in `namespace Microsoft.Extensions.DependencyInjection` registers `IValidateOptions<GeminiClientOptions>`, configures `HttpClient.Timeout` from `GeminiClientOptions.Timeout`, sets `SocketsHttpHandler.AllowAutoRedirect = false`, and registers `GeminiClient`, `IGeminiClient`, and `IChatClient`.
+- **`Microsoft.Extensions.AI` (`IChatClient`) adapter (`GeminiChatClient`)**:
+  - Dedicated `GeminiChatClient` (also created via `client.AsIChatClient()`) with modular request, options, response, reasoning-effort, and tool-JSON mappers.
+  - Emits a single trailing `UsageContent` update in streaming to prevent cumulative token double-counting.
+  - Preserves function-call `thoughtSignature` and synthesized call ID markers in `FunctionCallContent.AdditionalProperties` (`GeminiChatPropertyNames`) so persisted chat history without `RawRepresentation` replays accurately.
+  - Model-aware `ReasoningEffort` mapping (`thinkingBudget` for Gemini 2.5 vs `thinkingLevel` for Gemini 3+).
+- **Rich error handling (`GeminiApiException`)**:
+  - Added `IsTransient` (`408`, `429`, `500`, `502`, `503`, `504`), `ErrorStatus`, `ErrorMessage`, `RetryAfter`, and in-stream `{"error": ...}` detection.
+- **Official Gemini API model alignment (`namespace GeminiAPIWrapper.Models`)**:
+  - `GenerateContentRequest` (with `FromPrompt`, `SystemInstruction` as `Content?`) and `GenerateContentResponse` (with `[JsonIgnore]` convenience properties `Text`, `FunctionCalls`, `FinishReason`, `BlockReason`).
+  - `Blob` (replacing `InlineData`) with `byte[] Data` automatically serialized as Base64.
+  - Factory methods `Part.FromText`, `Part.FromBytes`, `Part.FromUri`, `Part.FromFunctionResponse` and `Content.FromText`, `Content.FromParts`.
+  - `ThinkingConfig` (`ThinkingLevel`, nullable `ThinkingBudget` and `IncludeThoughts`), `GenerationConfig.ResponseJsonSchema`, `FunctionDeclaration.ParametersJsonSchema` / `ResponseJsonSchema`, and `LenientStringEnumConverter<T>`.
+- **NativeAOT & trim compatibility**: enabled `<IsAotCompatible>true</IsAotCompatible>` and `<EnableTrimAnalyzer>true</EnableTrimAnalyzer>` with unified `GeminiJsonContext`.
 
 ### Changed (Breaking)
 - **Target framework**: updated from `net9.0` to `net10.0`.
-- **MIME types as strings**: changed `InlineData.MimeType` and `FileData.MimeType` from the `MimeType` enum to `string` and added the `MimeTypes` constants class so any IANA media type or parameterized MIME string (such as `audio/L16;codec=pcm;rate=24000`) works without enum limitations.
-- **`ThinkingConfig` properties**: `ThinkingBudget` is now `int?` and `IncludeThoughts` is `bool?` so unset properties are omitted rather than sending `thinkingBudget: 0`.
-- **Default streaming wire format**: `StreamGenerateAsync` now uses Server-Sent Events (`?alt=sse`) by default (`GeminiStreamingFormat.ServerSentEvents`). Set `StreamingFormat = GeminiStreamingFormat.JsonArray` for the legacy chunked JSON array format.
-- **Non-loopback `http://` restriction**: `http://` endpoints now throw `ArgumentException` for non-loopback hosts unless `AllowInsecureHttp = true` is set on `GenerativeLanguageOptions`.
-- **`IChatClient` function call arguments**: `FunctionCallContent.Arguments` values are now preserved as `JsonElement` instances rather than eagerly converted to primitive `long`/`double` values.
-- **`GeminiService` is now `sealed`** and implements `IDisposable`.
-- **`GetText()` behavior**: `GeminiResponseExtensions.GetText()` now safely returns `null` when `Candidates` or `Parts` is empty and concatenates all non-thought text parts in the first candidate.
-- **English documentation**: translated all XML documentation comments, exception messages, package metadata, and `README.md` to English.
-
-### Fixed
-- Fixed `ArgumentNullException` in `GeminiClient` passing option values instead of parameter names.
-- Fixed `GetText()` and `GetFunctionCall()` throwing `ArgumentOutOfRangeException` when a response candidate list or part list is empty (e.g., when blocked by safety filters).
-- Fixed `EndpointBase` URLs with query strings (`?api-version=...`) producing invalid URLs when appending `:generateContent` or `:streamGenerateContent`.
-- Fixed streaming `JsonException` errors not being wrapped in `GeminiApiException`.
+- **Replaced `GeminiService` / `GeminiServiceBuilder` / `GenerativeLanguageOptions` / `GeminiResponseExtensions`**:
+  - Use `GeminiClient` (or `IGeminiClient`), `GeminiClientOptions`, `services.AddGeminiClient(...)`, `client.AsIChatClient()`, and direct properties on `GenerateContentResponse` (`response.Text`, `response.FunctionCalls`, `response.FinishReason`, `response.BlockReason`).
+- **Consolidated namespaces**:
+  - Core client types (`GeminiClient`, `IGeminiClient`, `GeminiClientOptions`, `GeminiStreamingFormat`, `GeminiApiException`, `GeminiChatClient`, `GeminiChatPropertyNames`, `GeminiClientExtensions`) live in root `namespace GeminiAPIWrapper`.
+  - Request/response DTOs live in `namespace GeminiAPIWrapper.Models` (`GenerateContentRequest`, `GenerateContentResponse`, `Blob`, `SafetyRating`, etc.).
+  - DI extension `AddGeminiClient` lives in `namespace Microsoft.Extensions.DependencyInjection`.
+- **Removed `SystemInstruction` wrapper class**: `GenerateContentRequest.SystemInstruction` now uses `Content?` directly (`Role` is nullable on `Content`).
+- **MIME types and `Blob.Data`**: `GenerationConfig.ResponseMimeType`, `Blob.MimeType`, and `FileData.MimeType` are `string` (use `MimeTypes` constants); `Blob.Data` is `byte[]` instead of a manual Base64 `string`.
+- **`FunctionCallingMode` casing**: renamed enum members from `AUTO`/`ANY`/`NONE`/`VALIDATED` to PascalCase `Auto`/`Any`/`None`/`Validated`.
 
 ## [1.0.3] - 2025-10-20
 - Unified `Schema` class across request and tool configurations.

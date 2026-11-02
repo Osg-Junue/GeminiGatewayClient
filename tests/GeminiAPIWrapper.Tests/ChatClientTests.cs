@@ -1,15 +1,13 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using GeminiAPIWrapper.Configurations;
-using GeminiAPIWrapper.Options;
 using Microsoft.Extensions.AI;
 
 namespace GeminiAPIWrapper.Tests;
 
 public partial class ChatClientTests
 {
-    private const string SampleEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash";
+    private const string DefaultModel = "gemini-2.5-flash";
 
     private const string OkResponseJson = """
         {
@@ -41,17 +39,16 @@ public partial class ChatClientTests
     [Fact]
     public async Task IChatClient_GetResponseAsync_MapsMessagesOptionsUsageAndMetadata()
     {
-        using var handler = new GeminiClientTests.RecordingHandler(OkResponseJson);
+        using var handler = new RecordingHandler(OkResponseJson);
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         var metadata = chatClient.GetService<ChatClientMetadata>();
         Assert.NotNull(metadata);
         Assert.Equal("gemini-2.5-flash", metadata.DefaultModelId);
+        Assert.Same(geminiClient, chatClient.GetService<IGeminiClient>());
+        Assert.Same(geminiClient, chatClient.GetService<GeminiClient>());
 
         var chatResponse = await chatClient.GetResponseAsync(
         [
@@ -95,13 +92,10 @@ public partial class ChatClientTests
 
             """;
 
-        using var handler = new GeminiClientTests.RecordingHandler(sseJson, contentType: "text/event-stream");
+        using var handler = new RecordingHandler(sseJson, contentType: "text/event-stream");
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         var sb = new StringBuilder();
         ChatFinishReason? finishReason = null;
@@ -152,13 +146,10 @@ public partial class ChatClientTests
             }
             """;
 
-        using var handler = new GeminiClientTests.RecordingHandler(parallelFunctionCallResponseJson);
+        using var handler = new RecordingHandler(parallelFunctionCallResponseJson);
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         var firstTurn = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Weather in Tokyo and Osaka?")]);
         Assert.Equal(ChatFinishReason.ToolCalls, firstTurn.FinishReason);
@@ -223,13 +214,10 @@ public partial class ChatClientTests
             }
             """;
 
-        using var handler = new GeminiClientTests.RecordingHandler(noIdCallsJson);
+        using var handler = new RecordingHandler(noIdCallsJson);
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         var response = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Compare")]);
         var calls = response.Messages[0].Contents.OfType<FunctionCallContent>().ToList();
@@ -259,13 +247,10 @@ public partial class ChatClientTests
             }
             """;
 
-        using var handler = new GeminiClientTests.RecordingHandler(thinkingResponseJson);
+        using var handler = new RecordingHandler(thinkingResponseJson);
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         var response = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Think")]);
         var reasoningItems = response.Messages[0].Contents.OfType<TextReasoningContent>().ToList();
@@ -297,13 +282,10 @@ public partial class ChatClientTests
     [Fact]
     public async Task IChatClient_StructuredOutputAndTools_UseJsonSchemaDirectly_AndOmitEmptyToolParameters()
     {
-        using var handler = new GeminiClientTests.RecordingHandler(OkResponseJson);
+        using var handler = new RecordingHandler(OkResponseJson);
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         using var responseSchemaDoc = JsonDocument.Parse("""
             {
@@ -351,19 +333,19 @@ public partial class ChatClientTests
     [Fact]
     public async Task IChatClient_PocoToolResultAndDateTime_SerializeCleanly()
     {
-        using var handler = new GeminiClientTests.RecordingHandler(OkResponseJson);
+        using var handler = new RecordingHandler(OkResponseJson);
         using var httpClient = new HttpClient(handler);
         var serializerOptions = new JsonSerializerOptions
         {
             TypeInfoResolver = WeatherReportJsonContext.Default
         };
 
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
+        using var geminiClient = new GeminiClient(new GeminiClientOptions
         {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key",
-            JsonSerializerOptions = serializerOptions
+            Model = DefaultModel,
+            ApiKey = "key"
         }, httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient(toolSerializerOptions: serializerOptions);
 
         var timestamp = new DateTime(2026, 11, 2, 12, 30, 0, DateTimeKind.Utc);
         await chatClient.GetResponseAsync(
@@ -389,13 +371,10 @@ public partial class ChatClientTests
     [Fact]
     public async Task IChatClient_DataContentWithArbitraryMimeType_IsForwardedNotDropped()
     {
-        using var handler = new GeminiClientTests.RecordingHandler(OkResponseJson);
+        using var handler = new RecordingHandler(OkResponseJson);
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         var message = new ChatMessage(ChatRole.User,
         [
@@ -416,13 +395,10 @@ public partial class ChatClientTests
     [Fact]
     public async Task IChatClient_ModelIdAndReasoningOptions_OverrideUrlAndMapThinkingConfig()
     {
-        using var handler = new GeminiClientTests.RecordingHandler(OkResponseJson);
+        using var handler = new RecordingHandler(OkResponseJson);
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         await chatClient.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "Solve")],
@@ -451,13 +427,10 @@ public partial class ChatClientTests
     [Fact]
     public async Task IChatClient_OutOfRangeSeed_ThrowsArgumentOutOfRangeException()
     {
-        using var handler = new GeminiClientTests.RecordingHandler(OkResponseJson);
+        using var handler = new RecordingHandler(OkResponseJson);
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
             chatClient.GetResponseAsync(
@@ -479,17 +452,14 @@ public partial class ChatClientTests
             }
             """;
 
-        using var handler = new GeminiClientTests.RecordingHandler(blockedJson);
+        using var handler = new RecordingHandler(blockedJson);
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         var response = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Blocked prompt")]);
         Assert.Equal(ChatFinishReason.ContentFilter, response.FinishReason);
-        Assert.Equal("Safety", response.AdditionalProperties?[GeminiChatClientMapper.BlockReasonPropertyKey]);
+        Assert.Equal("Safety", response.AdditionalProperties?[GeminiChatPropertyNames.BlockReason]);
     }
 
     [Fact]
@@ -500,13 +470,10 @@ public partial class ChatClientTests
 
             """;
 
-        using var handler = new GeminiClientTests.RecordingHandler(sseWithToolCallAndSignature, contentType: "text/event-stream");
+        using var handler = new RecordingHandler(sseWithToolCallAndSignature, contentType: "text/event-stream");
         using var httpClient = new HttpClient(handler);
-        IChatClient chatClient = GeminiServiceBuilder.Build(new GenerativeLanguageOptions
-        {
-            EndpointBase = SampleEndpoint,
-            ApiKey = "key"
-        }, httpClient);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var update in chatClient.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Kyoto weather?")]))

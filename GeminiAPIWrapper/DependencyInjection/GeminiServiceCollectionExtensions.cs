@@ -1,80 +1,83 @@
-using GeminiAPIWrapper.Options;
+using GeminiAPIWrapper;
+using GeminiAPIWrapper.Http;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
-namespace GeminiAPIWrapper.DependencyInjection;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// <see cref="IServiceCollection"/> extension methods for registering <see cref="GeminiService"/>
-/// and <see cref="IChatClient"/> with <see cref="IHttpClientFactory"/>.
+/// <see cref="IServiceCollection"/> extension methods for registering <see cref="GeminiClient"/> (as <see cref="IGeminiClient"/>)
+/// and <see cref="IChatClient"/> backed by <see cref="IHttpClientFactory"/>.
 /// </summary>
 public static class GeminiServiceCollectionExtensions
 {
     /// <summary>
-    /// The named <see cref="HttpClient"/> registration name used by <see cref="AddGeminiService(IServiceCollection, GenerativeLanguageOptions)"/>.
+    /// The named <see cref="HttpClient"/> registration used by <see cref="AddGeminiClient"/>.
     /// </summary>
-    public const string HttpClientName = nameof(GeminiService);
+    public const string HttpClientName = "GeminiAPIWrapper";
 
     /// <summary>
-    /// Registers <see cref="GeminiService"/> (and <see cref="IChatClient"/>) backed by <see cref="IHttpClientFactory"/>
-    /// using the specified <paramref name="options"/>.
+    /// Registers <see cref="GeminiClient"/>, <see cref="IGeminiClient"/>, and <see cref="IChatClient"/> backed by <see cref="IHttpClientFactory"/>.
     /// <para>
-    /// The returned <see cref="IHttpClientBuilder"/> can be used to attach resilience pipelines
-    /// (for example <c>.AddStandardResilienceHandler()</c>), custom <see cref="HttpMessageHandler"/> delegates, or timeouts.
+    /// Options come from the options pattern, so <paramref name="configure"/> can be combined with
+    /// <c>services.AddOptions&lt;GeminiClientOptions&gt;().BindConfiguration("Gemini")</c>. Options are validated when the client is first resolved.
+    /// <see cref="GeminiClientOptions.Timeout"/> is applied to the named <see cref="HttpClient"/>, and the default primary handler does not
+    /// follow redirects (so credential headers are never forwarded to another host).
+    /// </para>
+    /// <para>
+    /// The returned <see cref="IHttpClientBuilder"/> can be used to attach resilience pipelines (for example <c>.AddStandardResilienceHandler()</c>),
+    /// custom <see cref="DelegatingHandler"/> instances, or a different primary handler.
     /// </para>
     /// </summary>
     /// <param name="services">The <see cref="IServiceCollection"/> to add services to.</param>
-    /// <param name="options">Endpoint and authentication header settings.</param>
+    /// <param name="configure">Optional delegate that configures <see cref="GeminiClientOptions"/>.</param>
     /// <returns>An <see cref="IHttpClientBuilder"/> for further configuring the underlying <see cref="HttpClient"/>.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> or <paramref name="options"/> is <c>null</c>.</exception>
-    public static IHttpClientBuilder AddGeminiService(
-        this IServiceCollection services,
-        GenerativeLanguageOptions options)
+    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <c>null</c>.</exception>
+    public static IHttpClientBuilder AddGeminiClient(this IServiceCollection services, Action<GeminiClientOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(options);
 
-        // Validate options eagerly at registration time.
-        using (new GeminiClient(options))
+        var optionsBuilder = services.AddOptions<GeminiClientOptions>();
+        if (configure is not null)
         {
+            optionsBuilder.Configure(configure);
         }
 
-        services.TryAddSingleton(options);
-        return RegisterCore(services);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GeminiClientOptions>, GeminiClientOptionsValidator>());
+
+        var httpClientBuilder = services
+            .AddHttpClient(HttpClientName)
+            .ConfigureHttpClient(static (sp, httpClient) =>
+                httpClient.Timeout = sp.GetRequiredService<IOptions<GeminiClientOptions>>().Value.Timeout)
+            .ConfigurePrimaryHttpMessageHandler(static () => GeminiClient.CreateDefaultHandler());
+
+        services.TryAddTransient(static sp => new GeminiClient(
+            sp.GetRequiredService<IOptions<GeminiClientOptions>>().Value,
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
+        services.TryAddTransient<IGeminiClient>(static sp => sp.GetRequiredService<GeminiClient>());
+        services.TryAddTransient<IChatClient>(static sp => sp.GetRequiredService<IGeminiClient>().AsIChatClient());
+
+        return httpClientBuilder;
     }
 
     /// <summary>
-    /// Registers <see cref="GeminiService"/> (and <see cref="IChatClient"/>) backed by <see cref="IHttpClientFactory"/>
-    /// using an options factory resolved from the <see cref="IServiceProvider"/>.
+    /// Surfaces <see cref="GeminiClientOptions"/> validation errors through the options pattern
+    /// (<see cref="OptionsValidationException"/>) using the same rules as the <see cref="GeminiClient"/> constructor.
     /// </summary>
-    /// <param name="services">The <see cref="IServiceCollection"/> to add services to.</param>
-    /// <param name="optionsFactory">Factory that creates <see cref="GenerativeLanguageOptions"/> from the service provider.</param>
-    /// <returns>An <see cref="IHttpClientBuilder"/> for further configuring the underlying <see cref="HttpClient"/>.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> or <paramref name="optionsFactory"/> is <c>null</c>.</exception>
-    public static IHttpClientBuilder AddGeminiService(
-        this IServiceCollection services,
-        Func<IServiceProvider, GenerativeLanguageOptions> optionsFactory)
+    private sealed class GeminiClientOptionsValidator : IValidateOptions<GeminiClientOptions>
     {
-        ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(optionsFactory);
-
-        services.TryAddSingleton(optionsFactory);
-        return RegisterCore(services);
-    }
-
-    private static IHttpClientBuilder RegisterCore(IServiceCollection services)
-    {
-        var builder = services.AddHttpClient(HttpClientName);
-
-        services.TryAddTransient(sp =>
+        public ValidateOptionsResult Validate(string? name, GeminiClientOptions options)
         {
-            var options = sp.GetRequiredService<GenerativeLanguageOptions>();
-            var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName);
-            return GeminiServiceBuilder.Build(options, httpClient);
-        });
-
-        services.TryAddTransient<IChatClient>(sp => sp.GetRequiredService<GeminiService>());
-        return builder;
+            try
+            {
+                GeminiClientSettings.Create(options);
+                return ValidateOptionsResult.Success;
+            }
+            catch (ArgumentException ex)
+            {
+                return ValidateOptionsResult.Fail(ex.Message);
+            }
+        }
     }
 }

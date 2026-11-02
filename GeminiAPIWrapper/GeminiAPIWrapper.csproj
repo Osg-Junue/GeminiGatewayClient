@@ -5,17 +5,23 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Title>GeminiAPIWrapper</Title>
     <Authors>Osg-Junue</Authors>
-    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <!-- Only produce the .nupkg for Release builds instead of on every (Debug) build. -->
+    <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">True</GeneratePackageOnBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
     <Description>Lightweight, AOT-friendly .NET client for the Gemini API with Microsoft.Extensions.AI (IChatClient) support, built to run behind API gateways and proxies (Azure API Management, Cloudflare AI Gateway, custom reverse proxies). Configurable API key header, key prefix, and extra headers.</Description>
     <PackageProjectUrl>https://github.com/Osg-Junue/GeminiAPIWrapper</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Osg-Junue/GeminiAPIWrapper</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>gemini;google;generative-ai;llm;ai;ichatclient;microsoft-extensions-ai;api-gateway;proxy;apim;cloudflare;aot</PackageTags>
-    <AssemblyVersion>2.0.0</AssemblyVersion>
-    <FileVersion>2.0.0</FileVersion>
     <Version>2.0.0</Version>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>

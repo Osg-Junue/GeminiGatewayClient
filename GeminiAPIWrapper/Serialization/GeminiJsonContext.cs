@@ -1,17 +1,16 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
-using GeminiAPIWrapper.Configurations;
+using GeminiAPIWrapper.Models;
 
-namespace GeminiAPIWrapper;
+namespace GeminiAPIWrapper.Serialization;
 
+/// <summary>
+/// Source-generated (reflection-free, NativeAOT-safe) serialization metadata for the Gemini wire format.
+/// </summary>
 [JsonSourceGenerationOptions(WriteIndented = false, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
-[JsonSerializable(typeof(GeminiRequest))]
-[JsonSerializable(typeof(Schema))]
-internal partial class GeminiRequestJsonContext : JsonSerializerContext
-{
-}
-
-[JsonSourceGenerationOptions(WriteIndented = false, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
-[JsonSerializable(typeof(GeminiResponse))]
-internal partial class GeminiResponseJsonContext : JsonSerializerContext
+[JsonSerializable(typeof(GenerateContentRequest))]
+[JsonSerializable(typeof(GenerateContentResponse))]
+[JsonSerializable(typeof(JsonElement))]
+internal sealed partial class GeminiJsonContext : JsonSerializerContext
 {
 }
