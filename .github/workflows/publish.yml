@@ -1,0 +1,57 @@
+name: Publish to NuGet
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags: v2.0.0, v2.1.0-preview.1, etc.
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release  # Uses release environment for secret scoping + protection rules
+    permissions:
+      id-token: write     # Required for OIDC token (NuGet trusted publishing)
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version matches project
+        run: |
+          PROJECT_VERSION=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' GeminiGatewayClient/GeminiGatewayClient.csproj)
+          if [ "$PROJECT_VERSION" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "::error::Tag version (${{ steps.version.outputs.VERSION }}) doesn't match project version ($PROJECT_VERSION)"
+            exit 1
+          fi
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build (warnings as errors)
+        run: dotnet build --no-restore -c Release -warnaserror
+
+      - name: Run unit tests
+        run: dotnet test tests/GeminiGatewayClient.Tests/GeminiGatewayClient.Tests.csproj --no-build -c Release --verbosity normal
+
+      - name: Pack NuGet package
+        run: dotnet pack GeminiGatewayClient/GeminiGatewayClient.csproj --no-build -c Release -o ./artifacts
+
+      - name: NuGet login (OIDC)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}  # nuget.org profile name (NOT email)
+
+      - name: Push to NuGet
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
