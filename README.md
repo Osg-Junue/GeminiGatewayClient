@@ -2,133 +2,54 @@
 
 [![NuGet](https://img.shields.io/nuget/v/GeminiGatewayClient.svg)](https://www.nuget.org/packages/GeminiGatewayClient)
 [![CI](https://github.com/Osg-Junue/GeminiGatewayClient/actions/workflows/ci.yml/badge.svg)](https://github.com/Osg-Junue/GeminiGatewayClient/actions/workflows/ci.yml)
+[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
+[![NativeAOT](https://img.shields.io/badge/NativeAOT-Compatible-success)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.txt)
 
-A lightweight, NativeAOT-compatible .NET 10 client for the **Gemini (Generative Language) API** — built to run cleanly behind API gateways and proxies, with built-in **`Microsoft.Extensions.AI` (`IChatClient`)**, **`IOptions<GeminiClientOptions>`**, and **`IHttpClientFactory`** support.
+**Call the Google Gemini API safely through Azure APIM, Cloudflare AI Gateway, Kong, Envoy, or internal BFFs in .NET.**
+
+Custom auth headers · Per-request rotating tokens · Zero `DefaultRequestHeaders` pollution · `Microsoft.Extensions.AI` (`IChatClient`) & DI · 100% NativeAOT
+
+📖 **[Usage Guide & Recipes](docs/USAGE.md)** · 📊 **[Gemini API Compatibility Matrix](docs/API_COMPATIBILITY.md)** · 📝 **[Changelog](CHANGELOG.md)**
 
 ---
 
-## Why GeminiGatewayClient?
+## Why This Exists
 
-Google's official `Google.GenAI` SDK is designed around calling Google endpoints directly, sending the API key in the `x-goog-api-key` header.
+- **The Problem:** Google's official `Google.GenAI` SDK assumes your app talks directly to `googleapis.com` with a static `x-goog-api-key` header. In production, you rarely distribute raw Gemini API keys to application nodes—traffic goes through an **API gateway, reverse proxy, or BFF** where clients authenticate using `Ocp-Apim-Subscription-Key`, `cf-aig-authorization`, or short-lived `Authorization: Bearer <jwt>` tokens.
+- **The Solution:** `GeminiGatewayClient` is designed from the ground up for gateway-mediated architectures, clean `IHttpClientFactory` lifecycle management, `Microsoft.Extensions.AI` (`IChatClient`), and NativeAOT.
 
-In production, LLM traffic often passes through an **API gateway, reverse proxy, or BFF** (Azure API Management, Cloudflare AI Gateway, Kong, Envoy, or an internal gateway) where:
+```mermaid
+flowchart LR
+    App[".NET App\n(GeminiGatewayClient)"]
+    GW["API Gateway / BFF\n(Azure APIM · Cloudflare · Kong · Envoy)"]
+    Gemini["Google Gemini API\n(generativelanguage.googleapis.com)"]
 
-1. **The client does not hold the real Gemini API key** — it authenticates to the gateway using a different header such as `Ocp-Apim-Subscription-Key` or `Authorization: Bearer <token>`, and the gateway injects `x-goog-api-key` upstream.
-2. **Credentials rotate per request** — short-lived OAuth or JWT tokens can be supplied dynamically via `ApiKeyProvider`.
-3. **Both a gateway header and a Gemini key are required** — for example, an authenticated Cloudflare AI Gateway requires `cf-aig-authorization: Bearer <token>` in addition to `x-goog-api-key`.
-4. **You want a gateway-first `HttpClient` lifecycle** — headers applied per `HttpRequestMessage` (never mutating `HttpClient.DefaultRequestHeaders`), first-class `services.AddGeminiClient(...)` registration with `IHttpClientFactory` and `IOptions<GeminiClientOptions>`, and source-generated `System.Text.Json` serialization (`<IsAotCompatible>true</IsAotCompatible>`).
+    App -- "Ocp-Apim-Subscription-Key\nor Rotating Bearer JWT\n(No raw Gemini key on client)" --> GW
+    GW -- "Injects x-goog-api-key\n+ Rate Limiting / Logging" --> Gemini
+```
+
+### `GeminiGatewayClient` vs. Official `Google.GenAI`
 
 | Capability | `GeminiGatewayClient` | Official `Google.GenAI` |
 |---|---|---|
-| Replace the API key header name (`ApiKeyHeader`) | Yes (`x-goog-api-key` is not sent when overridden) | Possible via `HttpOptions` (manual header wiring) |
-| Key value prefix (`ApiKeyPrefix`, e.g. `"Bearer "`) | Built-in option | Via custom headers |
-| Per-request dynamic token callback (`ApiKeyProvider`) | Built-in (`Func<CancellationToken, ValueTask<string>>`) | Manual handler |
-| Omit key header when gateway injects key (`ApiKey = null`) | Built-in option | Via custom auth/headers |
-| Extra gateway headers (`AdditionalHeaders`) | Yes | Yes (`HttpOptions.Headers`) |
-| `Microsoft.Extensions.AI` (`IChatClient`) | Built-in (`client.AsIChatClient()` / `GeminiChatClient`) | Yes (`AsIChatClient()`) |
-| `IHttpClientFactory` & `IOptions` DI (`AddGeminiClient`) | Built-in (`IHttpClientBuilder`) | Manual registration |
-
----
-
-## Installation
-
-```bash
-dotnet add package GeminiGatewayClient
-```
-
-Targets **.NET 10** (`net10.0`).
+| **Replace `x-goog-api-key` header** (`Ocp-Apim-Subscription-Key`, `Authorization`) | ✅ Built-in (`ApiKeyHeader` + `ApiKeyPrefix`) | ⚠️ Manual `HttpOptions` wiring |
+| **Rotate short-lived OAuth / JWT tokens per request** | ✅ Built-in (`ApiKeyProvider` async callback) | ❌ Custom handler required |
+| **Keyless client when gateway injects key upstream** (`ApiKey = null`) | ✅ Built-in | ⚠️ Custom auth workaround |
+| **Zero `HttpClient.DefaultRequestHeaders` mutation** (per-request header isolation) | ✅ Guaranteed | ⚠️ Mutates shared client defaults |
+| **Cross-host redirect credential leak protection** (`AllowAutoRedirect = false`) | ✅ Built-in | ❌ Manual handler required |
+| **`IHttpClientFactory` + `IOptions<T>` DI** (`services.AddGeminiClient()`) | ✅ Built-in (`IHttpClientBuilder`) | ❌ Manual registration |
+| **`Microsoft.Extensions.AI` (`IChatClient`) + persisted `thoughtSignature` recovery** | ✅ Built-in (`AsIChatClient()` / DI) | ⚠️ Requires raw part retention |
+| **100% NativeAOT & Trim-Safe** (`<IsAotCompatible>true</IsAotCompatible>`) | ✅ Zero reflection (`GeminiJsonContext`) | ⚠️ Partial reflection paths |
+| **Per-chunk stream idle watchdog** (`StreamIdleTimeout`) | ✅ Built-in (default 2 min) | ❌ Manual cancellation |
 
 ---
 
 ## Quick Start
 
-```csharp
-using GeminiGatewayClient;
-
-using var client = new GeminiClient(
-    apiKey: Environment.GetEnvironmentVariable("GEMINI_API_KEY")!,
-    model: "gemini-2.5-flash");
-
-var response = await client.GenerateContentAsync("Explain quantum computing in three sentences.");
-Console.WriteLine(response.Text);
+```bash
+dotnet add package GeminiGatewayClient
 ```
-
-Or configure `GeminiClientOptions` for custom endpoints, headers, and timeouts:
-
-```csharp
-using GeminiGatewayClient;
-
-using var client = new GeminiClient(new GeminiClientOptions
-{
-    Endpoint = new Uri("https://generativelanguage.googleapis.com/v1beta"),
-    Model = "gemini-3-flash-preview",
-    ApiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY")
-});
-
-var response = await client.GenerateContentAsync("Explain quantum computing in three sentences.");
-Console.WriteLine(response.Text);
-```
-
-> [!IMPORTANT]
-> `Endpoint` is the API root URI (default: `https://generativelanguage.googleapis.com/v1beta`). Do **not** include `:generateContent` or `:streamGenerateContent` in `Endpoint`. The client composes `{Endpoint}/models/{Model}:{operation}` (or `{Endpoint}/{Model}:{operation}` when `Model` contains `/`, such as `tunedModels/...`) while preserving any query string on `Endpoint` (such as `?api-version=...`).
-
----
-
-## Using Behind an API Gateway or Proxy
-
-### 1. Azure API Management (APIM)
-
-When APIM holds the real Gemini key in a Named Value and clients authenticate with an APIM subscription key:
-
-```csharp
-var options = new GeminiClientOptions
-{
-    Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta"),
-    Model = "gemini-2.5-flash",
-    ApiKey = "<apim-subscription-key>",
-    ApiKeyHeader = "Ocp-Apim-Subscription-Key" // Replaces x-goog-api-key completely
-};
-```
-
-### 2. Cloudflare AI Gateway (Authenticated)
-
-Send both the Gemini API key and the Cloudflare AI Gateway authentication header:
-
-```csharp
-var options = new GeminiClientOptions
-{
-    Endpoint = new Uri("https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/google-ai-studio/v1beta"),
-    Model = "gemini-2.5-flash",
-    ApiKey = "<gemini-api-key>",
-    AdditionalHeaders = new Dictionary<string, string>
-    {
-        ["cf-aig-authorization"] = "Bearer <cloudflare-gateway-token>"
-    }
-};
-```
-
-*(If Cloudflare AI Gateway injects the Gemini key via Unified Billing / BYOK, leave `ApiKey = null` so no `x-goog-api-key` header is sent from the client.)*
-
-### 3. Custom Reverse Proxy / BFF with Static or Rotating Bearer Token
-
-```csharp
-var options = new GeminiClientOptions
-{
-    Endpoint = new Uri("https://llm-proxy.internal/gemini/v1beta"),
-    Model = "gemini-2.5-flash",
-    ApiKeyHeader = "Authorization",
-    ApiKeyPrefix = "Bearer ",
-    // Invoked before each HTTP request so short-lived OAuth / JWT tokens rotate cleanly:
-    ApiKeyProvider = async ct => await tokenProvider.GetAccessTokenAsync(ct)
-};
-```
-
----
-
-## Dependency Injection, `IOptions<GeminiClientOptions>` & `IHttpClientFactory`
-
-Register `GeminiClient`, `IGeminiClient`, and `IChatClient` with `IServiceCollection.AddGeminiClient(...)`. It integrates with `Microsoft.Extensions.Options` (`IOptions<GeminiClientOptions>` and `IValidateOptions<GeminiClientOptions>`) and returns an `IHttpClientBuilder` so you can chain standard resilience pipelines, custom handlers, or logging:
 
 ```csharp
 using GeminiGatewayClient;
@@ -137,224 +58,102 @@ using Microsoft.Extensions.DependencyInjection;
 
 var services = new ServiceCollection();
 
-// Bind from IConfiguration or configure via delegate:
+// Register IGeminiClient, GeminiClient, and Microsoft.Extensions.AI.IChatClient:
 services.AddGeminiClient(options =>
 {
     options.Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta");
-    options.Model = "gemini-2.5-flash";
-    options.ApiKey = configuration["Gemini:SubscriptionKey"];
-    options.ApiKeyHeader = "Ocp-Apim-Subscription-Key";
+    options.Model = "gemini-3-flash-preview";
+    options.ApiKey = builder.Configuration["Gemini:SubscriptionKey"];
+    options.ApiKeyHeader = "Ocp-Apim-Subscription-Key"; // Sends only this header; x-goog-api-key is omitted
 });
 
 await using var provider = services.BuildServiceProvider();
-
-// Resolve IGeminiClient, GeminiClient, or Microsoft.Extensions.AI.IChatClient
-var gemini = provider.GetRequiredService<IGeminiClient>();
 var chatClient = provider.GetRequiredService<IChatClient>();
-```
 
-You can also pass an existing `HttpClient` directly to `new GeminiClient(options, httpClient)`. Headers are attached per `HttpRequestMessage` rather than mutating `HttpClient.DefaultRequestHeaders`, and disposing `GeminiClient` will **not** dispose a caller-supplied `HttpClient`:
-
-```csharp
-using var client = new GeminiClient(options, httpClient);
-```
-
----
-
-## Timeouts, Resilience & Redirects
-
-- **Request timeout (`Timeout`).** `GeminiClientOptions.Timeout` (default **5 minutes**) is applied to internally created `HttpClient` instances as well as the `HttpClient` configured by `AddGeminiClient()`. If you construct `new GeminiClient(options, httpClient)` with your own `HttpClient`, that instance's `Timeout` applies.
-- **Stream idle timeout (`StreamIdleTimeout`).** Because `HttpClient.Timeout` only covers the time until response headers arrive (`ResponseHeadersRead`), `GeminiClientOptions.StreamIdleTimeout` (default **2 minutes**) arms a per-read watchdog during `StreamGenerateContentAsync` and throws `TimeoutException` if the stream stalls between chunks. Set `StreamIdleTimeout = Timeout.InfiniteTimeSpan` to disable.
-- **Resilience handlers.** `AddStandardResilienceHandler()` defaults to a **10 s per-attempt** and **30 s total** timeout, which will cancel most thinking-model calls. Configure it explicitly:
-
-  ```csharp
-  services.AddGeminiClient(options => { ... })
-      .AddStandardResilienceHandler(o =>
-      {
-          o.AttemptTimeout.Timeout = TimeSpan.FromMinutes(3);
-          o.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(6);
-          o.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(6); // must be >= 2x AttemptTimeout
-      });
-  ```
-- **Redirects.** Both the internally created `HttpClient` and the primary handler configured by `AddGeminiClient` set `AllowAutoRedirect = false`: credentials are sent in custom headers (such as `x-goog-api-key`), and .NET only strips `Authorization` on cross-host redirects.
-
----
-
-## `Microsoft.Extensions.AI` (`IChatClient`) Support
-
-Adapt any `IGeminiClient` to `Microsoft.Extensions.AI.IChatClient` via `client.AsIChatClient()` (or resolve `IChatClient` directly from DI after calling `services.AddGeminiClient(...)`). Supports multi-turn chat, streaming, tool calling (`FunctionInvokingChatClient`), structured output (`ChatResponseFormat.ForJsonSchema`), per-request model overrides (`ChatOptions.ModelId`), and reasoning configuration (`ChatOptions.Reasoning`):
-
-```csharp
-using GeminiGatewayClient;
-using Microsoft.Extensions.AI;
-
-using var gemini = new GeminiClient(
-    apiKey: Environment.GetEnvironmentVariable("GEMINI_API_KEY")!,
-    model: "gemini-3-flash-preview");
-
-IChatClient chatClient = gemini.AsIChatClient();
-
-ChatResponse response = await chatClient.GetResponseAsync(
-[
-    new ChatMessage(ChatRole.System, "You are a concise assistant."),
-    new ChatMessage(ChatRole.User, "What is NativeAOT in .NET?")
-], new ChatOptions
-{
-    Temperature = 0.3f,
-    MaxOutputTokens = 512,
-    // Optional: override the default model for this call
-    ModelId = "gemini-3.1-pro-preview"
-});
-
-Console.WriteLine(response.Text);
-
-// Streaming via IChatClient (uses Server-Sent Events by default)
-await foreach (ChatResponseUpdate update in chatClient.GetStreamingResponseAsync("Write a haiku about C#."))
+await foreach (var update in chatClient.GetStreamingResponseAsync("Explain NativeAOT in 3 bullet points."))
 {
     Console.Write(update.Text);
 }
 ```
 
----
-
-## Streaming, Thinking, Structured Output & Error Handling
-
-### Streaming (`IAsyncEnumerable`)
-
-By default, streaming requests use Server-Sent Events (`?alt=sse`), which flushes chunks immediately through API gateways and reverse proxies. If a custom proxy requires the legacy JSON array stream format, set `StreamingFormat = GeminiStreamingFormat.JsonArray` on `GeminiClientOptions`.
-
-- An `{"error": {...}}` payload that arrives *inside* a stream (after HTTP 200) is surfaced as a `GeminiApiException` (with `ErrorStatus`/`ErrorMessage`/`RetryAfter`/`IsTransient`) instead of an empty chunk.
-- `StreamGenerateContentAsync` / `GetStreamingResponseAsync` validate their arguments when called, not on first enumeration.
-- Through `IChatClient`, token usage is reported **once**, as a single trailing `UsageContent` carrying the final cumulative counts (Gemini repeats cumulative `usageMetadata` on streamed chunks, so emitting it per chunk would over-count when updates are aggregated).
-- `ChatOptions.Tools` supports `AIFunctionDeclaration`, `HostedWebSearchTool` (mapped to `googleSearch`), and `HostedCodeInterpreterTool` (mapped to `codeExecution`); other `AITool` types throw `NotSupportedException` instead of being silently dropped.
-- Function-call `thoughtSignature` and locally generated call IDs are kept in `FunctionCallContent.AdditionalProperties` (`GeminiChatPropertyNames.ThoughtSignature`, `GeminiChatPropertyNames.SynthesizedCallId`), so persisted chat history can be replayed on Gemini 3 models.
+Or use `GeminiClient` directly without DI:
 
 ```csharp
-await foreach (var chunk in client.StreamGenerateContentAsync("Write a short story about a lighthouse."))
-{
-    Console.Write(chunk.Text);
-}
+using GeminiGatewayClient;
+
+using var client = new GeminiClient(
+    apiKey: Environment.GetEnvironmentVariable("GEMINI_API_KEY")!,
+    model: "gemini-3-flash-preview");
+
+var response = await client.GenerateContentAsync("Explain quantum computing in three sentences.");
+Console.WriteLine(response.Text);
 ```
 
-### Thinking / Reasoning Models
+---
 
-- **Gemini 3 series models** use `ThinkingConfig.ThinkingLevel` (`Minimal`, `Low`, `Medium`, `High`) or `ChatOptions.Reasoning`.
-- **Gemini 2.5 series models** use `ThinkingConfig.ThinkingBudget` (`-1` for dynamic thinking, `0` to disable where supported, or a positive token cap).
-- `ThinkingLevel` and `ThinkingBudget` are mutually exclusive.
-- **`ChatOptions.Reasoning.Effort` is mapped per model family** (taken from `ChatOptions.ModelId` or `GeminiClientOptions.Model`):
+## 3 Common Enterprise Gateway Patterns
 
-  | Effort | Gemini 2.5 (`thinkingBudget`) | Gemini 3+ (`thinkingLevel`) |
-  |---|---|---|
-  | `None` | `0` (Pro: `128`, the minimum) | `Minimal` (Pro models: `Low`) |
-  | `Low` | `1024` | `Low` |
-  | `Medium` | `8192` | `Medium` (`gemini-3-pro*`: `High`) |
-  | `High` / `ExtraHigh` | `24576` | `High` |
-
-  For exact control, set `GenerationConfig.ThinkingConfig` yourself via `ChatOptions.RawRepresentationFactory` (it takes precedence).
+### 1. Azure API Management (APIM Injects `x-goog-api-key` Upstream)
 
 ```csharp
-using GeminiGatewayClient.Models;
-
-// Gemini 3 series: qualitative thinking level
-var config = new GenerationConfig
+var options = new GeminiClientOptions
 {
-    ThinkingConfig = new ThinkingConfig
+    Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta"),
+    Model = "gemini-3-flash-preview",
+    ApiKey = "<apim-subscription-key>",
+    ApiKeyHeader = "Ocp-Apim-Subscription-Key"
+};
+```
+
+### 2. Kong / Envoy / Internal BFF with Rotating Short-Lived Bearer JWT
+
+```csharp
+var options = new GeminiClientOptions
+{
+    Endpoint = new Uri("https://llm-gateway.internal/gemini/v1beta"),
+    Model = "gemini-3-flash-preview",
+    ApiKeyHeader = "Authorization",
+    ApiKeyPrefix = "Bearer ",
+    // Invoked before each HTTP request so short-lived Entra ID / OAuth tokens rotate cleanly:
+    ApiKeyProvider = async ct => await tokenProvider.GetAccessTokenAsync(ct)
+};
+```
+
+### 3. Cloudflare AI Gateway (Authenticated Gateway + Upstream Key or BYOK)
+
+```csharp
+var options = new GeminiClientOptions
+{
+    Endpoint = new Uri("https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/google-ai-studio/v1beta"),
+    Model = "gemini-3-flash-preview",
+    ApiKey = "<gemini-api-key>", // Or set to null if Cloudflare injects the key via BYOK / Unified Billing
+    AdditionalHeaders = new Dictionary<string, string>
     {
-        ThinkingLevel = ThinkingLevel.Low,
-        IncludeThoughts = true
+        ["cf-aig-authorization"] = "Bearer <cloudflare-gateway-token>"
     }
 };
 ```
 
-### Structured Output (`ResponseJsonSchema` / `ResponseSchema`)
+---
 
-Pass a standard JSON Schema (`JsonElement`) via `GenerationConfig.ResponseJsonSchema` (or `ChatOptions.ResponseFormat = ChatResponseFormat.ForJsonSchema(...)`), or use the strongly typed OpenAPI `Schema` class via `GenerationConfig.ResponseSchema`:
+## Production-Verified Capabilities
 
-```csharp
-using System.Text.Json;
-using GeminiGatewayClient;
-using GeminiGatewayClient.Models;
+Every feature is verified against both deterministic unit tests ([`tests/GeminiGatewayClient.Tests`](tests/GeminiGatewayClient.Tests)) and live end-to-end Gemini API scenarios ([`tests/GeminiGatewayClient.ExploratoryTests`](tests/GeminiGatewayClient.ExploratoryTests)):
 
-using var schemaDoc = JsonDocument.Parse("""
-    {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": { "type": "string" },
-          "distanceAu": { "type": "number" }
-        },
-        "required": ["name", "distanceAu"]
-      }
-    }
-    """);
-
-var request = GenerateContentRequest.FromPrompt(
-    prompt: "List three planets with their average distance from the Sun in AU.",
-    generationConfig: new GenerationConfig
-    {
-        ResponseMimeType = MimeTypes.ApplicationJson,
-        ResponseJsonSchema = schemaDoc.RootElement.Clone()
-    });
-
-var response = await client.GenerateContentAsync(request);
-Console.WriteLine(response.Text);
-```
-
-### Inspecting Safety Blocks & Handling Errors
-
-When `response.Text` returns `null`, inspect `response.BlockReason` (prompt-level block in `PromptFeedback`) or `response.FinishReason` (candidate-level stop reason such as `FinishReason.Safety`):
-
-```csharp
-using GeminiGatewayClient;
-
-try
-{
-    var response = await client.GenerateContentAsync(prompt);
-    if (response.BlockReason is { } blockReason)
-    {
-        Console.WriteLine($"Prompt was blocked: {blockReason}");
-    }
-    else
-    {
-        Console.WriteLine(response.Text);
-    }
-}
-catch (GeminiApiException ex)
-{
-    Console.Error.WriteLine($"HTTP {(int)ex.StatusCode} ({ex.ErrorStatus}, transient={ex.IsTransient}): {ex.ErrorMessage}");
-    if (ex.RetryAfter is { } delay)
-    {
-        Console.Error.WriteLine($"Retry after {delay.TotalSeconds:F0}s");
-    }
-}
-```
-
-### Multimodal Inputs & Unit Testing Tips
-
-- **Multimodal media**: Use `Part.FromBytes(bytes, MimeTypes.ImagePng)` or `Part.FromUri(fileUri, MimeTypes.Pdf)` to construct inline (`Blob`) or file (`FileData`) parts cleanly. `Blob.Data` is strongly typed as `byte[]` and automatically Base64-encoded by `System.Text.Json`. For large audio or video payloads (> 20 MB), prefer uploading via the Files API and passing `Part.FromUri(...)` rather than inline bytes.
-- **Vertex AI-only fields**: `GenerateContentRequest.Labels` and `GenerationConfig.AudioTimestamp` are supported by Vertex AI endpoints only; sending them to `generativelanguage.googleapis.com` returns HTTP 400.
-- **Unit testing**: Mock `IGeminiClient` directly, or pass an `HttpClient` backed by a custom `HttpMessageHandler` to `new GeminiClient(options, httpClient)` (or `.ConfigurePrimaryHttpMessageHandler(...)` on `AddGeminiClient`).
+- **Real-Time Streaming**: SSE (`?alt=sse`) and JSON-array streaming with `ArrayPool<byte>` buffering, split `\r\n` handling, in-stream HTTP 200 `{"error": ...}` detection, and `StreamIdleTimeout` watchdog.
+- **Automatic & Parallel Tool Calling**: Multi-step `IChatClient` tool chains via `.UseFunctionInvocation()`, plus native parallel function calling and forced tool execution (`FunctionCallingMode.Any`).
+- **Gemini 3 & 2.5 Thinking / Reasoning**: Supports `ThinkingLevel` (`Minimal`, `Low`, `Medium`, `High`), `ThinkingBudget`, `IncludeThoughts`, and model-aware `ChatOptions.Reasoning.Effort` mapping.
+- **Lossless Chat History Persistence**: Round-trips Gemini 3 `thoughtSignature` and synthesized tool call IDs through `AdditionalProperties` (`GeminiChatPropertyNames`) even when `RawRepresentation` is stripped by database/JSON serialization.
+- **Structured Output & Multimodal**: `ResponseJsonSchema` (`JsonElement`), OpenAPI `Schema`, inline binary `Blob` (`Part.FromBytes`), and `FileData` (`Part.FromUri`).
+- **Spec-Change Resilience**: All 27 DTOs include `[JsonExtensionData]` and all 14 wire enums use a zero-allocation `LenientStringEnumConverter<T>` with `Unknown` fallback.
 
 ---
 
-## `GeminiClientOptions` Reference
+## Documentation
 
-`GeminiClientOptions.ToString()` automatically redacts `ApiKey`, `ApiKeyProvider`, and `AdditionalHeaders` values so options can be logged safely.
-
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `Endpoint` | `Uri` | `https://generativelanguage.googleapis.com/v1beta` | Base URI of the Gemini API or gateway (without `:generateContent`). Query strings are preserved. |
-| `Model` | `string?` | `null` | Default model ID (`"gemini-2.5-flash"`) or resource name (`"models/..."`, `"tunedModels/..."`). Can be overridden per call. |
-| `ApiKey` | `string?` | `null` | Static API key or gateway credential. Mutually exclusive with `ApiKeyProvider`. |
-| `ApiKeyProvider` | `Func<CancellationToken, ValueTask<string>>?` | `null` | Async callback invoked per request to obtain a fresh API key or bearer token. |
-| `ApiKeyHeader` | `string` | `"x-goog-api-key"` | Header name used to send `ApiKey` or the value returned by `ApiKeyProvider`. |
-| `ApiKeyPrefix` | `string?` | `null` | Prefix prepended to the key value (for example `"Bearer "`). |
-| `AdditionalHeaders` | `IDictionary<string, string>` | Empty | Extra request headers sent on every call. Validated against CRLF injection and duplicates. |
-| `Timeout` | `TimeSpan` | 5 minutes | Request timeout applied to internally created and DI-managed `HttpClient` instances. |
-| `StreamIdleTimeout` | `TimeSpan` | 2 minutes | Maximum idle time between streaming chunks before throwing `TimeoutException`. |
-| `AllowInsecureHttp` | `bool` | `false` | Allows plain `http://` for non-loopback hosts when `true` (`http://localhost` is always allowed). |
-| `StreamingFormat` | `GeminiStreamingFormat` | `ServerSentEvents` | Streaming wire format: `ServerSentEvents` (`?alt=sse`) or `JsonArray`. |
+- 📘 **[Usage Guide & Recipes (`docs/USAGE.md`)](docs/USAGE.md)** — Full code examples for DI & resilience handlers, streaming, structured JSON output, thinking/reasoning, multimodal inputs, `IChatClient` tool chains, database chat persistence, and `GeminiClientOptions`.
+- 📊 **[Gemini API Compatibility Matrix (`docs/API_COMPATIBILITY.md`)](docs/API_COMPATIBILITY.md)** — Complete field-by-field mapping against the official Google Gemini REST API specification and `Microsoft.Extensions.AI`.
+- 📝 **[Changelog (`CHANGELOG.md`)](CHANGELOG.md)** — Release history and v2 migration notes.
 
 ---
 
