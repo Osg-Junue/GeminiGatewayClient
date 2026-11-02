@@ -11,6 +11,12 @@ namespace GeminiAPIWrapper.Models;
 public enum SchemaType
 {
     /// <summary>
+    /// Unspecified schema data type (<c>TYPE_UNSPECIFIED</c>).
+    /// </summary>
+    [JsonStringEnumMemberName("TYPE_UNSPECIFIED")]
+    Unspecified,
+
+    /// <summary>
     /// String type. Also supports case-insensitive <c>string</c> when parsing standard JSON Schema.
     /// </summary>
     [JsonStringEnumMemberName("STRING")]
@@ -44,5 +50,10 @@ public enum SchemaType
     /// Key-value object / map type.
     /// </summary>
     [JsonStringEnumMemberName("OBJECT")]
-    Object
+    Object,
+
+    /// <summary>
+    /// Fallback value used when the server returns a schema type not yet defined in this version of the library.
+    /// </summary>
+    Unknown
 }

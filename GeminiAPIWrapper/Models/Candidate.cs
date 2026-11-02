@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace GeminiAPIWrapper.Models;
@@ -25,6 +26,12 @@ public sealed class Candidate
     /// </summary>
     [JsonPropertyName("finishReason")]
     public FinishReason? FinishReason { get; set; }
+
+    /// <summary>
+    /// Optional. Human-readable message describing why the model stopped generating tokens.
+    /// </summary>
+    [JsonPropertyName("finishMessage")]
+    public string? FinishMessage { get; set; }
 
     /// <summary>
     /// Safety ratings evaluated for this candidate response.
@@ -61,4 +68,10 @@ public sealed class Candidate
     /// </summary>
     [JsonPropertyName("logprobsResult")]
     public LogprobsResult? LogprobsResult { get; set; }
+
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type (for example <c>groundingMetadata</c> or <c>urlContextMetadata</c>).
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 }

@@ -21,4 +21,15 @@ public enum Role
     /// </summary>
     [JsonStringEnumMemberName("model")]
     Model,
+
+    /// <summary>
+    /// Content produced by a tool or function execution (<c>function</c>).
+    /// </summary>
+    [JsonStringEnumMemberName("function")]
+    Function,
+
+    /// <summary>
+    /// Fallback value used when the server returns a role not yet defined in this version of the library.
+    /// </summary>
+    Unknown
 }

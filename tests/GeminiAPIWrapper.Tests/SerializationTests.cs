@@ -179,4 +179,109 @@ public class SerializationTests
         Assert.Equal("audio/L16;codec=pcm;rate=24000", blob.MimeType);
         Assert.Equal(new byte[] { 1, 2, 3, 4 }, blob.Data);
     }
+
+    [Fact]
+    public void AllEnums_HaveUnknownFallback_AndRoundTripUnknownWireName()
+    {
+        const string json = """
+            {
+              "candidates": [
+                {
+                  "index": 0,
+                  "content": {
+                    "role": "function",
+                    "parts": [
+                      {
+                        "executableCode": {
+                          "language": "RUST_2030",
+                          "code": "fn main() {}"
+                        },
+                        "codeExecutionResult": {
+                          "outcome": "OUTCOME_QUANTUM",
+                          "output": "ok"
+                        },
+                        "futurePartField": { "nested": 42 }
+                      }
+                    ]
+                  },
+                  "finishReason": "FUTURE_REASON",
+                  "finishMessage": "Stopped due to future reason",
+                  "groundingMetadata": { "webSearchQueries": ["gemini"] }
+                }
+              ],
+              "usageMetadata": {
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 2,
+                "totalTokenCount": 3,
+                "futureModalityCount": 99
+              }
+            }
+            """;
+
+        var response = JsonSerializer.Deserialize(json, GeminiJsonContext.Default.GenerateContentResponse);
+        Assert.NotNull(response);
+        var candidate = Assert.Single(response.Candidates);
+        Assert.Equal(Role.Function, candidate.Content?.Role);
+        Assert.Equal(FinishReason.Unknown, candidate.FinishReason);
+        Assert.Equal("Stopped due to future reason", candidate.FinishMessage);
+        Assert.True(candidate.ExtensionData?.ContainsKey("groundingMetadata"));
+        Assert.True(response.UsageMetadata?.ExtensionData?.ContainsKey("futureModalityCount"));
+
+        var part = Assert.Single(candidate.Content!.Parts);
+        Assert.Equal(CodeExecutionLanguage.Unknown, part.ExecutableCode?.Language);
+        Assert.Equal(CodeExecutionOutcome.Unknown, part.CodeExecutionResult?.Outcome);
+        Assert.True(part.ExtensionData?.ContainsKey("futurePartField"));
+
+        // Re-serializing Unknown enum values writes "UNKNOWN" instead of numeric/unspecified default
+        var reserialized = JsonSerializer.Serialize(response, GeminiJsonContext.Default.GenerateContentResponse);
+        using var doc = JsonDocument.Parse(reserialized);
+        var candElem = doc.RootElement.GetProperty("candidates")[0];
+        Assert.Equal("UNKNOWN", candElem.GetProperty("finishReason").GetString());
+        Assert.Equal("function", candElem.GetProperty("content").GetProperty("role").GetString());
+        Assert.True(candElem.TryGetProperty("groundingMetadata", out _));
+    }
+
+    [Fact]
+    public void Schema_DefaultDoesNotEmitStringType_AndUnknownEnumsFallbackToUnknown()
+    {
+        var schema = new Schema
+        {
+            Properties = new Dictionary<string, Schema>
+            {
+                ["age"] = new Schema { Type = SchemaType.Integer }
+            }
+        };
+
+        var request = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Hi")],
+            GenerationConfig = new GenerationConfig
+            {
+                ResponseMimeType = MimeTypes.ApplicationJson,
+                ResponseSchema = schema
+            }
+        };
+
+        var json = JsonSerializer.Serialize(request, GeminiJsonContext.Default.GenerateContentRequest);
+        using var doc = JsonDocument.Parse(json);
+        var rootSchema = doc.RootElement.GetProperty("generationConfig").GetProperty("responseSchema");
+        Assert.False(rootSchema.TryGetProperty("type", out _));
+        Assert.Equal("INTEGER", rootSchema.GetProperty("properties").GetProperty("age").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void Validate_RejectsEmptyPartsOrNullElements()
+    {
+        var emptyPartsRequest = new GenerateContentRequest
+        {
+            Contents = [new Content { Role = Role.User, Parts = [] }]
+        };
+        Assert.Throws<ArgumentException>(() => emptyPartsRequest.Validate());
+
+        var nullContentRequest = new GenerateContentRequest
+        {
+            Contents = [null!]
+        };
+        Assert.Throws<ArgumentException>(() => nullContentRequest.Validate());
+    }
 }

@@ -138,7 +138,7 @@ internal static class GeminiErrorParser
             return null;
         }
 
-        if (retryAfter.Delta is { } delta)
+        if (retryAfter.Delta is { } delta && delta > TimeSpan.Zero)
         {
             return delta;
         }
@@ -203,12 +203,20 @@ internal static class GeminiErrorParser
             return false;
         }
 
-        if (!double.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out var amount) || amount < 0)
+        if (!double.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out var amount) ||
+            !double.IsFinite(amount) ||
+            amount < 0)
         {
             return false;
         }
 
-        duration = TimeSpan.FromMilliseconds(amount * scale);
+        var milliseconds = amount * scale;
+        if (milliseconds > TimeSpan.MaxValue.TotalMilliseconds)
+        {
+            return false;
+        }
+
+        duration = TimeSpan.FromMilliseconds(milliseconds);
         return true;
     }
 

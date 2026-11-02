@@ -134,9 +134,25 @@ public sealed class GenerationConfig
     public bool? AudioTimestamp { get; set; }
 
     /// <summary>
-    /// Creates a shallow copy of this configuration.
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
     /// </summary>
-    internal GenerationConfig Clone() => (GenerationConfig)MemberwiseClone();
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    /// <summary>
+    /// Creates a copy of this configuration with nested mutable objects cloned.
+    /// </summary>
+    internal GenerationConfig Clone()
+    {
+        var clone = (GenerationConfig)MemberwiseClone();
+        clone.ThinkingConfig = ThinkingConfig?.Clone();
+        if (StopSequences is not null)
+        {
+            clone.StopSequences = [.. StopSequences];
+        }
+
+        return clone;
+    }
 
     /// <summary>
     /// Validates mutually exclusive settings.

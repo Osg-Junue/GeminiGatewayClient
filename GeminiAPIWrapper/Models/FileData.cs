@@ -16,8 +16,8 @@ public sealed class FileData
     public string? MimeType { get; set; }
 
     /// <summary>
-    /// URI of the file (for example a File API URI or <c>gs://bucket/object</c>).
+    /// Required. URI of the file (for example a File API URI or <c>gs://bucket/object</c>).
     /// </summary>
     [JsonPropertyName("fileUri")]
-    public string FileUri { get; set; } = "";
+    public required string FileUri { get; set; }
 }

@@ -53,4 +53,9 @@ public enum FunctionCallingMode
     /// </summary>
     [JsonStringEnumMemberName("VALIDATED")]
     Validated,
+
+    /// <summary>
+    /// Fallback value used when the server returns a function calling mode not yet defined in this version of the library.
+    /// </summary>
+    Unknown
 }

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace GeminiAPIWrapper.Models;
@@ -9,10 +10,11 @@ namespace GeminiAPIWrapper.Models;
 public sealed class Schema
 {
     /// <summary>
-    /// Required. Data type of the schema element.
+    /// Optional. Data type of the schema element.
     /// </summary>
     [JsonPropertyName("type")]
-    public SchemaType Type { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SchemaType? Type { get; set; }
 
     /// <summary>
     /// Optional. Human- and model-readable description of the value represented by this schema.
@@ -62,4 +64,10 @@ public sealed class Schema
     [JsonPropertyName("items")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Schema? Items { get; set; }
+
+    /// <summary>
+    /// Additional OpenAPI / JSON Schema keywords returned or accepted by the endpoint.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 }

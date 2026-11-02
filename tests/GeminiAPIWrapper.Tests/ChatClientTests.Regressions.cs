@@ -259,7 +259,7 @@ public partial class ChatClientTests
     }
 
     [Fact]
-    public async Task IChatClient_UnsupportedHostedTool_ThrowsNotSupportedException()
+    public async Task IChatClient_UnsupportedCustomTool_ThrowsNotSupportedException()
     {
         using var handler = new RecordingHandler(OkResponseJson);
         using var httpClient = new HttpClient(handler);
@@ -268,8 +268,138 @@ public partial class ChatClientTests
 
         await Assert.ThrowsAsync<NotSupportedException>(() => chatClient.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "Search")],
-            new ChatOptions { Tools = [new HostedWebSearchTool()] }));
+            new ChatOptions { Tools = [new CustomUnsupportedTool()] }));
     }
+
+    [Fact]
+    public async Task IChatClient_HostedWebSearchAndCodeInterpreterTools_MapToGoogleSearchAndCodeExecution()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        await chatClient.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Search and compute")],
+            new ChatOptions
+            {
+                Tools = [new HostedWebSearchTool(), new HostedCodeInterpreterTool()]
+            });
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var tools = sentDoc.RootElement.GetProperty("tools");
+        Assert.Equal(2, tools.GetArrayLength());
+        Assert.True(tools[0].TryGetProperty("googleSearch", out _));
+        Assert.False(tools[0].TryGetProperty("functionDeclarations", out _));
+        Assert.True(tools[1].TryGetProperty("codeExecution", out _));
+        Assert.False(tools[1].TryGetProperty("functionDeclarations", out _));
+    }
+
+    [Fact]
+    public async Task IChatClient_MultipleConsecutiveToolMessages_AreMergedIntoSingleUserContentTurn()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        await chatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Compare Tokyo and Osaka weather"),
+            new ChatMessage(ChatRole.Assistant,
+            [
+                new FunctionCallContent("call_1", "get_weather", new Dictionary<string, object?> { ["city"] = "Tokyo" }),
+                new FunctionCallContent("call_2", "get_weather", new Dictionary<string, object?> { ["city"] = "Osaka" })
+            ]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call_1", new Dictionary<string, object?> { ["tempC"] = 20 })]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call_2", new Dictionary<string, object?> { ["tempC"] = 23 })])
+        ]);
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var contents = sentDoc.RootElement.GetProperty("contents");
+        Assert.Equal(3, contents.GetArrayLength());
+
+        var mergedToolTurn = contents[2];
+        Assert.Equal("user", mergedToolTurn.GetProperty("role").GetString());
+        var parts = mergedToolTurn.GetProperty("parts");
+        Assert.Equal(2, parts.GetArrayLength());
+        Assert.Equal("call_1", parts[0].GetProperty("functionResponse").GetProperty("id").GetString());
+        Assert.Equal("call_2", parts[1].GetProperty("functionResponse").GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_DataContentThoughtSignature_SurvivesLossOfRawRepresentation()
+    {
+        const string json = """
+            {
+              "candidates": [
+                {
+                  "index": 0,
+                  "content": {
+                    "role": "model",
+                    "parts": [
+                      {
+                        "inlineData": { "mimeType": "image/png", "data": "AQIDBA==" },
+                        "thoughtSignature": "sig-image-part"
+                      }
+                    ]
+                  },
+                  "finishReason": "STOP"
+                }
+              ]
+            }
+            """;
+
+        using var handler = new RecordingHandler(json);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var first = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Draw")]);
+        var imageContent = Assert.Single(first.Messages[0].Contents.OfType<DataContent>());
+
+        var persistedImage = new DataContent(imageContent.Data, imageContent.MediaType)
+        {
+            AdditionalProperties = imageContent.AdditionalProperties
+        };
+        Assert.Null(persistedImage.RawRepresentation);
+
+        await chatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Draw"),
+            new ChatMessage(ChatRole.Assistant, [persistedImage]),
+            new ChatMessage(ChatRole.User, "Make it blue")
+        ]);
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var modelPart = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts")[0];
+        Assert.Equal("sig-image-part", modelPart.GetProperty("thoughtSignature").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_ReasoningEffort_OnGemini20_DoesNotSendUnsupportedThinkingLevelOrBudget()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient, model: "gemini-2.0-flash");
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        await chatClient.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Hi")],
+            new ChatOptions
+            {
+                Reasoning = new ReasoningOptions { Effort = ReasoningEffort.Medium }
+            });
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        Assert.False(sentDoc.RootElement.TryGetProperty("generationConfig", out _));
+    }
+
+    private sealed class CustomUnsupportedTool : AITool;
 
     [Fact]
     public async Task IChatClient_JsonNodeAndBinaryToolResults_SerializeAsJson()

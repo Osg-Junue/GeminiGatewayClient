@@ -1,16 +1,81 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace GeminiAPIWrapper.Models;
 
 /// <summary>
-/// Tool specification containing one or more <see cref="FunctionDeclaration"/> definitions that the model may invoke.
+/// Tool specification containing one or more <see cref="FunctionDeclaration"/> definitions or built-in server tools that the model may invoke.
 /// See <see href="https://ai.google.dev/api/caching#Tool"/>.
 /// </summary>
 public sealed class Tool
 {
     /// <summary>
-    /// Function declarations exposed to the model for tool calling.
+    /// Optional. Function declarations exposed to the model for tool calling.
     /// </summary>
     [JsonPropertyName("functionDeclarations")]
-    public IList<FunctionDeclaration> FunctionDeclarations { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IList<FunctionDeclaration>? FunctionDeclarations { get; set; }
+
+    /// <summary>
+    /// Optional. Enables Google Search grounding for the model.
+    /// </summary>
+    [JsonPropertyName("googleSearch")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GoogleSearchTool? GoogleSearch { get; set; }
+
+    /// <summary>
+    /// Optional. Enables the model to generate and execute Python code in a sandboxed environment.
+    /// </summary>
+    [JsonPropertyName("codeExecution")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CodeExecutionTool? CodeExecution { get; set; }
+
+    /// <summary>
+    /// Optional. Enables the model to fetch and ground responses on web URLs provided in the prompt.
+    /// </summary>
+    [JsonPropertyName("urlContext")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public UrlContextTool? UrlContext { get; set; }
+
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+}
+
+/// <summary>
+/// Configuration for Google Search grounding (<c>googleSearch</c>).
+/// </summary>
+public sealed class GoogleSearchTool
+{
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+}
+
+/// <summary>
+/// Configuration for server-side Python code execution (<c>codeExecution</c>).
+/// </summary>
+public sealed class CodeExecutionTool
+{
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+}
+
+/// <summary>
+/// Configuration for URL context retrieval (<c>urlContext</c>).
+/// </summary>
+public sealed class UrlContextTool
+{
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 }

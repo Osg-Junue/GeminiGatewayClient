@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -30,33 +31,63 @@ internal static class GeminiStreamReader
         StreamIdleWatchdog watchdog)
     {
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true);
-        var data = new StringBuilder();
+        var dataBuffer = new ArrayBufferWriter<byte>(1024);
+        ArrayBufferWriter<byte>? nonSseBuffer = null;
+        var sawSseEvent = false;
 
         while (true)
         {
-            watchdog.Reset();
+            watchdog.BeforeRead();
             var line = await reader.ReadLineAsync(watchdog.Token).ConfigureAwait(false);
+            watchdog.AfterRead();
 
             // End of stream or blank line: dispatch the buffered event (if any).
             if (line is null || line.Length == 0)
             {
-                if (data.Length > 0)
+                if (dataBuffer.WrittenCount > 0)
                 {
-                    yield return DeserializeChunk(data.ToString(), statusCode);
-                    data.Clear();
+                    sawSseEvent = true;
+                    var response = DeserializeUtf8Chunk(dataBuffer.WrittenSpan, statusCode);
+                    dataBuffer.Clear();
+                    yield return response;
                 }
 
                 if (line is null)
                 {
+                    if (!sawSseEvent && nonSseBuffer is { WrittenCount: > 0 })
+                    {
+                        yield return DeserializeUtf8Chunk(nonSseBuffer.WrittenSpan, statusCode);
+                    }
+
                     yield break;
                 }
 
                 continue;
             }
 
-            if (line[0] == ':' || !line.StartsWith("data:", StringComparison.Ordinal))
+            if (line[0] == ':')
             {
-                // Comment / keep-alive line, or a field we do not use (event:, id:, retry:).
+                // Comment / keep-alive line.
+                sawSseEvent = true;
+                continue;
+            }
+
+            if (!line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                if (line.StartsWith("event:", StringComparison.Ordinal) ||
+                    line.StartsWith("id:", StringComparison.Ordinal) ||
+                    line.StartsWith("retry:", StringComparison.Ordinal))
+                {
+                    sawSseEvent = true;
+                    continue;
+                }
+
+                // A proxy or upstream server may return a raw JSON error payload with HTTP 200 instead of SSE framing.
+                if (!sawSseEvent)
+                {
+                    Encoding.UTF8.GetBytes(line.AsSpan(), nonSseBuffer ??= new ArrayBufferWriter<byte>(256));
+                }
+
                 continue;
             }
 
@@ -68,29 +99,61 @@ internal static class GeminiStreamReader
 
             if (payload.SequenceEqual("[DONE]"))
             {
+                sawSseEvent = true;
                 continue;
             }
 
-            if (data.Length > 0)
+            if (dataBuffer.WrittenCount > 0)
             {
-                data.Append('\n');
+                dataBuffer.GetSpan(1)[0] = (byte)'\n';
+                dataBuffer.Advance(1);
             }
 
-            data.Append(payload);
+            Encoding.UTF8.GetBytes(payload, dataBuffer);
         }
     }
 
-    private static GenerateContentResponse DeserializeChunk(string json, HttpStatusCode statusCode)
+    private static GenerateContentResponse DeserializeUtf8Chunk(ReadOnlySpan<byte> utf8Json, HttpStatusCode statusCode)
     {
         try
         {
-            using var document = JsonDocument.Parse(json);
-            return ToResponse(document.RootElement, statusCode);
+            if (LooksLikeErrorPayload(utf8Json))
+            {
+                var docReader = new Utf8JsonReader(utf8Json);
+                using var document = JsonDocument.ParseValue(ref docReader);
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 0)
+                {
+                    root = root[0];
+                }
+
+                if (GeminiErrorParser.TryCreateFromStreamPayload(root, statusCode) is { } streamError)
+                {
+                    throw streamError;
+                }
+            }
+
+            return JsonSerializer.Deserialize(utf8Json, GeminiJsonContext.Default.GenerateContentResponse)
+                   ?? throw new GeminiApiException("Received an empty (null) Gemini streaming chunk.", statusCode);
         }
         catch (JsonException ex)
         {
             throw new GeminiApiException("Failed to deserialize a Gemini streaming chunk.", statusCode, null, ex);
         }
+    }
+
+    private static bool LooksLikeErrorPayload(ReadOnlySpan<byte> utf8Json)
+    {
+        var reader = new Utf8JsonReader(utf8Json);
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.PropertyName)
+            {
+                return reader.ValueTextEquals("error"u8);
+            }
+        }
+
+        return false;
     }
 
     private static async IAsyncEnumerable<GenerateContentResponse> ReadJsonArrayAsync(
@@ -107,8 +170,11 @@ internal static class GeminiStreamReader
             GenerateContentResponse current;
             try
             {
-                watchdog.Reset();
-                if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                watchdog.BeforeRead();
+                var hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                watchdog.AfterRead();
+
+                if (!hasNext)
                 {
                     yield break;
                 }

@@ -9,14 +9,14 @@ namespace GeminiAPIWrapper.Models;
 public sealed class Blob
 {
     /// <summary>
-    /// IANA MIME type of the media data (see <see cref="MimeTypes"/> for common constants).
+    /// Required. IANA MIME type of the media data (see <see cref="MimeTypes"/> for common constants).
     /// </summary>
     [JsonPropertyName("mimeType")]
-    public string MimeType { get; set; } = "";
+    public required string MimeType { get; set; }
 
     /// <summary>
-    /// Raw bytes of the media payload (Base64-encoded in JSON).
+    /// Required. Raw bytes of the media payload (Base64-encoded in JSON).
     /// </summary>
     [JsonPropertyName("data")]
-    public byte[] Data { get; set; } = [];
+    public required byte[] Data { get; set; }
 }

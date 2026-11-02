@@ -12,6 +12,7 @@ internal sealed class StreamIdleWatchdog : IDisposable
     private readonly CancellationTokenSource? _cts;
     private readonly CancellationToken _callerToken;
     private readonly TimeSpan _idleTimeout;
+    private volatile bool _reading;
 
     public StreamIdleWatchdog(TimeSpan? idleTimeout, CancellationToken callerToken)
     {
@@ -34,18 +35,31 @@ internal sealed class StreamIdleWatchdog : IDisposable
     public TimeSpan? IdleTimeout => _cts is null ? null : _idleTimeout;
 
     /// <summary>
-    /// <c>true</c> when <see cref="Token"/> was canceled by the idle timer rather than by the caller.
+    /// <c>true</c> when <see cref="Token"/> was canceled by the idle timer during an active stream read rather than by the caller.
     /// </summary>
-    public bool HasTimedOut => _cts is { IsCancellationRequested: true } && !_callerToken.IsCancellationRequested;
+    public bool HasTimedOut => _reading && _cts is { IsCancellationRequested: true } && !_callerToken.IsCancellationRequested;
 
     /// <summary>
-    /// Restarts the idle timer. Call before every read.
+    /// Arms the idle timer immediately before awaiting a stream read.
     /// </summary>
-    public void Reset()
+    public void BeforeRead()
     {
         if (_cts is { IsCancellationRequested: false })
         {
+            _reading = true;
             _cts.CancelAfter(_idleTimeout);
+        }
+    }
+
+    /// <summary>
+    /// Disarms the idle timer immediately after a stream read completes so consumer processing time is never counted as stream idle time.
+    /// </summary>
+    public void AfterRead()
+    {
+        _reading = false;
+        if (_cts is { IsCancellationRequested: false })
+        {
+            _cts.CancelAfter(Timeout.InfiniteTimeSpan);
         }
     }
 

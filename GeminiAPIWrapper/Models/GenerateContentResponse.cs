@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace GeminiAPIWrapper.Models;
@@ -40,6 +42,12 @@ public sealed class GenerateContentResponse
     public string? ResponseId { get; set; }
 
     /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    /// <summary>
     /// Concatenation of all non-thought text parts in the first candidate,
     /// or <c>null</c> when there are no candidates, no parts, or no non-thought text.
     /// </summary>
@@ -48,14 +56,41 @@ public sealed class GenerateContentResponse
     {
         get
         {
-            var parts = Candidates.FirstOrDefault()?.Content?.Parts;
+            var candidates = Candidates;
+            if (candidates is null || candidates.Count == 0)
+            {
+                return null;
+            }
+
+            var parts = candidates[0]?.Content?.Parts;
             if (parts is null || parts.Count == 0)
             {
                 return null;
             }
 
-            var text = string.Concat(parts.Where(p => p.Thought != true && !string.IsNullOrEmpty(p.Text)).Select(p => p.Text));
-            return text.Length == 0 ? null : text;
+            string? single = null;
+            StringBuilder? sb = null;
+
+            for (var i = 0; i < parts.Count; i++)
+            {
+                var part = parts[i];
+                if (part is null || part.Thought == true || string.IsNullOrEmpty(part.Text))
+                {
+                    continue;
+                }
+
+                if (single is null)
+                {
+                    single = part.Text;
+                }
+                else
+                {
+                    sb ??= new StringBuilder(single);
+                    sb.Append(part.Text);
+                }
+            }
+
+            return sb is not null ? sb.ToString() : single;
         }
     }
 
@@ -64,18 +99,42 @@ public sealed class GenerateContentResponse
     /// The model may request several calls in parallel.
     /// </summary>
     [JsonIgnore]
-    public IReadOnlyList<FunctionCall> FunctionCalls =>
-        Candidates.FirstOrDefault()?.Content?.Parts
-            .Select(p => p.FunctionCall)
-            .OfType<FunctionCall>()
-            .ToArray()
-        ?? [];
+    public IReadOnlyList<FunctionCall> FunctionCalls
+    {
+        get
+        {
+            var candidates = Candidates;
+            if (candidates is null || candidates.Count == 0)
+            {
+                return [];
+            }
+
+            var parts = candidates[0]?.Content?.Parts;
+            if (parts is null || parts.Count == 0)
+            {
+                return [];
+            }
+
+            List<FunctionCall>? calls = null;
+            for (var i = 0; i < parts.Count; i++)
+            {
+                var call = parts[i]?.FunctionCall;
+                if (call is not null)
+                {
+                    calls ??= [];
+                    calls.Add(call);
+                }
+            }
+
+            return calls is not null ? calls : [];
+        }
+    }
 
     /// <summary>
     /// The <see cref="Models.FinishReason"/> of the first candidate, or <c>null</c> when there are no candidates.
     /// </summary>
     [JsonIgnore]
-    public FinishReason? FinishReason => Candidates.FirstOrDefault()?.FinishReason;
+    public FinishReason? FinishReason => Candidates is { Count: > 0 } c ? c[0]?.FinishReason : null;
 
     /// <summary>
     /// The prompt-level <see cref="Models.BlockReason"/> when the input was blocked before generation, or <c>null</c>.

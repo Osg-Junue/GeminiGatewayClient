@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace GeminiAPIWrapper.Models;
@@ -69,6 +70,12 @@ public sealed class GenerateContentRequest
     public IDictionary<string, string>? Labels { get; set; }
 
     /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    /// <summary>
     /// Creates a single-turn request from a user <paramref name="prompt"/> and an optional <paramref name="systemInstruction"/>.
     /// </summary>
     /// <param name="prompt">The user prompt text.</param>
@@ -110,6 +117,21 @@ public sealed class GenerateContentRequest
             throw new ArgumentException("GenerateContentRequest.Contents must contain at least one Content item.", "request");
         }
 
+        for (var i = 0; i < Contents.Count; i++)
+        {
+            var content = Contents[i];
+            if (content is null)
+            {
+                throw new ArgumentException($"GenerateContentRequest.Contents[{i}] cannot be null.", "request");
+            }
+
+            if ((content.Parts is null || content.Parts.Count == 0) &&
+                (content.ExtensionData is null || content.ExtensionData.Count == 0))
+            {
+                throw new ArgumentException($"GenerateContentRequest.Contents[{i}].Parts must contain at least one Part item.", "request");
+            }
+        }
+
         GenerationConfig?.Validate();
 
         if (Tools is null)
@@ -126,6 +148,11 @@ public sealed class GenerateContentRequest
 
             foreach (var declaration in tool.FunctionDeclarations)
             {
+                if (declaration is null)
+                {
+                    throw new ArgumentException("Tool.FunctionDeclarations cannot contain null elements.", "request");
+                }
+
                 declaration.Validate();
             }
         }

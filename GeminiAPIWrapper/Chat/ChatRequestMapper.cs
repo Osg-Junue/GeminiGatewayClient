@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using GeminiAPIWrapper.Models;
 using Microsoft.Extensions.AI;
@@ -44,17 +45,31 @@ internal static class ChatRequestMapper
                 continue;
             }
 
+            var targetRole = message.Role == ChatRole.Assistant ? Role.Model : Role.User;
             var parts = new List<Part>();
             foreach (var item in message.Contents)
             {
                 AppendPart(parts, item, calls, toolSerializerOptions);
             }
 
-            if (parts.Count > 0)
+            if (parts.Count == 0)
+            {
+                continue;
+            }
+
+            if (contents.Count > 0 && contents[^1].Role == targetRole)
+            {
+                var previousParts = contents[^1].Parts;
+                foreach (var part in parts)
+                {
+                    previousParts.Add(part);
+                }
+            }
+            else
             {
                 contents.Add(new Content
                 {
-                    Role = message.Role == ChatRole.Assistant ? Role.Model : Role.User,
+                    Role = targetRole,
                     Parts = parts
                 });
             }
@@ -86,10 +101,14 @@ internal static class ChatRequestMapper
             return;
         }
 
+        var signature = GetStringProperty(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature);
+
         switch (item)
         {
             case TextContent text when !string.IsNullOrEmpty(text.Text):
-                parts.Add(Part.FromText(text.Text));
+                var textPart = Part.FromText(text.Text);
+                textPart.ThoughtSignature = signature;
+                parts.Add(textPart);
                 break;
 
             case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text) || !string.IsNullOrEmpty(reasoning.ProtectedData):
@@ -97,17 +116,26 @@ internal static class ChatRequestMapper
                 break;
 
             case DataContent data:
-                parts.Add(Part.FromBytes(data.Data.Span, data.MediaType));
+                var dataPart = MemoryMarshal.TryGetArray(data.Data, out var segment) &&
+                               segment.Array is not null &&
+                               segment.Offset == 0 &&
+                               segment.Count == segment.Array.Length
+                    ? Part.FromBytes(segment.Array, data.MediaType)
+                    : Part.FromBytes(data.Data.Span, data.MediaType);
+                dataPart.ThoughtSignature = signature;
+                parts.Add(dataPart);
                 break;
 
             case UriContent uri:
-                parts.Add(Part.FromUri(uri.Uri.ToString(), string.IsNullOrWhiteSpace(uri.MediaType) ? null : uri.MediaType));
+                var uriPart = Part.FromUri(uri.Uri.ToString(), string.IsNullOrWhiteSpace(uri.MediaType) ? null : uri.MediaType);
+                uriPart.ThoughtSignature = signature;
+                parts.Add(uriPart);
                 break;
 
             case FunctionCallContent call:
                 parts.Add(new Part
                 {
-                    ThoughtSignature = GetStringProperty(call.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature),
+                    ThoughtSignature = signature,
                     FunctionCall = new FunctionCall
                     {
                         Id = calls.GetApiId(call.CallId),
@@ -210,8 +238,7 @@ internal static class ChatRequestMapper
                 return rawPart.FunctionCall?.Id;
             }
 
-            var synthesized = GetBooleanProperty(call.AdditionalProperties, GeminiChatPropertyNames.SynthesizedCallId) ||
-                              string.Equals(call.CallId, call.Name, StringComparison.Ordinal);
+            var synthesized = GetBooleanProperty(call.AdditionalProperties, GeminiChatPropertyNames.SynthesizedCallId);
             return synthesized ? null : call.CallId;
         }
     }

@@ -92,5 +92,10 @@ public enum ThinkingLevel
     /// Maximum reasoning depth (<c>HIGH</c>) for complex math, coding, and multi-step planning.
     /// </summary>
     [JsonStringEnumMemberName("HIGH")]
-    High
+    High,
+
+    /// <summary>
+    /// Fallback value used when the server returns a thinking level not yet defined in this version of the library.
+    /// </summary>
+    Unknown
 }

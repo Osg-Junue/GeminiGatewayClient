@@ -13,13 +13,13 @@ public sealed class SafetySetting
     /// Harm category controlled by this safety setting.
     /// </summary>
     [JsonPropertyName("category")]
-    public HarmCategory Category { get; set; }
+    public required HarmCategory Category { get; set; }
 
     /// <summary>
     /// Blocking threshold applied to <see cref="Category"/>.
     /// </summary>
     [JsonPropertyName("threshold")]
-    public HarmBlockThreshold Threshold { get; set; }
+    public required HarmBlockThreshold Threshold { get; set; }
 
     /// <summary>
     /// Optional. Method used to evaluate the threshold (probability or severity, where supported).
@@ -70,7 +70,12 @@ public enum HarmBlockThreshold
     /// Turn off the safety filter for this category.
     /// </summary>
     [JsonStringEnumMemberName("OFF")]
-    Off
+    Off,
+
+    /// <summary>
+    /// Fallback value used when the server returns a threshold not yet defined in this version of the library.
+    /// </summary>
+    Unknown
 }
 
 /// <summary>
@@ -95,5 +100,10 @@ public enum HarmBlockMethod
     /// Evaluate based on probability score only.
     /// </summary>
     [JsonStringEnumMemberName("PROBABILITY")]
-    Probability
+    Probability,
+
+    /// <summary>
+    /// Fallback value used when the server returns an evaluation method not yet defined in this version of the library.
+    /// </summary>
+    Unknown
 }

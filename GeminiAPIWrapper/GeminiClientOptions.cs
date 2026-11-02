@@ -34,6 +34,11 @@ public sealed class GeminiClientOptions
     public static TimeSpan DefaultTimeout { get; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// The default streaming idle timeout (2 minutes) between chunks.
+    /// </summary>
+    public static TimeSpan DefaultStreamIdleTimeout { get; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
     /// Base URI that model resources are resolved against. Requests are sent to
     /// <c>{Endpoint}/models/{model}:generateContent</c> (or <c>:streamGenerateContent</c>); query strings are preserved.
     /// Defaults to <see cref="DefaultEndpoint"/>.
@@ -43,7 +48,11 @@ public sealed class GeminiClientOptions
     /// <c>https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google</c> (Vertex AI).
     /// </para>
     /// </summary>
-    public Uri Endpoint { get; set; } = DefaultEndpoint;
+    public Uri Endpoint
+    {
+        get;
+        set => field = value ?? throw new ArgumentNullException(nameof(value));
+    } = DefaultEndpoint;
 
     /// <summary>
     /// Default model used when a call does not specify one, for example <c>gemini-2.5-flash</c>.
@@ -73,7 +82,13 @@ public sealed class GeminiClientOptions
     /// Examples: <c>Ocp-Apim-Subscription-Key</c> (Azure API Management), <c>Authorization</c> (bearer-token proxies).
     /// </para>
     /// </summary>
-    public string ApiKeyHeader { get; set; } = DefaultApiKeyHeader;
+    public string ApiKeyHeader
+    {
+        get;
+        set => field = !string.IsNullOrWhiteSpace(value)
+            ? value
+            : throw new ArgumentException("ApiKeyHeader cannot be null or whitespace.", nameof(value));
+    } = DefaultApiKeyHeader;
 
     /// <summary>
     /// Text prepended to the credential in the header value, for example <c>"Bearer "</c>.
@@ -95,9 +110,10 @@ public sealed class GeminiClientOptions
 
     /// <summary>
     /// Maximum time to wait for the next chunk of a streaming response before failing with <see cref="TimeoutException"/>.
-    /// <c>null</c> (default) disables the idle timeout. Must be positive or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> when set.
+    /// Defaults to <see cref="DefaultStreamIdleTimeout"/> (2 minutes). Set to <c>null</c> or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to disable.
+    /// Must be positive or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> when set.
     /// </summary>
-    public TimeSpan? StreamIdleTimeout { get; set; }
+    public TimeSpan? StreamIdleTimeout { get; set; } = DefaultStreamIdleTimeout;
 
     /// <summary>
     /// When <c>false</c> (default), <c>http://</c> endpoints are only permitted for loopback hosts (<c>localhost</c>, <c>127.0.0.1</c>, <c>::1</c>)

@@ -13,7 +13,7 @@ namespace Microsoft.Extensions.DependencyInjection;
 public static class GeminiServiceCollectionExtensions
 {
     /// <summary>
-    /// The named <see cref="HttpClient"/> registration used by <see cref="AddGeminiClient"/>.
+    /// The named <see cref="HttpClient"/> registration used by <see cref="AddGeminiClient(IServiceCollection, Action{GeminiClientOptions}?)"/>.
     /// </summary>
     public const string HttpClientName = "GeminiAPIWrapper";
 
@@ -44,17 +44,45 @@ public static class GeminiServiceCollectionExtensions
             optionsBuilder.Configure(configure);
         }
 
+        return RegisterCore(services);
+    }
+
+    /// <summary>
+    /// Registers <see cref="GeminiClient"/>, <see cref="IGeminiClient"/>, and <see cref="IChatClient"/> backed by <see cref="IHttpClientFactory"/>,
+    /// configuring <see cref="GeminiClientOptions"/> using the <see cref="IServiceProvider"/>.
+    /// </summary>
+    /// <param name="services">The <see cref="IServiceCollection"/> to add services to.</param>
+    /// <param name="configure">Delegate that configures <see cref="GeminiClientOptions"/> with access to <see cref="IServiceProvider"/>.</param>
+    /// <returns>An <see cref="IHttpClientBuilder"/> for further configuring the underlying <see cref="HttpClient"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="services"/> or <paramref name="configure"/> is <c>null</c>.</exception>
+    public static IHttpClientBuilder AddGeminiClient(this IServiceCollection services, Action<IServiceProvider, GeminiClientOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        services.AddOptions<GeminiClientOptions>()
+            .Configure<IServiceProvider>((options, sp) => configure(sp, options));
+
+        return RegisterCore(services);
+    }
+
+    private static IHttpClientBuilder RegisterCore(IServiceCollection services)
+    {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GeminiClientOptions>, GeminiClientOptionsValidator>());
+
+        services.TryAddSingleton(static sp =>
+            GeminiClientSettings.Create(sp.GetRequiredService<IOptions<GeminiClientOptions>>().Value));
 
         var httpClientBuilder = services
             .AddHttpClient(HttpClientName)
             .ConfigureHttpClient(static (sp, httpClient) =>
-                httpClient.Timeout = sp.GetRequiredService<IOptions<GeminiClientOptions>>().Value.Timeout)
+                httpClient.Timeout = sp.GetRequiredService<GeminiClientSettings>().Timeout)
             .ConfigurePrimaryHttpMessageHandler(static () => GeminiClient.CreateDefaultHandler());
 
         services.TryAddTransient(static sp => new GeminiClient(
-            sp.GetRequiredService<IOptions<GeminiClientOptions>>().Value,
-            sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
+            sp.GetRequiredService<GeminiClientSettings>(),
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName),
+            disposeHttpClient: false));
         services.TryAddTransient<IGeminiClient>(static sp => sp.GetRequiredService<GeminiClient>());
         services.TryAddTransient<IChatClient>(static sp => sp.GetRequiredService<IGeminiClient>().AsIChatClient());
 

@@ -59,8 +59,33 @@ internal static class ChatOptionsMapper
             ApplyReasoning(config, reasoning, modelId);
         }
 
-        request.GenerationConfig = config;
+        if (request.GenerationConfig is not null || !IsEmpty(config))
+        {
+            request.GenerationConfig = config;
+        }
     }
+
+    private static bool IsEmpty(GenerationConfig config) =>
+        config is
+        {
+            Temperature: null,
+            TopP: null,
+            TopK: null,
+            MaxOutputTokens: null,
+            CandidateCount: null,
+            StopSequences: null,
+            PresencePenalty: null,
+            FrequencyPenalty: null,
+            ResponseMimeType: null,
+            ResponseSchema: null,
+            ResponseJsonSchema: null,
+            ThinkingConfig: null,
+            Seed: null,
+            ResponseLogprobs: null,
+            Logprobs: null,
+            AudioTimestamp: null,
+            ExtensionData: null
+        };
 
     private static void ApplyResponseFormat(GenerationConfig config, ChatResponseFormat? format)
     {
@@ -119,24 +144,47 @@ internal static class ChatOptionsMapper
             return;
         }
 
-        var declarations = new List<FunctionDeclaration>(tools.Count);
+        List<FunctionDeclaration>? declarations = null;
+        var mappedTools = new List<Tool>();
+
         foreach (var tool in tools)
         {
-            declarations.Add(tool switch
+            switch (tool)
             {
-                AIFunctionDeclaration function => new FunctionDeclaration
-                {
-                    Name = function.Name,
-                    Description = string.IsNullOrEmpty(function.Description) ? null : function.Description,
-                    ParametersJsonSchema = ExtractParametersJsonSchema(function.JsonSchema)
-                },
-                _ => throw new NotSupportedException(
-                    $"ChatOptions.Tools contains '{tool.GetType().Name}' ('{tool.Name}'), which is not supported. " +
-                    "Only AIFunctionDeclaration tools (for example AIFunctionFactory.Create) can be mapped to Gemini function declarations.")
-            });
+                case AIFunctionDeclaration function:
+                    declarations ??= [];
+                    declarations.Add(new FunctionDeclaration
+                    {
+                        Name = function.Name,
+                        Description = string.IsNullOrEmpty(function.Description) ? null : function.Description,
+                        ParametersJsonSchema = ExtractParametersJsonSchema(function.JsonSchema)
+                    });
+                    break;
+
+                case HostedWebSearchTool:
+                    mappedTools.Add(new Tool { GoogleSearch = new GoogleSearchTool() });
+                    break;
+
+                case HostedCodeInterpreterTool:
+                    mappedTools.Add(new Tool { CodeExecution = new CodeExecutionTool() });
+                    break;
+
+                default:
+                    throw new NotSupportedException(
+                        $"ChatOptions.Tools contains '{tool.GetType().Name}' ('{tool.Name}'), which is not supported. " +
+                        "Only AIFunctionDeclaration, HostedWebSearchTool, and HostedCodeInterpreterTool can be mapped to Gemini tools.");
+            }
         }
 
-        request.Tools = [new Tool { FunctionDeclarations = declarations }];
+        if (declarations is { Count: > 0 })
+        {
+            mappedTools.Insert(0, new Tool { FunctionDeclarations = declarations });
+        }
+
+        if (mappedTools.Count > 0)
+        {
+            request.Tools = mappedTools;
+        }
     }
 
     private static void ApplyToolMode(GenerateContentRequest request, ChatOptions options)

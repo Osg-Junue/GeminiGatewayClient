@@ -206,4 +206,36 @@ public class OptionsTests
         using var provider = services.BuildServiceProvider();
         Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IGeminiClient>());
     }
+
+    [Fact]
+    public void GeminiClientOptions_DefaultStreamIdleTimeout_IsTwoMinutes_AndSettersValidateEagerly()
+    {
+        var options = new GeminiClientOptions();
+        Assert.Equal(TimeSpan.FromMinutes(2), options.StreamIdleTimeout);
+
+        Assert.Throws<ArgumentNullException>(() => options.Endpoint = null!);
+        Assert.Throws<ArgumentException>(() => options.ApiKeyHeader = "   ");
+    }
+
+    [Fact]
+    public async Task AddGeminiClient_WithServiceProviderOverload_ResolvesConfigurationFromContainer()
+    {
+        const string okJson = """{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"From SP!"}]}}]}""";
+        using var handler = new RecordingHandler(okJson);
+
+        var services = new ServiceCollection();
+        services.AddSingleton("resolved-secret-key");
+        services.AddGeminiClient((sp, options) =>
+        {
+            options.Model = DefaultModel;
+            options.ApiKey = sp.GetRequiredService<string>();
+        }).ConfigurePrimaryHttpMessageHandler(() => handler);
+
+        await using var provider = services.BuildServiceProvider();
+        var client = provider.GetRequiredService<IGeminiClient>();
+        var response = await client.GenerateContentAsync("Hi");
+
+        Assert.Equal("From SP!", response.Text);
+        Assert.Equal("resolved-secret-key", Assert.Single(handler.LastRequest!.Headers.GetValues("x-goog-api-key")));
+    }
 }

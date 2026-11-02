@@ -89,7 +89,7 @@ internal static class ChatResponseMapper
                     break;
 
                 case { Thought: true }:
-                case { ThoughtSignature: { Length: > 0 }, Text: null }:
+                case { ThoughtSignature: { Length: > 0 }, Text: null, InlineData: null, FileData: null }:
                     contents.Add(new TextReasoningContent(part.Text ?? string.Empty)
                     {
                         ProtectedData = part.ThoughtSignature,
@@ -98,7 +98,9 @@ internal static class ChatResponseMapper
                     break;
 
                 case { Text: { } text }:
-                    contents.Add(new TextContent(text) { RawRepresentation = part });
+                    var textContent = new TextContent(text) { RawRepresentation = part };
+                    AttachThoughtSignature(textContent, part.ThoughtSignature);
+                    contents.Add(textContent);
                     if (!string.IsNullOrEmpty(part.ThoughtSignature))
                     {
                         // Exposes the signature to consumers that persist history without RawRepresentation.
@@ -109,22 +111,34 @@ internal static class ChatResponseMapper
                     break;
 
                 case { InlineData: { Data.Length: > 0 } blob }:
-                    contents.Add(new DataContent(blob.Data, string.IsNullOrWhiteSpace(blob.MimeType) ? MimeTypes.ApplicationOctetStream : blob.MimeType)
+                    var dataContent = new DataContent(blob.Data, string.IsNullOrWhiteSpace(blob.MimeType) ? MimeTypes.ApplicationOctetStream : blob.MimeType)
                     {
                         RawRepresentation = part
-                    });
+                    };
+                    AttachThoughtSignature(dataContent, part.ThoughtSignature);
+                    contents.Add(dataContent);
                     break;
 
                 case { FileData: { FileUri.Length: > 0 } file } when Uri.TryCreate(file.FileUri, UriKind.RelativeOrAbsolute, out var fileUri):
-                    contents.Add(new UriContent(fileUri, string.IsNullOrWhiteSpace(file.MimeType) ? MimeTypes.ApplicationOctetStream : file.MimeType)
+                    var uriContent = new UriContent(fileUri, string.IsNullOrWhiteSpace(file.MimeType) ? MimeTypes.ApplicationOctetStream : file.MimeType)
                     {
                         RawRepresentation = part
-                    });
+                    };
+                    AttachThoughtSignature(uriContent, part.ThoughtSignature);
+                    contents.Add(uriContent);
                     break;
             }
         }
 
         return contents;
+    }
+
+    private static void AttachThoughtSignature(AIContent content, string? thoughtSignature)
+    {
+        if (!string.IsNullOrEmpty(thoughtSignature))
+        {
+            (content.AdditionalProperties ??= new AdditionalPropertiesDictionary())[GeminiChatPropertyNames.ThoughtSignature] = thoughtSignature;
+        }
     }
 
     private static FunctionCallContent MapFunctionCall(Part part, FunctionCall call, ref int callOrdinal)

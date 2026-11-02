@@ -339,6 +339,104 @@ public class GeminiClientTests
     }
 
     [Fact]
+    public async Task Stream_SlowConsumerDuringYieldReturn_DoesNotTriggerStreamIdleTimeout()
+    {
+        const string ssePayload = """
+            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Chunk 1"}]}}]}
+
+            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Chunk 2"}]},"finishReason":"STOP"}]}
+
+            """;
+
+        using var handler = new RecordingHandler(ssePayload, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key",
+            StreamIdleTimeout = TimeSpan.FromMilliseconds(80)
+        }, httpClient);
+
+        var received = new List<string?>();
+        await foreach (var chunk in client.StreamGenerateContentAsync("Hi"))
+        {
+            received.Add(chunk.Text);
+            // Consumer takes longer than StreamIdleTimeout to process the yielded item
+            await Task.Delay(200);
+        }
+
+        Assert.Equal(["Chunk 1", "Chunk 2"], received);
+    }
+
+    [Fact]
+    public async Task Stream_RawJsonErrorReturnedOnHttp200SseStream_ThrowsGeminiApiException()
+    {
+        const string rawJsonError = """
+            {
+              "error": {
+                "code": 503,
+                "message": "Backend unavailable mid-stream",
+                "status": "UNAVAILABLE"
+              }
+            }
+            """;
+
+        using var handler = new RecordingHandler(rawJsonError, HttpStatusCode.OK, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
+        {
+            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
+            {
+            }
+        });
+
+        Assert.Equal("UNAVAILABLE", ex.ErrorStatus);
+        Assert.Equal("Backend unavailable mid-stream", ex.ErrorMessage);
+    }
+
+    [Theory]
+    [InlineData("-5s")]
+    [InlineData("999999999999999999999s")]
+    [InlineData("NaNs")]
+    [InlineData("Infinitys")]
+    public async Task ErrorStatus_InvalidOrOverflowRetryDelay_DoesNotThrowOverflowException(string badRetryDelay)
+    {
+        var errorBody = $$"""
+            {
+              "error": {
+                "code": 429,
+                "message": "Rate limited",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    "retryDelay": "{{badRetryDelay}}"
+                  }
+                ]
+              }
+            }
+            """;
+
+        using var handler = new RecordingHandler(errorBody, HttpStatusCode.TooManyRequests);
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("Hi"));
+        Assert.Equal(HttpStatusCode.TooManyRequests, ex.StatusCode);
+        Assert.Null(ex.RetryAfter);
+    }
+
+    [Fact]
     public async Task ErrorStatus_ParsesGoogleErrorStatusMessageAndRetryInfo()
     {
         const string errorBody = """

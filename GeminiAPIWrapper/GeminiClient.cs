@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using GeminiAPIWrapper.Http;
@@ -50,9 +51,15 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="options"/> is invalid.</exception>
     public GeminiClient(GeminiClientOptions options, HttpClient? httpClient = null)
+        : this(GeminiClientSettings.Create(options), httpClient, disposeHttpClient: httpClient is null)
     {
-        _settings = GeminiClientSettings.Create(options);
-        _disposeHttpClient = httpClient is null;
+    }
+
+    internal GeminiClient(GeminiClientSettings settings, HttpClient? httpClient, bool disposeHttpClient = false)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        _settings = settings;
+        _disposeHttpClient = disposeHttpClient;
         _httpClient = httpClient ?? CreateDefaultHttpClient(_settings.Timeout);
     }
 
@@ -163,8 +170,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         bool serverSentEvents,
         CancellationToken cancellationToken)
     {
-        var content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(request, GeminiJsonContext.Default.GenerateContentRequest));
-        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        var content = JsonContent.Create(request, GeminiJsonContext.Default.GenerateContentRequest);
 
         var message = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = content };
         try
