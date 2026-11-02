@@ -565,10 +565,12 @@ public class SerializationTests
         var request = new GenerateContentRequest
         {
             Contents = [Content.FromText("Generate")],
+            Store = false,
             GenerationConfig = new GenerationConfig
             {
                 ResponseModalities = ["TEXT", "AUDIO"],
                 MediaResolution = MediaResolution.High,
+                EnableEnhancedCivicAnswers = true,
                 ResponseMimeType = MimeTypes.ApplicationJson,
                 ResponseSchema = new Schema
                 {
@@ -595,8 +597,10 @@ public class SerializationTests
 
         var json = JsonSerializer.Serialize(request, GeminiJsonContext.Default.GenerateContentRequest);
         using var doc = JsonDocument.Parse(json);
+        Assert.False(doc.RootElement.GetProperty("store").GetBoolean());
         var genConfig = doc.RootElement.GetProperty("generationConfig");
         Assert.Equal("MEDIA_RESOLUTION_HIGH", genConfig.GetProperty("mediaResolution").GetString());
+        Assert.True(genConfig.GetProperty("enableEnhancedCivicAnswers").GetBoolean());
         Assert.Equal(2, genConfig.GetProperty("responseModalities").GetArrayLength());
 
         var schemaElem = genConfig.GetProperty("responseSchema");

@@ -66,6 +66,13 @@ public sealed class GenerateContentRequest
     public IList<SafetySetting>? SafetySettings { get; set; }
 
     /// <summary>
+    /// Optional. Controls whether the request and response are stored by the service when conversation logging is supported.
+    /// </summary>
+    [JsonPropertyName("store")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Store { get; set; }
+
+    /// <summary>
     /// Optional. <b>Vertex AI only</b> (sending this to the Gemini Developer API <c>generativelanguage.googleapis.com</c> returns HTTP 400).
     /// User-defined key/value metadata labels for billing and filtering on Vertex AI endpoints.
     /// </summary>

@@ -83,7 +83,10 @@ internal static class ChatOptionsMapper
             Seed: null,
             ResponseLogprobs: null,
             Logprobs: null,
+            EnableEnhancedCivicAnswers: null,
             AudioTimestamp: null,
+            ResponseModalities: null,
+            MediaResolution: null,
             ExtensionData: null
         };
 

@@ -127,6 +127,13 @@ public sealed class GenerationConfig
     public int? Logprobs { get; set; }
 
     /// <summary>
+    /// Optional. Enables enhanced civic answers when supported by the model.
+    /// </summary>
+    [JsonPropertyName("enableEnhancedCivicAnswers")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? EnableEnhancedCivicAnswers { get; set; }
+
+    /// <summary>
     /// Optional. <b>Vertex AI only</b> (sending this to the Gemini Developer API <c>generativelanguage.googleapis.com</c> returns HTTP 400).
     /// Enables timestamp understanding for audio-only files on supported Vertex AI models.
     /// </summary>

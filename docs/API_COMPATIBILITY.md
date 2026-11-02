@@ -48,7 +48,7 @@ Reference: [`models.generateContent` Request Body](https://ai.google.dev/api/gen
 | `systemInstruction` | `Content` | ✅ Supported | `SystemInstruction` (`Content?`) | System prompt (`Role` omitted or `System`) |
 | `generationConfig` | `GenerationConfig` | ✅ Supported | `GenerationConfig` (`GenerationConfig?`) | Sampling, schema, modalities, and thinking parameters |
 | `cachedContent` | `string` | ✅ Supported | `CachedContent` (`string?`) | Format: `cachedContents/{id}` |
-| `store` | ` boolean` | ✅ Supported | `Store` (`bool?`) | Optional conversation storage flag |
+| `store` | `boolean` | ✅ Supported | `Store` (`bool?`) | Optional conversation storage flag |
 | `labels` | `map<string, string>` | ✅ Supported | `Labels` (`IDictionary<string, string>?`) | **Vertex AI endpoints only** (rejected with HTTP 400 on Google AI Studio) |
 | *(Any future field)* | `any` | ✅ Preserved | `ExtensionData` (`[JsonExtensionData]`) | Round-tripped without loss |
 
