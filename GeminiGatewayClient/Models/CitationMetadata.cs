@@ -15,9 +15,9 @@ public sealed class CitationMetadata
     [JsonPropertyName("citations")]
     public IList<Citation> Citations
     {
-        get => field;
-        set => field = value ?? [];
-    } = [];
+        get => field ??= [];
+        set => field = value!;
+    } = null!;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

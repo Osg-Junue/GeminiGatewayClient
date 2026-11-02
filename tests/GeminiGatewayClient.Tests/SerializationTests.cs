@@ -466,4 +466,176 @@ public class SerializationTests
         Assert.Equal("", parts[3].FunctionResponse!.Name);
         Assert.Equal("", response.Candidates[0].LogprobsResult!.ChosenCandidates![0].Token);
     }
+
+    [Fact]
+    public void Validate_RejectsMultiplePartDataFields_EmptyBlob_EmptyFileUri_AndEmptyFunctionDeclarationName()
+    {
+        var multipleDataFields = new GenerateContentRequest
+        {
+            Contents =
+            [
+                new Content
+                {
+                    Role = Role.User,
+                    Parts =
+                    [
+                        new Part
+                        {
+                            Text = "hello",
+                            InlineData = new Blob { MimeType = "image/png", Data = [1, 2, 3] }
+                        }
+                    ]
+                }
+            ]
+        };
+        Assert.Throws<ArgumentException>(() => multipleDataFields.Validate());
+
+        var emptyBlobData = new GenerateContentRequest
+        {
+            Contents =
+            [
+                new Content
+                {
+                    Role = Role.User,
+                    Parts = [new Part { InlineData = new Blob { MimeType = "image/png", Data = [] } }]
+                }
+            ]
+        };
+        Assert.Throws<ArgumentException>(() => emptyBlobData.Validate());
+
+        var emptyFileUri = new GenerateContentRequest
+        {
+            Contents =
+            [
+                new Content
+                {
+                    Role = Role.User,
+                    Parts = [new Part { FileData = new FileData { FileUri = "   " } }]
+                }
+            ]
+        };
+        Assert.Throws<ArgumentException>(() => emptyFileUri.Validate());
+
+        var nullFunctionResponsePayload = new GenerateContentRequest
+        {
+            Contents =
+            [
+                new Content
+                {
+                    Role = Role.User,
+                    Parts = [new Part { FunctionResponse = new FunctionResponse { Name = "fn", Response = null } }]
+                }
+            ]
+        };
+        Assert.Throws<ArgumentException>(() => nullFunctionResponsePayload.Validate());
+
+        var emptyFunctionDeclName = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Hi")],
+            Tools = [new Tool { FunctionDeclarations = [new FunctionDeclaration { Name = "  " }] }]
+        };
+        Assert.Throws<ArgumentException>(() => emptyFunctionDeclName.Validate());
+    }
+
+    [Fact]
+    public void GenerateContentResponse_IsBlocked_ReflectsPromptBlockReasonAndCandidateSafetyFinishReasons()
+    {
+        var normal = new GenerateContentResponse
+        {
+            Candidates = [new Candidate { FinishReason = FinishReason.Stop }]
+        };
+        Assert.False(normal.IsBlocked);
+
+        var promptBlocked = new GenerateContentResponse
+        {
+            PromptFeedback = new PromptFeedback { BlockReason = BlockReason.Safety }
+        };
+        Assert.True(promptBlocked.IsBlocked);
+
+        var candidateBlocked = new GenerateContentResponse
+        {
+            Candidates = [new Candidate { FinishReason = FinishReason.Safety }]
+        };
+        Assert.True(candidateBlocked.IsBlocked);
+    }
+
+    [Fact]
+    public void NewSpecProperties_MediaResolution_HarmSeverity_AndSchemaKeywords_RoundTripCleanly()
+    {
+        var request = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Generate")],
+            GenerationConfig = new GenerationConfig
+            {
+                ResponseModalities = ["TEXT", "AUDIO"],
+                MediaResolution = MediaResolution.High,
+                ResponseMimeType = MimeTypes.ApplicationJson,
+                ResponseSchema = new Schema
+                {
+                    Type = SchemaType.Object,
+                    Title = "Result",
+                    PropertyOrdering = ["score", "tags"],
+                    Properties = new Dictionary<string, Schema>
+                    {
+                        ["score"] = new Schema { Type = SchemaType.Number, Minimum = 0.0, Maximum = 100.0 },
+                        ["tags"] = new Schema
+                        {
+                            Type = SchemaType.Array,
+                            MinItems = 1,
+                            MaxItems = 5,
+                            Items = new Schema
+                            {
+                                AnyOf = [new Schema { Type = SchemaType.String }, new Schema { Type = SchemaType.Integer }]
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        var json = JsonSerializer.Serialize(request, GeminiJsonContext.Default.GenerateContentRequest);
+        using var doc = JsonDocument.Parse(json);
+        var genConfig = doc.RootElement.GetProperty("generationConfig");
+        Assert.Equal("MEDIA_RESOLUTION_HIGH", genConfig.GetProperty("mediaResolution").GetString());
+        Assert.Equal(2, genConfig.GetProperty("responseModalities").GetArrayLength());
+
+        var schemaElem = genConfig.GetProperty("responseSchema");
+        Assert.Equal("Result", schemaElem.GetProperty("title").GetString());
+        Assert.Equal(2, schemaElem.GetProperty("propertyOrdering").GetArrayLength());
+        Assert.Equal(100.0, schemaElem.GetProperty("properties").GetProperty("score").GetProperty("maximum").GetDouble());
+        Assert.Equal(5, schemaElem.GetProperty("properties").GetProperty("tags").GetProperty("maxItems").GetInt64());
+        Assert.Equal(2, schemaElem.GetProperty("properties").GetProperty("tags").GetProperty("items").GetProperty("anyOf").GetArrayLength());
+
+        const string safetyResponseJson = """
+            {
+              "candidates": [
+                {
+                  "index": 0,
+                  "safetyRatings": [
+                    {
+                      "category": "HARM_CATEGORY_HATE_SPEECH",
+                      "probability": "LOW",
+                      "probabilityScore": 0.125,
+                      "severity": "HARM_SEVERITY_LOW",
+                      "severityScore": 0.25
+                    },
+                    {
+                      "category": "HARM_CATEGORY_HARASSMENT",
+                      "probability": "NEGLIGIBLE",
+                      "severity": "FUTURE_SEVERITY_LEVEL"
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+
+        var response = JsonSerializer.Deserialize(safetyResponseJson, GeminiJsonContext.Default.GenerateContentResponse);
+        Assert.NotNull(response);
+        var ratings = response.Candidates[0].SafetyRatings;
+        Assert.Equal(HarmSeverity.Low, ratings[0].Severity);
+        Assert.Equal(0.125f, ratings[0].ProbabilityScore);
+        Assert.Equal(0.25f, ratings[0].SeverityScore);
+        Assert.Equal(HarmSeverity.Unknown, ratings[1].Severity);
+    }
 }

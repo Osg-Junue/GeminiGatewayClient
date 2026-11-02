@@ -163,4 +163,80 @@ public sealed class Part
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         return new Part { FunctionResponse = new FunctionResponse { Name = name, Response = response, Id = id } };
     }
+
+    internal Part Clone()
+    {
+        var clone = (Part)MemberwiseClone();
+        clone.InlineData = InlineData?.Clone();
+        clone.FileData = FileData?.Clone();
+        clone.FunctionCall = FunctionCall?.Clone();
+        clone.FunctionResponse = FunctionResponse?.Clone();
+        clone.VideoMetadata = VideoMetadata?.Clone();
+        clone.ExecutableCode = ExecutableCode?.Clone();
+        clone.CodeExecutionResult = CodeExecutionResult?.Clone();
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
+
+    internal void Validate(string pathPrefix, string paramName)
+    {
+        if (IsEmpty)
+        {
+            throw new ArgumentException($"{pathPrefix} must have at least one field set.", paramName);
+        }
+
+        var dataFieldsSet =
+            (Text is not null ? 1 : 0) +
+            (InlineData is not null ? 1 : 0) +
+            (FileData is not null ? 1 : 0) +
+            (FunctionCall is not null ? 1 : 0) +
+            (FunctionResponse is not null ? 1 : 0);
+
+        if (dataFieldsSet > 1)
+        {
+            throw new ArgumentException(
+                $"{pathPrefix} cannot set more than one primary data field (Text, InlineData, FileData, FunctionCall, FunctionResponse) on the same Part.",
+                paramName);
+        }
+
+        if (InlineData is not null)
+        {
+            if (string.IsNullOrWhiteSpace(InlineData.MimeType))
+            {
+                throw new ArgumentException($"{pathPrefix}.InlineData.MimeType cannot be null or whitespace.", paramName);
+            }
+
+            if (InlineData.Data is null || InlineData.Data.Length == 0)
+            {
+                throw new ArgumentException($"{pathPrefix}.InlineData.Data cannot be null or empty.", paramName);
+            }
+        }
+
+        if (FileData is not null && string.IsNullOrWhiteSpace(FileData.FileUri))
+        {
+            throw new ArgumentException($"{pathPrefix}.FileData.FileUri cannot be null or whitespace.", paramName);
+        }
+
+        if (FunctionCall is not null && string.IsNullOrWhiteSpace(FunctionCall.Name))
+        {
+            throw new ArgumentException($"{pathPrefix}.FunctionCall.Name cannot be null or whitespace.", paramName);
+        }
+
+        if (FunctionResponse is not null)
+        {
+            if (string.IsNullOrWhiteSpace(FunctionResponse.Name))
+            {
+                throw new ArgumentException($"{pathPrefix}.FunctionResponse.Name cannot be null or whitespace.", paramName);
+            }
+
+            if (FunctionResponse.Response is null)
+            {
+                throw new ArgumentException($"{pathPrefix}.FunctionResponse.Response cannot be null.", paramName);
+            }
+        }
+    }
 }

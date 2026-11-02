@@ -66,13 +66,31 @@ public sealed class FunctionDeclaration
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
+    internal FunctionDeclaration Clone()
+    {
+        var clone = (FunctionDeclaration)MemberwiseClone();
+        clone.Parameters = Parameters?.Clone();
+        clone.Response = Response?.Clone();
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
+
     /// <summary>
-    /// Validates mutually exclusive schema members.
+    /// Validates required and mutually exclusive schema members.
     /// </summary>
     /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
-    /// <exception cref="ArgumentException">Mutually exclusive members are both set.</exception>
+    /// <exception cref="ArgumentException">The declaration is invalid or mutually exclusive members are both set.</exception>
     internal void Validate(string paramName = "request")
     {
+        if (string.IsNullOrWhiteSpace(Name))
+        {
+            throw new ArgumentException("FunctionDeclaration.Name cannot be null or whitespace.", paramName);
+        }
+
         if (Parameters is not null && ParametersJsonSchema is not null)
         {
             throw new ArgumentException($"FunctionDeclaration '{Name}' cannot set both Parameters and ParametersJsonSchema.", paramName);

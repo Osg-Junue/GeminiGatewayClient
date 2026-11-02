@@ -21,9 +21,9 @@ public sealed class PromptFeedback
     [JsonPropertyName("safetyRatings")]
     public IList<SafetyRating> SafetyRatings
     {
-        get => field;
-        set => field = value ?? [];
-    } = [];
+        get => field ??= [];
+        set => field = value!;
+    } = null!;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

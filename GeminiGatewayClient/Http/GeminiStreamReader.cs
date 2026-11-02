@@ -34,8 +34,8 @@ internal static class GeminiStreamReader
         HttpStatusCode statusCode,
         StreamIdleWatchdog watchdog)
     {
-        var dataBuffer = new ArrayBufferWriter<byte>(1024);
-        ArrayBufferWriter<byte>? nonSseBuffer = null;
+        using var dataBuffer = new PooledByteBufferWriter(1024);
+        PooledByteBufferWriter? nonSseBuffer = null;
         var sawSseEvent = false;
         var isFirstLine = true;
         var skipLeadingLf = false;
@@ -59,7 +59,8 @@ internal static class GeminiStreamReader
                     buffered = remaining;
                     start = 0;
                 }
-                else if (buffered == buffer.Length)
+
+                if (buffered == buffer.Length)
                 {
                     if (buffer.Length >= MaxSseLineBytes)
                     {
@@ -168,6 +169,7 @@ internal static class GeminiStreamReader
         }
         finally
         {
+            nonSseBuffer?.Dispose();
             ArrayPool<byte>.Shared.Return(buffer);
         }
     }
@@ -179,8 +181,8 @@ internal static class GeminiStreamReader
         ReadOnlySpan<byte> line,
         ref bool isFirstLine,
         ref bool sawSseEvent,
-        ArrayBufferWriter<byte> dataBuffer,
-        ref ArrayBufferWriter<byte>? nonSseBuffer)
+        PooledByteBufferWriter dataBuffer,
+        ref PooledByteBufferWriter? nonSseBuffer)
     {
         if (isFirstLine)
         {
@@ -211,9 +213,10 @@ internal static class GeminiStreamReader
 
         if (!line.StartsWith("data:"u8))
         {
-            if (line.StartsWith("event:"u8) ||
-                line.StartsWith("id:"u8) ||
-                line.StartsWith("retry:"u8))
+            if (line.SequenceEqual("data"u8) ||
+                line.StartsWith("event:"u8) || line.SequenceEqual("event"u8) ||
+                line.StartsWith("id:"u8) || line.SequenceEqual("id"u8) ||
+                line.StartsWith("retry:"u8) || line.SequenceEqual("retry"u8))
             {
                 sawSseEvent = true;
                 return false;
@@ -223,7 +226,7 @@ internal static class GeminiStreamReader
             // Cap buffered non-SSE bytes at MaxNonSseBytes to prevent unbounded memory growth on unexpected responses.
             if (!sawSseEvent)
             {
-                nonSseBuffer ??= new ArrayBufferWriter<byte>(256);
+                nonSseBuffer ??= new PooledByteBufferWriter(256);
                 var remaining = MaxNonSseBytes - nonSseBuffer.WrittenCount;
                 if (remaining > 0)
                 {
@@ -280,9 +283,9 @@ internal static class GeminiStreamReader
                         root = root[0];
                     }
 
-                    if (GeminiErrorParser.TryCreateFromStreamPayload(root, statusCode) is { } arrayStreamError)
+                    if (GeminiErrorParser.TryCreateFromStreamPayload(root, statusCode, errorStreamMessage) is { } arrayStreamError)
                     {
-                        throw RewrapErrorIfNeeded(arrayStreamError, errorStreamMessage);
+                        throw arrayStreamError;
                     }
                 }
             }
@@ -294,8 +297,7 @@ internal static class GeminiStreamReader
                 extensionData.TryGetValue("error", out var errorElement) &&
                 errorElement.ValueKind == JsonValueKind.Object)
             {
-                var streamError = GeminiErrorParser.CreateFromErrorElement(errorElement, ExtractBoundedString(utf8Json), statusCode);
-                throw RewrapErrorIfNeeded(streamError, errorStreamMessage);
+                throw GeminiErrorParser.CreateFromErrorElement(errorElement, ExtractBoundedString(utf8Json), statusCode, errorStreamMessage);
             }
 
             return response;
@@ -307,37 +309,15 @@ internal static class GeminiStreamReader
         }
     }
 
-    private static GeminiApiException RewrapErrorIfNeeded(GeminiApiException streamError, string? errorStreamMessage) =>
-        errorStreamMessage is not null && !string.Equals(errorStreamMessage, "The Gemini API reported an error in the response stream", StringComparison.Ordinal)
-            ? new GeminiApiException(
-                errorStreamMessage,
-                streamError.StatusCode,
-                streamError.ErrorContent,
-                streamError.ErrorStatus,
-                streamError.ErrorMessage,
-                streamError.RetryAfter)
-            : streamError;
-
     private static bool StartsWithJsonArray(ReadOnlySpan<byte> utf8Json)
     {
-        for (var i = 0; i < utf8Json.Length; i++)
+        if (utf8Json.StartsWith("\uFEFF"u8))
         {
-            var b = utf8Json[i];
-            if (b is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
-            {
-                continue;
-            }
-
-            if (b == 0xEF && i + 2 < utf8Json.Length && utf8Json[i + 1] == 0xBB && utf8Json[i + 2] == 0xBF)
-            {
-                i += 2;
-                continue;
-            }
-
-            return b == (byte)'[';
+            utf8Json = utf8Json[3..];
         }
 
-        return false;
+        var idx = utf8Json.IndexOfAnyExcept(" \t\r\n"u8);
+        return idx >= 0 && utf8Json[idx] == (byte)'[';
     }
 
     private static GenerateContentResponse DeserializeUtf8Chunk(ReadOnlySpan<byte> utf8Json, HttpStatusCode statusCode) =>
@@ -419,10 +399,10 @@ internal static class GeminiStreamReader
         HttpStatusCode statusCode,
         StreamIdleWatchdog watchdog)
     {
-        using var recordingStream = new PrefixRecordingStream(stream, MaxNonSseBytes);
+        using var recordingStream = new PrefixRecordingStream(stream, MaxNonSseBytes, watchdog);
         var enumerator = JsonSerializer
-            .DeserializeAsyncEnumerable(recordingStream, GeminiJsonContext.Default.JsonElement, watchdog.Token)
-            .GetAsyncEnumerator(watchdog.Token);
+            .DeserializeAsyncEnumerable(recordingStream, GeminiJsonContext.Default.GenerateContentResponse, watchdog.CallerToken)
+            .GetAsyncEnumerator(watchdog.CallerToken);
         try
         {
             var yieldedAny = false;
@@ -432,20 +412,7 @@ internal static class GeminiStreamReader
                 GenerateContentResponse current;
                 try
                 {
-                    bool hasNext;
-                    watchdog.BeforeRead();
-                    var readSucceeded = false;
-                    try
-                    {
-                        hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
-                        readSucceeded = true;
-                    }
-                    finally
-                    {
-                        watchdog.AfterRead(readSucceeded);
-                    }
-
-                    if (!hasNext)
+                    if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
                     {
                         yield break;
                     }
@@ -481,15 +448,22 @@ internal static class GeminiStreamReader
         }
     }
 
-    private static GenerateContentResponse ToResponse(JsonElement element, HttpStatusCode statusCode)
+    private static GenerateContentResponse ToResponse(GenerateContentResponse? response, HttpStatusCode statusCode)
     {
-        if (GeminiErrorParser.TryCreateFromStreamPayload(element, statusCode) is { } streamError)
+        if (response is null)
         {
-            throw streamError;
+            throw new GeminiApiException("Received an empty (null) Gemini streaming chunk.", statusCode);
         }
 
-        return element.Deserialize(GeminiJsonContext.Default.GenerateContentResponse)
-               ?? throw new GeminiApiException("Received an empty (null) Gemini streaming chunk.", statusCode);
+        if (response.ExtensionData is { Count: > 0 } extensionData &&
+            extensionData.TryGetValue("error", out var errorElement) &&
+            errorElement.ValueKind == JsonValueKind.Object)
+        {
+            var raw = errorElement.GetRawText();
+            throw GeminiErrorParser.CreateFromErrorElement(errorElement, raw, statusCode);
+        }
+
+        return response;
     }
 
     /// <summary>
@@ -497,13 +471,17 @@ internal static class GeminiStreamReader
     /// or gateway HTML pages returned with HTTP 200 can be diagnosed if <see cref="JsonSerializer.DeserializeAsyncEnumerable{TValue}(Stream, System.Text.Json.Serialization.Metadata.JsonTypeInfo{TValue}, CancellationToken)"/>
     /// rejects the root token.
     /// </summary>
-    private sealed class PrefixRecordingStream(Stream inner, int maxRecordedBytes) : Stream
+    private sealed class PrefixRecordingStream(Stream inner, int maxRecordedBytes, StreamIdleWatchdog watchdog) : Stream
     {
-        private ArrayBufferWriter<byte>? _recorded = new(256);
+        private PooledByteBufferWriter? _recorded = new(256);
 
         public ReadOnlySpan<byte> WrittenSpan => _recorded is not null ? _recorded.WrittenSpan : ReadOnlySpan<byte>.Empty;
 
-        public void StopRecording() => _recorded = null;
+        public void StopRecording()
+        {
+            _recorded?.Dispose();
+            _recorded = null;
+        }
 
         public override bool CanRead => inner.CanRead;
         public override bool CanSeek => false;
@@ -513,7 +491,19 @@ internal static class GeminiStreamReader
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
-            var read = await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            int read;
+            watchdog.BeforeRead();
+            var readSucceeded = false;
+            try
+            {
+                read = await inner.ReadAsync(buffer, watchdog.Token).ConfigureAwait(false);
+                readSucceeded = true;
+            }
+            finally
+            {
+                watchdog.AfterRead(readSucceeded);
+            }
+
             if (read > 0 && _recorded is { } recorded)
             {
                 var remaining = maxRecordedBytes - recorded.WrittenCount;
@@ -529,7 +519,17 @@ internal static class GeminiStreamReader
         }
 
         public override int Read(byte[] buffer, int offset, int count) =>
-            ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+            throw new NotSupportedException("Synchronous reads are not supported by PrefixRecordingStream.");
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                StopRecording();
+            }
+
+            base.Dispose(disposing);
+        }
 
         public override void Flush() { }
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();

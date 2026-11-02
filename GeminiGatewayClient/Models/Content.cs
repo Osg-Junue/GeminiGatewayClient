@@ -23,9 +23,9 @@ public sealed class Content
     [JsonPropertyName("parts")]
     public IList<Part> Parts
     {
-        get => field;
-        set => field = value ?? [];
-    } = [];
+        get => field ??= [];
+        set => field = value!;
+    } = null!;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -63,10 +63,22 @@ public sealed class Content
         return new Content { Role = role, Parts = list };
     }
 
-    internal Content Clone() => new()
+    internal Content Clone()
     {
-        Role = Role,
-        Parts = Parts is { Count: > 0 } ? [.. Parts] : [],
-        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
-    };
+        var clonedParts = new List<Part>(Parts.Count);
+        for (var i = 0; i < Parts.Count; i++)
+        {
+            if (Parts[i] is { } part)
+            {
+                clonedParts.Add(part.Clone());
+            }
+        }
+
+        return new Content
+        {
+            Role = Role,
+            Parts = clonedParts,
+            ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
+        };
+    }
 }

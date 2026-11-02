@@ -498,6 +498,59 @@ public partial class ChatClientTests
         Assert.Equal("call-99", modelPart.GetProperty("functionCall").GetProperty("id").GetString());
     }
 
+    [Fact]
+    public async Task IChatClient_CustomGatewayModelId_MapsReasoningEffortToThinkingLevel()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        await chatClient.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Reason")],
+            new ChatOptions
+            {
+                ModelId = "tunedModels/my-enterprise-model",
+                Reasoning = new ReasoningOptions { Effort = ReasoningEffort.Medium }
+            });
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var thinkingConfig = sentDoc.RootElement.GetProperty("generationConfig").GetProperty("thinkingConfig");
+        Assert.Equal("MEDIUM", thinkingConfig.GetProperty("thinkingLevel").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_MutatedTextContentWithRawRepresentation_UsesUpdatedTextAndPreservesVideoMetadata()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var rawPart = new GeminiGatewayClient.Models.Part
+        {
+            Text = "original text",
+            ThoughtSignature = "sig-original",
+            VideoMetadata = new GeminiGatewayClient.Models.VideoMetadata
+            {
+                StartOffset = new GeminiGatewayClient.Models.VideoOffset { Seconds = 5 },
+                Fps = 2.0
+            }
+        };
+
+        var textContent = new TextContent("updated text") { RawRepresentation = rawPart };
+        await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, [textContent])]);
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var sentPart = sentDoc.RootElement.GetProperty("contents")[0].GetProperty("parts")[0];
+        Assert.Equal("updated text", sentPart.GetProperty("text").GetString());
+        Assert.Equal("sig-original", sentPart.GetProperty("thoughtSignature").GetString());
+        Assert.Equal("5s", sentPart.GetProperty("videoMetadata").GetProperty("startOffset").GetString());
+        Assert.Equal(2.0, sentPart.GetProperty("videoMetadata").GetProperty("fps").GetDouble());
+    }
+
     public sealed record WeatherReport(
         [property: JsonPropertyName("city")] string City,
         [property: JsonPropertyName("tempC")] double TempC,

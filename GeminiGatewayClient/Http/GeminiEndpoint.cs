@@ -58,7 +58,7 @@ internal sealed class GeminiEndpoint
                 nameof(endpoint));
         }
 
-        if (endpoint.AbsolutePath.Contains(':'))
+        if (HasOperationSuffix(endpoint.AbsolutePath))
         {
             throw new ArgumentException(
                 "GeminiClientOptions.Endpoint must not contain an operation such as ':generateContent'; the client appends it automatically.",
@@ -93,11 +93,19 @@ internal sealed class GeminiEndpoint
             }
         }
 
-        var resourcePath = ToResourcePath(string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim())
+        var resourcePath = ToResourcePath(string.IsNullOrWhiteSpace(model) ? DefaultModel : model)
             ?? throw new InvalidOperationException(
                 "No model was specified. Set GeminiClientOptions.Model or pass a model to the call (ChatOptions.ModelId for IChatClient).");
 
         return BuildOperationUri(_baseUri, resourcePath, operation, serverSentEvents);
+    }
+
+    private static bool HasOperationSuffix(string absolutePath)
+    {
+        var span = absolutePath.AsSpan().TrimEnd('/');
+        var lastSlash = span.LastIndexOf('/');
+        var lastSegment = lastSlash >= 0 ? span[(lastSlash + 1)..] : span;
+        return lastSegment.Contains(':');
     }
 
     private static Uri BuildOperationUri(Uri baseUri, string resourcePath, string operation, bool serverSentEvents)
@@ -107,7 +115,18 @@ internal sealed class GeminiEndpoint
         string fullQuery;
         if (serverSentEvents)
         {
-            fullQuery = query.IsEmpty ? "?alt=sse" : string.Concat("?", query, "&alt=sse");
+            if (query.IsEmpty)
+            {
+                fullQuery = "?alt=sse";
+            }
+            else if (ContainsAltSseParameter(query))
+            {
+                fullQuery = string.Concat("?", query);
+            }
+            else
+            {
+                fullQuery = string.Concat("?", query, "&alt=sse");
+            }
         }
         else
         {
@@ -115,6 +134,19 @@ internal sealed class GeminiEndpoint
         }
 
         return new Uri($"{baseUri.GetLeftPart(UriPartial.Authority)}{basePath}/{resourcePath}:{operation}{fullQuery}", UriKind.Absolute);
+    }
+
+    private static bool ContainsAltSseParameter(ReadOnlySpan<char> query)
+    {
+        foreach (var range in query.Split('&'))
+        {
+            if (query[range].Equals("alt=sse", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -129,7 +161,7 @@ internal sealed class GeminiEndpoint
             return null;
         }
 
-        var span = model.AsSpan().Trim('/');
+        var span = model.AsSpan().Trim().Trim('/');
         if (span.IsEmpty)
         {
             return null;

@@ -1,8 +1,8 @@
-using System.Buffers;
 using System.Collections;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using GeminiGatewayClient.Http;
 
 namespace GeminiGatewayClient.Chat;
 
@@ -24,7 +24,7 @@ internal static class ToolJsonConverter
             return null;
         }
 
-        var buffer = new ArrayBufferWriter<byte>();
+        using var buffer = new PooledByteBufferWriter(256);
         using (var writer = new Utf8JsonWriter(buffer))
         {
             WriteObject(writer, arguments, options);
@@ -41,7 +41,7 @@ internal static class ToolJsonConverter
     {
         if (result is JsonObject jsonObject)
         {
-            var nodeBuffer = new ArrayBufferWriter<byte>();
+            using var nodeBuffer = new PooledByteBufferWriter(256);
             using (var writer = new Utf8JsonWriter(nodeBuffer))
             {
                 jsonObject.WriteTo(writer);
@@ -57,7 +57,7 @@ internal static class ToolJsonConverter
 
             case IEnumerable<KeyValuePair<string, object?>> dictionary:
             {
-                var dictBuffer = new ArrayBufferWriter<byte>();
+                using var dictBuffer = new PooledByteBufferWriter(256);
                 using (var writer = new Utf8JsonWriter(dictBuffer))
                 {
                     WriteObject(writer, dictionary, options);
@@ -72,7 +72,7 @@ internal static class ToolJsonConverter
 
             default:
             {
-                var wrappedBuffer = new ArrayBufferWriter<byte>();
+                using var wrappedBuffer = new PooledByteBufferWriter(256);
                 using (var writer = new Utf8JsonWriter(wrappedBuffer))
                 {
                     writer.WriteStartObject();

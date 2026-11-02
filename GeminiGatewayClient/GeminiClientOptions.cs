@@ -102,7 +102,7 @@ public sealed class GeminiClientOptions
     /// </summary>
     public IDictionary<string, string> AdditionalHeaders
     {
-        get => field;
+        get;
         set => field = value ?? throw new ArgumentNullException(nameof(value));
     } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -113,7 +113,7 @@ public sealed class GeminiClientOptions
     /// </summary>
     public TimeSpan Timeout
     {
-        get => field;
+        get;
         set => field = value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.Timeout must be positive or Timeout.InfiniteTimeSpan.");
@@ -126,7 +126,7 @@ public sealed class GeminiClientOptions
     /// </summary>
     public TimeSpan? StreamIdleTimeout
     {
-        get => field;
+        get;
         set => field = value is null || value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamIdleTimeout must be positive or Timeout.InfiniteTimeSpan.");
@@ -144,7 +144,7 @@ public sealed class GeminiClientOptions
     /// </summary>
     public GeminiStreamingFormat StreamingFormat
     {
-        get => field;
+        get;
         set => field = Enum.IsDefined(value)
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamingFormat is not a defined value.");

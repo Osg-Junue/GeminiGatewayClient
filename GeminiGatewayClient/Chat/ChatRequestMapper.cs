@@ -109,20 +109,24 @@ internal static class ChatRequestMapper
 
     private static void AppendPart(List<Part> parts, AIContent item, FunctionCallRegistry calls, JsonSerializerOptions toolSerializerOptions)
     {
-        // Content produced by GeminiChatClient carries the exact wire part; replay it verbatim (keeps ids and signatures).
-        if (item.RawRepresentation is Part rawPart)
+        // Content produced by GeminiChatClient carries the exact wire part; replay it verbatim (keeps ids and signatures)
+        // unless the caller mutated the high-level AIContent payload after creation.
+        var rawPart = item.RawRepresentation as Part;
+        if (rawPart is not null && IsUnmodifiedRawPart(item, rawPart))
         {
             parts.Add(rawPart);
             return;
         }
 
-        var signature = GetStringProperty(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature);
+        var signature = GetStringProperty(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature)
+            ?? rawPart?.ThoughtSignature;
 
         switch (item)
         {
             case TextContent text when !string.IsNullOrEmpty(text.Text):
                 var textPart = Part.FromText(text.Text);
                 textPart.ThoughtSignature = signature;
+                textPart.VideoMetadata = rawPart?.VideoMetadata?.Clone();
                 parts.Add(textPart);
                 break;
 
@@ -138,12 +142,14 @@ internal static class ChatRequestMapper
                     ? Part.FromBytes(segment.Array, data.MediaType)
                     : Part.FromBytes(data.Data.Span, data.MediaType);
                 dataPart.ThoughtSignature = signature;
+                dataPart.VideoMetadata = rawPart?.VideoMetadata?.Clone();
                 parts.Add(dataPart);
                 break;
 
             case UriContent uri:
                 var uriPart = Part.FromUri(uri.Uri.ToString(), string.IsNullOrWhiteSpace(uri.MediaType) ? null : uri.MediaType);
                 uriPart.ThoughtSignature = signature;
+                uriPart.VideoMetadata = rawPart?.VideoMetadata?.Clone();
                 parts.Add(uriPart);
                 break;
 
@@ -182,6 +188,21 @@ internal static class ChatRequestMapper
                 break;
         }
     }
+
+    private static bool IsUnmodifiedRawPart(AIContent item, Part rawPart) => item switch
+    {
+        TextContent text => string.Equals(rawPart.Text, text.Text, StringComparison.Ordinal),
+        TextReasoningContent reasoning =>
+            string.Equals(rawPart.Text ?? string.Empty, reasoning.Text, StringComparison.Ordinal) &&
+            string.Equals(rawPart.ThoughtSignature, reasoning.ProtectedData, StringComparison.Ordinal),
+        UriContent uri =>
+            rawPart.FileData is not null &&
+            string.Equals(rawPart.FileData.FileUri, uri.Uri.ToString(), StringComparison.Ordinal),
+        FunctionCallContent call =>
+            rawPart.FunctionCall is not null &&
+            string.Equals(rawPart.FunctionCall.Name, call.Name, StringComparison.Ordinal),
+        _ => true
+    };
 
     private static Part? TryCreateCodeExecutionPart(AdditionalPropertiesDictionary? properties, string? signature)
     {

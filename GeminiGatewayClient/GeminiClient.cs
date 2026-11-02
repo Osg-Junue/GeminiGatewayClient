@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
@@ -96,37 +95,28 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                 var initialCapacity = httpResponse.Content.Headers.ContentLength is > 0 and <= MaxPreallocatedBufferBytes and var contentLength
                     ? (int)contentLength
                     : 1024;
-                var buffer = new ArrayBufferWriter<byte>(initialCapacity);
-                var rented = ArrayPool<byte>.Shared.Rent(4096);
-                try
+                using var buffer = new PooledByteBufferWriter(initialCapacity);
+                while (true)
                 {
-                    while (true)
+                    int read;
+                    watchdog.BeforeRead();
+                    var readSucceeded = false;
+                    try
                     {
-                        int read;
-                        watchdog.BeforeRead();
-                        var readSucceeded = false;
-                        try
-                        {
-                            read = await stream.ReadAsync(rented.AsMemory(), watchdog.Token).ConfigureAwait(false);
-                            readSucceeded = true;
-                        }
-                        finally
-                        {
-                            watchdog.AfterRead(readSucceeded);
-                        }
-
-                        if (read == 0)
-                        {
-                            break;
-                        }
-
-                        rented.AsSpan(0, read).CopyTo(buffer.GetSpan(read));
-                        buffer.Advance(read);
+                        read = await stream.ReadAsync(buffer.GetMemory(4096), watchdog.Token).ConfigureAwait(false);
+                        readSucceeded = true;
                     }
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(rented);
+                    finally
+                    {
+                        watchdog.AfterRead(readSucceeded);
+                    }
+
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    buffer.Advance(read);
                 }
 
                 return GeminiStreamReader.DeserializeUtf8Response(

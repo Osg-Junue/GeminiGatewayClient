@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using GeminiGatewayClient.Serialization;
 
 namespace GeminiGatewayClient.Models;
 
@@ -134,6 +135,20 @@ public sealed class GenerationConfig
     public bool? AudioTimestamp { get; set; }
 
     /// <summary>
+    /// Optional. Requested modalities of the response (for example <c>"TEXT"</c>, <c>"IMAGE"</c>, <c>"AUDIO"</c>).
+    /// </summary>
+    [JsonPropertyName("responseModalities")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IList<string>? ResponseModalities { get; set; }
+
+    /// <summary>
+    /// Optional. Media resolution used to process input images, videos, and PDF documents.
+    /// </summary>
+    [JsonPropertyName("mediaResolution")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MediaResolution? MediaResolution { get; set; }
+
+    /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
     /// </summary>
     [JsonExtensionData]
@@ -146,9 +161,15 @@ public sealed class GenerationConfig
     {
         var clone = (GenerationConfig)MemberwiseClone();
         clone.ThinkingConfig = ThinkingConfig?.Clone();
+        clone.ResponseSchema = ResponseSchema?.Clone();
         if (StopSequences is not null)
         {
             clone.StopSequences = [.. StopSequences];
+        }
+
+        if (ResponseModalities is not null)
+        {
+            clone.ResponseModalities = [.. ResponseModalities];
         }
 
         if (ExtensionData is not null)
@@ -160,10 +181,10 @@ public sealed class GenerationConfig
     }
 
     /// <summary>
-    /// Validates mutually exclusive settings.
+    /// Validates mutually exclusive settings and enum values.
     /// </summary>
     /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
-    /// <exception cref="ArgumentException">Mutually exclusive members are both set.</exception>
+    /// <exception cref="ArgumentException">Mutually exclusive members are both set or an enum is <c>Unknown</c>.</exception>
     internal void Validate(string paramName = "request")
     {
         if (ResponseSchema is not null && ResponseJsonSchema is not null)
@@ -173,6 +194,47 @@ public sealed class GenerationConfig
                 paramName);
         }
 
+        if (MediaResolution == Models.MediaResolution.Unknown)
+        {
+            throw new ArgumentException("GenerationConfig.MediaResolution cannot be MediaResolution.Unknown.", paramName);
+        }
+
         ThinkingConfig?.Validate(paramName);
     }
+}
+
+/// <summary>
+/// Media resolution used to process input media in a <see cref="GenerationConfig"/>.
+/// </summary>
+[JsonConverter(typeof(LenientStringEnumConverter<MediaResolution>))]
+public enum MediaResolution
+{
+    /// <summary>
+    /// Media resolution is unspecified.
+    /// </summary>
+    [JsonStringEnumMemberName("MEDIA_RESOLUTION_UNSPECIFIED")]
+    Unspecified,
+
+    /// <summary>
+    /// Low media resolution (64 tokens per image/frame).
+    /// </summary>
+    [JsonStringEnumMemberName("MEDIA_RESOLUTION_LOW")]
+    Low,
+
+    /// <summary>
+    /// Medium media resolution (256 tokens per image/frame).
+    /// </summary>
+    [JsonStringEnumMemberName("MEDIA_RESOLUTION_MEDIUM")]
+    Medium,
+
+    /// <summary>
+    /// High media resolution (zoomed reframing with 256 tokens).
+    /// </summary>
+    [JsonStringEnumMemberName("MEDIA_RESOLUTION_HIGH")]
+    High,
+
+    /// <summary>
+    /// Fallback value used when the server returns a media resolution not yet defined in this version of the library.
+    /// </summary>
+    Unknown
 }

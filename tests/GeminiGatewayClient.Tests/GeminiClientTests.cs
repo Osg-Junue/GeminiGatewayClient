@@ -833,6 +833,171 @@ public class GeminiClientTests
         Assert.Throws<ObjectDisposedException>(() => { _ = client.StreamGenerateContentAsync("Hi"); });
     }
 
+    [Fact]
+    public async Task Stream_JsonArrayFormat_SlowReadNearIdleTimeout_ContinuesToYieldRemainingChunksWithoutDisposedTokenFailure()
+    {
+        const string chunk1 = "[{\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"First \"}]}}]},";
+        const string chunk2 = "{\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Second\"}]}," +
+                              "\"finishReason\":\"STOP\"}]}]";
+
+        using var handler = new RecordingHandler((_, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new DelayedMultiChunkStreamContent(
+                    [Encoding.UTF8.GetBytes(chunk1), Encoding.UTF8.GetBytes(chunk2)],
+                    delayPerRead: TimeSpan.FromMilliseconds(45))
+            };
+            return Task.FromResult(response);
+        });
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key",
+            StreamingFormat = GeminiStreamingFormat.JsonArray,
+            // Idle timeout shorter than delayPerRead, but our test stream returns bytes without observing the inner token
+            // so the watchdog timer fires right before AfterRead(succeeded: true) and rotates the internal CTS.
+            StreamIdleTimeout = TimeSpan.FromMilliseconds(15)
+        }, httpClient);
+
+        var received = new List<string?>();
+        await foreach (var chunk in client.StreamGenerateContentAsync("Hi"))
+        {
+            received.Add(chunk.Text);
+        }
+
+        Assert.Equal(["First ", "Second"], received);
+    }
+
+    [Fact]
+    public async Task Stream_SseFormat_BareDataFieldWithoutColon_AppendsBlankLinePerWhatwgSpec()
+    {
+        const string sse = "data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Ok\"}]}}]}\n" +
+                           "data\n\n";
+        using var handler = new RecordingHandler(sse, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var chunks = new List<string?>();
+        await foreach (var chunk in client.StreamGenerateContentAsync("Hi"))
+        {
+            chunks.Add(chunk.Text);
+        }
+
+        Assert.Equal(["Ok"], chunks);
+    }
+
+    [Fact]
+    public async Task ErrorResponse_PopulatesErrorCodeProperty()
+    {
+        const string errorJson = """
+            {
+              "error": {
+                "code": 429,
+                "message": "Resource has been exhausted",
+                "status": "RESOURCE_EXHAUSTED"
+              }
+            }
+            """;
+
+        using var handler = new RecordingHandler(errorJson, HttpStatusCode.TooManyRequests);
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("Hi"));
+        Assert.Equal(429, ex.ErrorCode);
+        Assert.Equal("RESOURCE_EXHAUSTED", ex.ErrorStatus);
+        Assert.True(ex.IsTransient);
+    }
+
+    [Fact]
+    public async Task Endpoint_ProxyWithColonInIntermediatePathSegment_IsAllowed_AndDoesNotDuplicateAltSse()
+    {
+        const string ssePayload = "data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]}}]}\n\n";
+        using var handler = new RecordingHandler(ssePayload, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Endpoint = new Uri("https://gateway.internal/env:prod/v1beta?alt=sse"),
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
+        {
+        }
+
+        Assert.Equal(
+            "https://gateway.internal/env:prod/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+            handler.LastRequest?.RequestUri?.ToString());
+    }
+
+    private sealed class DelayedMultiChunkStreamContent(byte[][] chunks, TimeSpan delayPerRead) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            throw new NotSupportedException();
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = -1;
+            return false;
+        }
+
+        protected override Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<Stream>(new DelayedMultiChunkStream(chunks, delayPerRead));
+    }
+
+    private sealed class DelayedMultiChunkStream(byte[][] chunks, TimeSpan delayPerRead) : Stream
+    {
+        private int _chunkIndex;
+        private int _offset;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            while (_chunkIndex < chunks.Length && _offset >= chunks[_chunkIndex].Length)
+            {
+                _chunkIndex++;
+                _offset = 0;
+            }
+
+            if (_chunkIndex >= chunks.Length)
+            {
+                return 0;
+            }
+
+            // Intentionally do not pass cancellationToken to Delay so we simulate bytes arriving in the race window
+            // right after the watchdog timer fires.
+            await Task.Delay(delayPerRead, CancellationToken.None);
+
+            var current = chunks[_chunkIndex];
+            var count = Math.Min(buffer.Length, current.Length - _offset);
+            current.AsMemory(_offset, count).CopyTo(buffer);
+            _offset += count;
+            return count;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private sealed class ByteByByteStreamContent(byte[] bytes) : HttpContent
     {
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>

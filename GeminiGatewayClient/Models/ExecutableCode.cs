@@ -28,6 +28,17 @@ public sealed class ExecutableCode
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal ExecutableCode Clone()
+    {
+        var clone = (ExecutableCode)MemberwiseClone();
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
 }
 
 /// <summary>
@@ -54,6 +65,17 @@ public sealed class CodeExecutionResult
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal CodeExecutionResult Clone()
+    {
+        var clone = (CodeExecutionResult)MemberwiseClone();
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
 }
 
 /// <summary>

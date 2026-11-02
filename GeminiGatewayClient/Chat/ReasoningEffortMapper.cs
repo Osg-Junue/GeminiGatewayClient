@@ -45,6 +45,22 @@ internal static class ReasoningEffortMapper
                 ReasoningEffort.High or ReasoningEffort.ExtraHigh => 24576,
                 _ => null
             };
+            return;
+        }
+
+        if (!model.IsEmpty &&
+            !model.StartsWith("gemini-1", StringComparison.OrdinalIgnoreCase) &&
+            !model.StartsWith("gemini-2.0", StringComparison.OrdinalIgnoreCase))
+        {
+            // Custom gateway or tuned model aliases default to Gemini 3+ thinkingLevel semantics.
+            thinking.ThinkingLevel = effort switch
+            {
+                ReasoningEffort.None => isPro ? ThinkingLevel.Low : ThinkingLevel.Minimal,
+                ReasoningEffort.Low => ThinkingLevel.Low,
+                ReasoningEffort.Medium => ThinkingLevel.Medium,
+                ReasoningEffort.High or ReasoningEffort.ExtraHigh => ThinkingLevel.High,
+                _ => null
+            };
         }
     }
 

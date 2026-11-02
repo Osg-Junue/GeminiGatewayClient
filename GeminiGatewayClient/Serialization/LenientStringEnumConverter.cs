@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.Frozen;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -18,17 +19,22 @@ public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(Dynam
 {
     private static readonly FrozenDictionary<TEnum, JsonEncodedText> s_toWire;
     private static readonly FrozenDictionary<string, TEnum> s_fromWire;
+    private static readonly FrozenDictionary<int, TEnum> s_fromNumeric;
     private static readonly TEnum s_unknownValue;
 
     static LenientStringEnumConverter()
     {
         var toWire = new Dictionary<TEnum, JsonEncodedText>();
         var fromWire = new Dictionary<string, TEnum>(StringComparer.OrdinalIgnoreCase);
+        var fromNumeric = new Dictionary<int, TEnum>();
         TEnum unknown = default;
 
         foreach (var field in typeof(TEnum).GetFields(BindingFlags.Public | BindingFlags.Static))
         {
             var value = (TEnum)field.GetValue(null)!;
+            var numericValue = Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            fromNumeric.TryAdd(numericValue, value);
+
             var name = field.Name;
             var wireAttr = field.GetCustomAttribute<JsonStringEnumMemberNameAttribute>();
             var wire = wireAttr?.Name ?? name;
@@ -50,6 +56,7 @@ public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(Dynam
 
         s_toWire = toWire.ToFrozenDictionary();
         s_fromWire = fromWire.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+        s_fromNumeric = fromNumeric.ToFrozenDictionary();
         s_unknownValue = unknown;
     }
 
@@ -84,8 +91,7 @@ public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(Dynam
 
         if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var numeric))
         {
-            var candidate = (TEnum)Enum.ToObject(typeof(TEnum), numeric);
-            return s_toWire.ContainsKey(candidate) ? candidate : s_unknownValue;
+            return s_fromNumeric.TryGetValue(numeric, out var candidate) ? candidate : s_unknownValue;
         }
 
         reader.Skip();

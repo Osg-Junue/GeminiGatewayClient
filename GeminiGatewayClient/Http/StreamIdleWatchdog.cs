@@ -31,6 +31,11 @@ internal sealed class StreamIdleWatchdog : IDisposable
     public CancellationToken Token => _cts?.Token ?? _callerToken;
 
     /// <summary>
+    /// The caller's original cancellation token (never cancelled by the idle timer).
+    /// </summary>
+    public CancellationToken CallerToken => _callerToken;
+
+    /// <summary>
     /// The configured idle timeout, or <c>null</c> when disabled.
     /// </summary>
     public TimeSpan? IdleTimeout => _cts is null ? null : _idleTimeout;

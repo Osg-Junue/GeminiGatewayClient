@@ -38,4 +38,15 @@ public sealed class FunctionResponse
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal FunctionResponse Clone()
+    {
+        var clone = (FunctionResponse)MemberwiseClone();
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
 }

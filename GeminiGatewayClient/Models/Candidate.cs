@@ -39,9 +39,9 @@ public sealed class Candidate
     [JsonPropertyName("safetyRatings")]
     public IList<SafetyRating> SafetyRatings
     {
-        get => field;
-        set => field = value ?? [];
-    } = [];
+        get => field ??= [];
+        set => field = value!;
+    } = null!;
 
     /// <summary>
     /// Number of tokens in this candidate response.

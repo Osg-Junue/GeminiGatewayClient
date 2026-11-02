@@ -36,6 +36,19 @@ public sealed class VideoMetadata
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal VideoMetadata Clone()
+    {
+        var clone = (VideoMetadata)MemberwiseClone();
+        clone.StartOffset = StartOffset?.Clone();
+        clone.EndOffset = EndOffset?.Clone();
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
 }
 
 /// <summary>
@@ -58,6 +71,8 @@ public sealed class VideoOffset
     [JsonPropertyName("nanos")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Nanos { get; set; }
+
+    internal VideoOffset Clone() => (VideoOffset)MemberwiseClone();
 
     /// <summary>
     /// Creates a <see cref="VideoOffset"/> from a <see cref="TimeSpan"/>.

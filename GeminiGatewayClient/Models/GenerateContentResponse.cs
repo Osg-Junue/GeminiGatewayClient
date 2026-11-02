@@ -17,9 +17,9 @@ public sealed class GenerateContentResponse
     [JsonPropertyName("candidates")]
     public IList<Candidate> Candidates
     {
-        get => field;
-        set => field = value ?? [];
-    } = [];
+        get => field ??= [];
+        set => field = value!;
+    } = null!;
 
     /// <summary>
     /// Optional. Content-filtering metadata and block reason for the input prompt.
@@ -145,4 +145,19 @@ public sealed class GenerateContentResponse
     /// </summary>
     [JsonIgnore]
     public BlockReason? BlockReason => PromptFeedback?.BlockReason;
+
+    /// <summary>
+    /// <c>true</c> when the prompt or the first candidate response was blocked by safety, recitation, or content filters.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsBlocked =>
+        BlockReason is not null and not Models.BlockReason.Unspecified ||
+        FinishReason is Models.FinishReason.Safety
+            or Models.FinishReason.Recitation
+            or Models.FinishReason.BlockList
+            or Models.FinishReason.ProhibitedContent
+            or Models.FinishReason.Spii
+            or Models.FinishReason.ImageSafety
+            or Models.FinishReason.ImageProhibitedContent
+            or Models.FinishReason.ImageRecitation;
 }

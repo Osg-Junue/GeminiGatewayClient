@@ -15,9 +15,9 @@ public sealed class LogprobsResult
     [JsonPropertyName("topCandidates")]
     public IList<TokenCandidates> TopCandidates
     {
-        get => field;
-        set => field = value ?? [];
-    } = [];
+        get => field ??= [];
+        set => field = value!;
+    } = null!;
 
     /// <summary>
     /// Tokens actually chosen by the model and their log probabilities at each decoding step.
@@ -25,9 +25,9 @@ public sealed class LogprobsResult
     [JsonPropertyName("chosenCandidates")]
     public IList<TokenLogProbability> ChosenCandidates
     {
-        get => field;
-        set => field = value ?? [];
-    } = [];
+        get => field ??= [];
+        set => field = value!;
+    } = null!;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

@@ -24,9 +24,9 @@ public sealed class GenerateContentRequest
     [JsonPropertyName("contents")]
     public IList<Content> Contents
     {
-        get;
-        set => field = value ?? [];
-    } = [];
+        get => field ??= [];
+        set => field = value!;
+    } = null!;
 
     /// <summary>
     /// Optional. Developer-provided system instructions for the model. Only <see cref="Content.Parts"/> is used;
@@ -112,12 +112,30 @@ public sealed class GenerateContentRequest
         clone.ToolConfig = ToolConfig?.Clone();
         if (Tools is not null)
         {
-            clone.Tools = [.. Tools];
+            var clonedTools = new List<Tool>(Tools.Count);
+            for (var i = 0; i < Tools.Count; i++)
+            {
+                if (Tools[i] is { } tool)
+                {
+                    clonedTools.Add(tool.Clone());
+                }
+            }
+
+            clone.Tools = clonedTools;
         }
 
         if (SafetySettings is not null)
         {
-            clone.SafetySettings = [.. SafetySettings];
+            var clonedSettings = new List<SafetySetting>(SafetySettings.Count);
+            for (var i = 0; i < SafetySettings.Count; i++)
+            {
+                if (SafetySettings[i] is { } setting)
+                {
+                    clonedSettings.Add(setting.Clone());
+                }
+            }
+
+            clone.SafetySettings = clonedSettings;
         }
 
         if (Labels is not null)
@@ -242,10 +260,7 @@ public sealed class GenerateContentRequest
                 throw new ArgumentException($"{pathPrefix}.Parts[{j}] cannot be null.", paramName);
             }
 
-            if (part.IsEmpty)
-            {
-                throw new ArgumentException($"{pathPrefix}.Parts[{j}] must have at least one field set.", paramName);
-            }
+            part.Validate($"{pathPrefix}.Parts[{j}]", paramName);
         }
     }
 }

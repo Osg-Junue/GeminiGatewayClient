@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Frozen;
 using System.Globalization;
 using System.Net;
 using System.Text;
@@ -12,6 +13,28 @@ namespace GeminiGatewayClient.Http;
 /// </summary>
 internal static class GeminiErrorParser
 {
+    private const string DefaultStreamErrorMessage = "The Gemini API reported an error in the response stream";
+
+    private static readonly FrozenDictionary<string, HttpStatusCode> s_rpcStatusToHttp = new Dictionary<string, HttpStatusCode>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["RESOURCE_EXHAUSTED"] = HttpStatusCode.TooManyRequests,
+        ["UNAVAILABLE"] = HttpStatusCode.ServiceUnavailable,
+        ["DEADLINE_EXCEEDED"] = HttpStatusCode.GatewayTimeout,
+        ["INTERNAL"] = HttpStatusCode.InternalServerError,
+        ["UNKNOWN"] = HttpStatusCode.InternalServerError,
+        ["DATA_LOSS"] = HttpStatusCode.InternalServerError,
+        ["INVALID_ARGUMENT"] = HttpStatusCode.BadRequest,
+        ["FAILED_PRECONDITION"] = HttpStatusCode.BadRequest,
+        ["OUT_OF_RANGE"] = HttpStatusCode.BadRequest,
+        ["NOT_FOUND"] = HttpStatusCode.NotFound,
+        ["ALREADY_EXISTS"] = HttpStatusCode.Conflict,
+        ["ABORTED"] = HttpStatusCode.Conflict,
+        ["PERMISSION_DENIED"] = HttpStatusCode.Forbidden,
+        ["UNAUTHENTICATED"] = HttpStatusCode.Unauthorized,
+        ["UNIMPLEMENTED"] = HttpStatusCode.NotImplemented,
+        ["CANCELLED"] = (HttpStatusCode)499
+    }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Maximum number of characters of an error body retained in <see cref="GeminiApiException.ErrorContent"/>.
     /// </summary>
@@ -32,14 +55,18 @@ internal static class GeminiErrorParser
             body,
             details.Status,
             details.Message,
-            retryAfter);
+            retryAfter,
+            errorCode: details.Code);
     }
 
     /// <summary>
     /// Returns an exception when <paramref name="payload"/> is an in-stream error object (sent after the HTTP 200 status line),
     /// or <c>null</c> when it is a regular chunk.
     /// </summary>
-    public static GeminiApiException? TryCreateFromStreamPayload(JsonElement payload, HttpStatusCode httpStatusCode)
+    public static GeminiApiException? TryCreateFromStreamPayload(
+        JsonElement payload,
+        HttpStatusCode httpStatusCode,
+        string? summaryMessage = null)
     {
         if (payload.ValueKind != JsonValueKind.Object ||
             !payload.TryGetProperty("error", out var error) ||
@@ -54,24 +81,29 @@ internal static class GeminiErrorParser
             raw = raw[..MaxErrorBodyChars];
         }
 
-        return CreateFromErrorElement(error, raw, httpStatusCode);
+        return CreateFromErrorElement(error, raw, httpStatusCode, summaryMessage);
     }
 
     /// <summary>
     /// Builds an in-stream <see cref="GeminiApiException"/> from an already-extracted <c>"error"</c> JSON object and raw payload text.
     /// </summary>
-    internal static GeminiApiException CreateFromErrorElement(JsonElement error, string? rawBody, HttpStatusCode httpStatusCode)
+    internal static GeminiApiException CreateFromErrorElement(
+        JsonElement error,
+        string? rawBody,
+        HttpStatusCode httpStatusCode,
+        string? summaryMessage = null)
     {
         var details = ParseErrorObject(error);
         var statusCode = MapStatusCode(details.Code, details.Status, httpStatusCode);
 
         return new GeminiApiException(
-            "The Gemini API reported an error in the response stream",
+            summaryMessage ?? DefaultStreamErrorMessage,
             statusCode,
             rawBody,
             details.Status,
             details.Message,
-            details.RetryDelay);
+            details.RetryDelay,
+            errorCode: details.Code);
     }
 
     private static HttpStatusCode MapStatusCode(int? code, string? rpcStatus, HttpStatusCode fallback)
@@ -113,67 +145,9 @@ internal static class GeminiErrorParser
                 return HttpStatusCode.Unauthorized;
         }
 
-        if (!string.IsNullOrEmpty(rpcStatus))
+        if (!string.IsNullOrEmpty(rpcStatus) && s_rpcStatusToHttp.TryGetValue(rpcStatus, out var mappedStatus))
         {
-            if (rpcStatus.Equals("RESOURCE_EXHAUSTED", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.TooManyRequests;
-            }
-
-            if (rpcStatus.Equals("UNAVAILABLE", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.ServiceUnavailable;
-            }
-
-            if (rpcStatus.Equals("DEADLINE_EXCEEDED", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.GatewayTimeout;
-            }
-
-            if (rpcStatus.Equals("INTERNAL", StringComparison.OrdinalIgnoreCase) ||
-                rpcStatus.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase) ||
-                rpcStatus.Equals("DATA_LOSS", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.InternalServerError;
-            }
-
-            if (rpcStatus.Equals("INVALID_ARGUMENT", StringComparison.OrdinalIgnoreCase) ||
-                rpcStatus.Equals("FAILED_PRECONDITION", StringComparison.OrdinalIgnoreCase) ||
-                rpcStatus.Equals("OUT_OF_RANGE", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.BadRequest;
-            }
-
-            if (rpcStatus.Equals("NOT_FOUND", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.NotFound;
-            }
-
-            if (rpcStatus.Equals("ALREADY_EXISTS", StringComparison.OrdinalIgnoreCase) ||
-                rpcStatus.Equals("ABORTED", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.Conflict;
-            }
-
-            if (rpcStatus.Equals("PERMISSION_DENIED", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.Forbidden;
-            }
-
-            if (rpcStatus.Equals("UNAUTHENTICATED", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.Unauthorized;
-            }
-
-            if (rpcStatus.Equals("UNIMPLEMENTED", StringComparison.OrdinalIgnoreCase))
-            {
-                return HttpStatusCode.NotImplemented;
-            }
-
-            if (rpcStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase))
-            {
-                return (HttpStatusCode)499;
-            }
+            return mappedStatus;
         }
 
         // An in-stream error arrived on an HTTP 2xx connection; never report a 2xx status code on GeminiApiException.

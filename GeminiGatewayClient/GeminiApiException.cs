@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Net;
 
 namespace GeminiGatewayClient;
@@ -8,6 +9,14 @@ namespace GeminiGatewayClient;
 /// </summary>
 public sealed class GeminiApiException : Exception
 {
+    private static readonly FrozenSet<string> s_transientRpcStatuses = new[]
+    {
+        "RESOURCE_EXHAUSTED",
+        "UNAVAILABLE",
+        "DEADLINE_EXCEEDED",
+        "INTERNAL"
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Initializes a new instance of <see cref="GeminiApiException"/>.
     /// </summary>
@@ -34,6 +43,7 @@ public sealed class GeminiApiException : Exception
     /// <param name="errorMessage">Parsed <c>error.message</c> from the JSON error payload, if present.</param>
     /// <param name="retryAfter">Suggested retry delay parsed from <c>RetryInfo.retryDelay</c> or the HTTP <c>Retry-After</c> header, if present.</param>
     /// <param name="innerException">Underlying exception, if any.</param>
+    /// <param name="errorCode">Numeric <c>error.code</c> from the Google RPC error payload, if present.</param>
     public GeminiApiException(
         string message,
         HttpStatusCode statusCode,
@@ -41,11 +51,13 @@ public sealed class GeminiApiException : Exception
         string? errorStatus,
         string? errorMessage,
         TimeSpan? retryAfter,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        int? errorCode = null)
         : base(FormatExceptionMessage(message, statusCode, errorStatus, errorMessage), innerException)
     {
         StatusCode = statusCode;
         ErrorContent = errorContent;
+        ErrorCode = errorCode;
         ErrorStatus = errorStatus;
         ErrorMessage = errorMessage;
         RetryAfter = retryAfter;
@@ -60,6 +72,11 @@ public sealed class GeminiApiException : Exception
     /// Raw error response body returned by the server (up to 64 KB), if available.
     /// </summary>
     public string? ErrorContent { get; }
+
+    /// <summary>
+    /// Numeric error code from <c>error.code</c> in the JSON error response (HTTP status code or gRPC canonical code), if available.
+    /// </summary>
+    public int? ErrorCode { get; }
 
     /// <summary>
     /// Canonical Google RPC status code from <c>error.status</c> (for example <c>RESOURCE_EXHAUSTED</c> or <c>INVALID_ARGUMENT</c>), if available.
@@ -91,11 +108,7 @@ public sealed class GeminiApiException : Exception
         || IsTransientRpcStatus(ErrorStatus);
 
     private static bool IsTransientRpcStatus(string? status) =>
-        status is not null &&
-        (status.Equals("RESOURCE_EXHAUSTED", StringComparison.OrdinalIgnoreCase) ||
-         status.Equals("UNAVAILABLE", StringComparison.OrdinalIgnoreCase) ||
-         status.Equals("DEADLINE_EXCEEDED", StringComparison.OrdinalIgnoreCase) ||
-         status.Equals("INTERNAL", StringComparison.OrdinalIgnoreCase));
+        status is not null && s_transientRpcStatuses.Contains(status);
 
     private static string FormatExceptionMessage(
         string message,

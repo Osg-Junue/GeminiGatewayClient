@@ -34,4 +34,15 @@ public sealed class Blob
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal Blob Clone()
+    {
+        var clone = (Blob)MemberwiseClone();
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
 }

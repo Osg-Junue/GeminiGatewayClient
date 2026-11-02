@@ -42,6 +42,34 @@ public sealed class Tool
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal Tool Clone()
+    {
+        var clone = (Tool)MemberwiseClone();
+        if (FunctionDeclarations is not null)
+        {
+            var clonedDeclarations = new List<FunctionDeclaration>(FunctionDeclarations.Count);
+            for (var i = 0; i < FunctionDeclarations.Count; i++)
+            {
+                if (FunctionDeclarations[i] is { } decl)
+                {
+                    clonedDeclarations.Add(decl.Clone());
+                }
+            }
+
+            clone.FunctionDeclarations = clonedDeclarations;
+        }
+
+        clone.GoogleSearch = GoogleSearch?.Clone();
+        clone.CodeExecution = CodeExecution?.Clone();
+        clone.UrlContext = UrlContext?.Clone();
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
 }
 
 /// <summary>
@@ -54,6 +82,11 @@ public sealed class GoogleSearchTool
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal GoogleSearchTool Clone() => new()
+    {
+        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
+    };
 }
 
 /// <summary>
@@ -66,6 +99,11 @@ public sealed class CodeExecutionTool
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal CodeExecutionTool Clone() => new()
+    {
+        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
+    };
 }
 
 /// <summary>
@@ -78,4 +116,9 @@ public sealed class UrlContextTool
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal UrlContextTool Clone() => new()
+    {
+        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
+    };
 }

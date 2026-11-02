@@ -14,9 +14,9 @@ public sealed class TokenCandidates
     [JsonPropertyName("candidates")]
     public IList<TokenLogProbability> Candidates
     {
-        get => field;
-        set => field = value ?? [];
-    } = [];
+        get => field ??= [];
+        set => field = value!;
+    } = null!;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
