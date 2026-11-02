@@ -54,13 +54,21 @@ internal static class GeminiErrorParser
             raw = raw[..MaxErrorBodyChars];
         }
 
+        return CreateFromErrorElement(error, raw, httpStatusCode);
+    }
+
+    /// <summary>
+    /// Builds an in-stream <see cref="GeminiApiException"/> from an already-extracted <c>"error"</c> JSON object and raw payload text.
+    /// </summary>
+    internal static GeminiApiException CreateFromErrorElement(JsonElement error, string? rawBody, HttpStatusCode httpStatusCode)
+    {
         var details = ParseErrorObject(error);
         var statusCode = MapStatusCode(details.Code, details.Status, httpStatusCode);
 
         return new GeminiApiException(
             "The Gemini API reported an error in the response stream",
             statusCode,
-            raw,
+            rawBody,
             details.Status,
             details.Message,
             details.RetryDelay);
@@ -76,6 +84,12 @@ internal static class GeminiErrorParser
         // Map canonical gRPC status codes (1..16) when returned in-stream instead of an HTTP status code.
         switch (code)
         {
+            case 1:
+                return (HttpStatusCode)499;
+            case 2:
+            case 13:
+            case 15:
+                return HttpStatusCode.InternalServerError;
             case 3:
             case 9:
             case 11:
@@ -93,8 +107,6 @@ internal static class GeminiErrorParser
                 return HttpStatusCode.TooManyRequests;
             case 12:
                 return HttpStatusCode.NotImplemented;
-            case 13:
-                return HttpStatusCode.InternalServerError;
             case 14:
                 return HttpStatusCode.ServiceUnavailable;
             case 16:
@@ -118,13 +130,54 @@ internal static class GeminiErrorParser
                 return HttpStatusCode.GatewayTimeout;
             }
 
-            if (rpcStatus.Equals("INTERNAL", StringComparison.OrdinalIgnoreCase))
+            if (rpcStatus.Equals("INTERNAL", StringComparison.OrdinalIgnoreCase) ||
+                rpcStatus.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase) ||
+                rpcStatus.Equals("DATA_LOSS", StringComparison.OrdinalIgnoreCase))
             {
                 return HttpStatusCode.InternalServerError;
             }
+
+            if (rpcStatus.Equals("INVALID_ARGUMENT", StringComparison.OrdinalIgnoreCase) ||
+                rpcStatus.Equals("FAILED_PRECONDITION", StringComparison.OrdinalIgnoreCase) ||
+                rpcStatus.Equals("OUT_OF_RANGE", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.BadRequest;
+            }
+
+            if (rpcStatus.Equals("NOT_FOUND", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.NotFound;
+            }
+
+            if (rpcStatus.Equals("ALREADY_EXISTS", StringComparison.OrdinalIgnoreCase) ||
+                rpcStatus.Equals("ABORTED", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.Conflict;
+            }
+
+            if (rpcStatus.Equals("PERMISSION_DENIED", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.Forbidden;
+            }
+
+            if (rpcStatus.Equals("UNAUTHENTICATED", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.Unauthorized;
+            }
+
+            if (rpcStatus.Equals("UNIMPLEMENTED", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.NotImplemented;
+            }
+
+            if (rpcStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase))
+            {
+                return (HttpStatusCode)499;
+            }
         }
 
-        return fallback;
+        // An in-stream error arrived on an HTTP 2xx connection; never report a 2xx status code on GeminiApiException.
+        return (int)fallback is >= 200 and <= 299 ? HttpStatusCode.InternalServerError : fallback;
     }
 
     private static ErrorDetails Parse(string? body)

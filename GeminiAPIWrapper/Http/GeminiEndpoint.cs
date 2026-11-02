@@ -65,7 +65,9 @@ internal sealed class GeminiEndpoint
                 nameof(endpoint));
         }
 
-        var normalized = new UriBuilder(endpoint) { Path = endpoint.AbsolutePath.TrimEnd('/') }.Uri;
+        var normalized = endpoint.AbsolutePath.EndsWith('/') && endpoint.AbsolutePath.Length > 1
+            ? new Uri($"{endpoint.GetLeftPart(UriPartial.Authority)}{endpoint.AbsolutePath.TrimEnd('/')}{endpoint.Query}", UriKind.Absolute)
+            : endpoint;
         return new GeminiEndpoint(normalized, string.IsNullOrWhiteSpace(defaultModel) ? null : defaultModel.Trim());
     }
 
@@ -100,18 +102,19 @@ internal sealed class GeminiEndpoint
 
     private static Uri BuildOperationUri(Uri baseUri, string resourcePath, string operation, bool serverSentEvents)
     {
-        var builder = new UriBuilder(baseUri)
-        {
-            Path = $"{baseUri.AbsolutePath.TrimEnd('/')}/{resourcePath}:{operation}"
-        };
-
+        var basePath = baseUri.AbsolutePath.TrimEnd('/');
+        var query = baseUri.Query.AsSpan().TrimStart('?');
+        string fullQuery;
         if (serverSentEvents)
         {
-            var existingQuery = builder.Query.TrimStart('?');
-            builder.Query = existingQuery.Length == 0 ? "alt=sse" : $"{existingQuery}&alt=sse";
+            fullQuery = query.IsEmpty ? "?alt=sse" : string.Concat("?", query, "&alt=sse");
+        }
+        else
+        {
+            fullQuery = query.IsEmpty ? string.Empty : string.Concat("?", query);
         }
 
-        return builder.Uri;
+        return new Uri($"{baseUri.GetLeftPart(UriPartial.Authority)}{basePath}/{resourcePath}:{operation}{fullQuery}", UriKind.Absolute);
     }
 
     /// <summary>
@@ -130,6 +133,13 @@ internal sealed class GeminiEndpoint
         if (span.IsEmpty)
         {
             return null;
+        }
+
+        if (span.Contains(':'))
+        {
+            throw new ArgumentException(
+                $"Model name '{model}' must not contain an operation such as ':generateContent'; the client appends it automatically.",
+                nameof(model));
         }
 
         if (!span.Contains('/'))

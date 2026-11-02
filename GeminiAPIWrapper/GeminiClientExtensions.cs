@@ -64,7 +64,8 @@ public static class GeminiClientExtensions
         /// <param name="defaultModelId">The model used when <see cref="ChatOptions.ModelId"/> is not set; defaults to <see cref="IGeminiClient.DefaultModel"/>.</param>
         /// <param name="toolSerializerOptions">
         /// Serializer options for function arguments and results of custom types. In NativeAOT applications, supply options backed by
-        /// your <c>JsonSerializerContext</c>. Defaults to <see cref="AIJsonUtilities.DefaultOptions"/>.
+        /// your <c>JsonSerializerContext</c>. Defaults to <see cref="GeminiClientOptions.ToolSerializerOptions"/> (when <paramref name="client"/>
+        /// is a <see cref="GeminiClient"/>) or <see cref="AIJsonUtilities.DefaultOptions"/>.
         /// </param>
         /// <returns>An <see cref="IChatClient"/> backed by <paramref name="client"/>.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>

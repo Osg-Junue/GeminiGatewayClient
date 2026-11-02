@@ -17,8 +17,21 @@ internal static class ToolJsonConverter
     /// <summary>
     /// Converts function-call arguments to a JSON object, or <c>null</c> when there are none.
     /// </summary>
-    public static JsonElement? ToArguments(IDictionary<string, object?>? arguments, JsonSerializerOptions options) =>
-        arguments is null ? null : WriteElement(writer => WriteObject(writer, arguments, options));
+    public static JsonElement? ToArguments(IDictionary<string, object?>? arguments, JsonSerializerOptions options)
+    {
+        if (arguments is null)
+        {
+            return null;
+        }
+
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            WriteObject(writer, arguments, options);
+        }
+
+        return ParseBuffer(buffer.WrittenSpan);
+    }
 
     /// <summary>
     /// Converts a function result to the JSON object required by <c>functionResponse.response</c>.
@@ -28,7 +41,13 @@ internal static class ToolJsonConverter
     {
         if (result is JsonObject jsonObject)
         {
-            return WriteElement(writer => jsonObject.WriteTo(writer));
+            var nodeBuffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(nodeBuffer))
+            {
+                jsonObject.WriteTo(writer);
+            }
+
+            return ParseBuffer(nodeBuffer.WrittenSpan);
         }
 
         switch (result)
@@ -37,20 +56,33 @@ internal static class ToolJsonConverter
                 return element.Clone();
 
             case IEnumerable<KeyValuePair<string, object?>> dictionary:
-                return WriteElement(writer => WriteObject(writer, dictionary, options));
+            {
+                var dictBuffer = new ArrayBufferWriter<byte>();
+                using (var writer = new Utf8JsonWriter(dictBuffer))
+                {
+                    WriteObject(writer, dictionary, options);
+                }
+
+                return ParseBuffer(dictBuffer.WrittenSpan);
+            }
 
             case not null and not JsonElement and not JsonNode and not string and not IEnumerable
                 when TrySerialize(result, options, out var serialized) && serialized.ValueKind == JsonValueKind.Object:
                 return serialized;
 
             default:
-                return WriteElement(writer =>
+            {
+                var wrappedBuffer = new ArrayBufferWriter<byte>();
+                using (var writer = new Utf8JsonWriter(wrappedBuffer))
                 {
                     writer.WriteStartObject();
                     writer.WritePropertyName(ResultPropertyName);
                     WriteValue(writer, result, options);
                     writer.WriteEndObject();
-                });
+                }
+
+                return ParseBuffer(wrappedBuffer.WrittenSpan);
+            }
         }
     }
 
@@ -151,7 +183,7 @@ internal static class ToolJsonConverter
 
     private static bool TrySerialize(object value, JsonSerializerOptions options, out JsonElement element)
     {
-        if (options.TryGetTypeInfo(value.GetType(), out var typeInfo))
+        if (options.TypeInfoResolver is not null && options.TryGetTypeInfo(value.GetType(), out var typeInfo))
         {
             element = JsonSerializer.SerializeToElement(value, typeInfo);
             return true;
@@ -161,15 +193,9 @@ internal static class ToolJsonConverter
         return false;
     }
 
-    private static JsonElement WriteElement(Action<Utf8JsonWriter> write)
+    private static JsonElement ParseBuffer(ReadOnlySpan<byte> utf8Json)
     {
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            write(writer);
-        }
-
-        var reader = new Utf8JsonReader(buffer.WrittenSpan);
+        var reader = new Utf8JsonReader(utf8Json);
         return JsonElement.ParseValue(ref reader);
     }
 }

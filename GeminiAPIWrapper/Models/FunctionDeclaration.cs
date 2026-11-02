@@ -14,7 +14,11 @@ public sealed class FunctionDeclaration
     /// alphanumeric characters, underscores, dots, or dashes, with a maximum length of 64 characters.
     /// </summary>
     [JsonPropertyName("name")]
-    public required string Name { get; set; }
+    public required string Name
+    {
+        get;
+        set => field = value ?? "";
+    } = "";
 
     /// <summary>
     /// Optional. Brief description of what the function does, used by the model to decide when to call it.

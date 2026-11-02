@@ -378,4 +378,92 @@ public class SerializationTests
         Assert.NotNull(response.PromptFeedback?.SafetyRatings);
         Assert.Empty(response.PromptFeedback.SafetyRatings);
     }
+
+    [Fact]
+    public void Validate_RejectsEmptyPartSystemInstructionNullToolsSafetySettingsAndUnknownRequestEnums()
+    {
+        var emptyPartObj = new GenerateContentRequest
+        {
+            Contents = [new Content { Role = Role.User, Parts = [new Part()] }]
+        };
+        Assert.Throws<ArgumentException>(() => emptyPartObj.Validate());
+
+        var emptySystemInstruction = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Hi")],
+            SystemInstruction = new Content { Parts = [] }
+        };
+        Assert.Throws<ArgumentException>(() => emptySystemInstruction.Validate());
+
+        var nullToolElement = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Hi")],
+            Tools = [null!]
+        };
+        Assert.Throws<ArgumentException>(() => nullToolElement.Validate());
+
+        var nullSafetyElement = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Hi")],
+            SafetySettings = [null!]
+        };
+        Assert.Throws<ArgumentException>(() => nullSafetyElement.Validate());
+
+        var unknownSafetyCategory = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Hi")],
+            SafetySettings = [new SafetySetting { Category = HarmCategory.Unknown, Threshold = HarmBlockThreshold.BlockNone }]
+        };
+        Assert.Throws<ArgumentException>(() => unknownSafetyCategory.Validate());
+
+        var unknownThinkingLevel = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Hi")],
+            GenerationConfig = new GenerationConfig { ThinkingConfig = new ThinkingConfig { ThinkingLevel = ThinkingLevel.Unknown } }
+        };
+        Assert.Throws<ArgumentException>(() => unknownThinkingLevel.Validate());
+
+        var unknownFunctionCallingMode = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Hi")],
+            ToolConfig = new ToolConfig { FunctionCallingConfig = new FunctionCallingConfig { Mode = FunctionCallingMode.Unknown } }
+        };
+        Assert.Throws<ArgumentException>(() => unknownFunctionCallingMode.Validate());
+    }
+
+    [Fact]
+    public void NullPropertiesInRequiredAndNonNullableModelFields_NormalizeToNonNullDefaults()
+    {
+        const string jsonWithNulls = """
+            {
+              "candidates": [
+                {
+                  "content": {
+                    "parts": [
+                      { "inlineData": { "mimeType": null, "data": null } },
+                      { "fileData": { "fileUri": null } },
+                      { "functionCall": { "name": null } },
+                      { "functionResponse": { "name": null } }
+                    ]
+                  },
+                  "logprobsResult": {
+                    "chosenCandidates": [
+                      { "token": null, "logProbability": -0.5 }
+                    ]
+                  }
+                }
+              ]
+            }
+            """;
+
+        var response = JsonSerializer.Deserialize(jsonWithNulls, GeminiJsonContext.Default.GenerateContentResponse);
+        Assert.NotNull(response);
+        var parts = response.Candidates[0].Content!.Parts;
+        Assert.Equal("", parts[0].InlineData!.MimeType);
+        Assert.Empty(parts[0].InlineData!.Data);
+        Assert.Equal("", parts[1].FileData!.FileUri);
+        Assert.Equal("", parts[2].FunctionCall!.Name);
+        Assert.Equal("", parts[3].FunctionResponse!.Name);
+        Assert.Equal("", response.Candidates[0].LogprobsResult!.ChosenCandidates![0].Token);
+    }
 }

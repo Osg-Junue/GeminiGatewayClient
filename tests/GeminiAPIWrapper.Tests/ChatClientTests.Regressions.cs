@@ -200,6 +200,8 @@ public partial class ChatClientTests
         IChatClient chatClient = geminiClient.AsIChatClient();
 
         var first = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Hi")]);
+        var singleTextContent = Assert.Single(first.Messages[0].Contents);
+        Assert.IsType<TextContent>(singleTextContent);
 
         await chatClient.GetResponseAsync(
         [
@@ -460,8 +462,20 @@ public partial class ChatClientTests
         var templateTurn = Content.FromText("Template prefix", Role.User);
         var sharedTemplate = new GenerateContentRequest
         {
-            Contents = [templateTurn]
+            Contents = [templateTurn],
+            ToolConfig = new ToolConfig
+            {
+                FunctionCallingConfig = new FunctionCallingConfig
+                {
+                    Mode = FunctionCallingMode.Any,
+                    AllowedFunctionNames = ["func_a"]
+                }
+            }
         };
+
+        var cloned = sharedTemplate.CloneWithContents([Content.FromText("New turn")]);
+        cloned.ToolConfig!.FunctionCallingConfig!.AllowedFunctionNames!.Add("func_b");
+        Assert.Single(sharedTemplate.ToolConfig.FunctionCallingConfig.AllowedFunctionNames);
 
         var options = new ChatOptions
         {
@@ -533,5 +547,182 @@ public partial class ChatClientTests
         Assert.Equal("print(6 * 7)", modelParts[0].GetProperty("executableCode").GetProperty("code").GetString());
         Assert.Equal("sig-exec-code", modelParts[0].GetProperty("thoughtSignature").GetString());
         Assert.Equal("42\n", modelParts[1].GetProperty("codeExecutionResult").GetProperty("output").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_EmptyStringTextWithThoughtSignature_MapsToReasoningContentAndSurvivesPersistence()
+    {
+        const string sse = """
+            data: {"responseId":"r1","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Answer"}]}}]}
+
+            data: {"responseId":"r1","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"","thoughtSignature":"sig-empty-text"}]},"finishReason":"STOP"}]}
+
+            """;
+
+        using var handler = new RecordingHandler(sse, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in chatClient.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Hi")]))
+        {
+            updates.Add(update);
+        }
+
+        // Second chunk must contain a single TextReasoningContent with ProtectedData, not an empty TextContent
+        var secondUpdateContent = Assert.Single(updates[1].Contents);
+        var reasoning = Assert.IsType<TextReasoningContent>(secondUpdateContent);
+        Assert.Equal(string.Empty, reasoning.Text);
+        Assert.Equal("sig-empty-text", reasoning.ProtectedData);
+
+        // Simulate persisted chat history (RawRepresentation stripped)
+        var persistedAssistant = new ChatMessage(ChatRole.Assistant,
+        [
+            new TextContent("Answer"),
+            new TextReasoningContent(string.Empty) { ProtectedData = "sig-empty-text" }
+        ]);
+
+        using var nextHandler = new RecordingHandler(OkResponseJson);
+        using var nextHttpClient = new HttpClient(nextHandler);
+        using var nextGeminiClient = CreateClient(nextHttpClient);
+        IChatClient nextChatClient = nextGeminiClient.AsIChatClient();
+
+        await nextChatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Hi"),
+            persistedAssistant,
+            new ChatMessage(ChatRole.User, "Follow-up")
+        ]);
+
+        Assert.NotNull(nextHandler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(nextHandler.LastRequestBody);
+        var parts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
+        Assert.Equal(2, parts.GetArrayLength());
+        Assert.Equal("Answer", parts[0].GetProperty("text").GetString());
+        Assert.Equal("sig-empty-text", parts[1].GetProperty("thoughtSignature").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_ExecutableCodeAndResult_SurviveLossOfRawRepresentation()
+    {
+        const string codeResponseJson = """
+            {
+              "candidates": [
+                {
+                  "index": 0,
+                  "content": {
+                    "role": "model",
+                    "parts": [
+                      {
+                        "executableCode": {
+                          "language": "PYTHON",
+                          "code": "print(6 * 7)"
+                        },
+                        "thoughtSignature": "sig-exec-persisted"
+                      },
+                      {
+                        "codeExecutionResult": {
+                          "outcome": "OUTCOME_OK",
+                          "output": "42\n"
+                        }
+                      },
+                      {
+                        "text": "The answer is 42."
+                      }
+                    ]
+                  },
+                  "finishReason": "STOP"
+                }
+              ]
+            }
+            """;
+
+        using var handler = new RecordingHandler(codeResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var first = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Compute 6*7")]);
+
+        // Strip RawRepresentation to simulate JSON persistence of ChatMessage history
+        var persistedContents = first.Messages[0].Contents.Select(c => c switch
+        {
+            TextContent tc => (AIContent)new TextContent(tc.Text) { AdditionalProperties = tc.AdditionalProperties },
+            _ => new AIContent { AdditionalProperties = c.AdditionalProperties }
+        }).ToList();
+
+        Assert.All(persistedContents, c => Assert.Null(c.RawRepresentation));
+
+        await chatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Compute 6*7"),
+            new ChatMessage(ChatRole.Assistant, persistedContents),
+            new ChatMessage(ChatRole.User, "Now multiply by 2")
+        ]);
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var modelParts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
+        Assert.Equal(3, modelParts.GetArrayLength());
+        Assert.Equal("PYTHON", modelParts[0].GetProperty("executableCode").GetProperty("language").GetString());
+        Assert.Equal("print(6 * 7)", modelParts[0].GetProperty("executableCode").GetProperty("code").GetString());
+        Assert.Equal("sig-exec-persisted", modelParts[0].GetProperty("thoughtSignature").GetString());
+        Assert.Equal("OUTCOME_OK", modelParts[1].GetProperty("codeExecutionResult").GetProperty("outcome").GetString());
+        Assert.Equal("42\n", modelParts[1].GetProperty("codeExecutionResult").GetProperty("output").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_AsIChatClient_InheritsToolSerializerOptionsFromGeminiClientOptions()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key",
+            ToolSerializerOptions = new JsonSerializerOptions
+            {
+                TypeInfoResolver = WeatherReportJsonContext.Default
+            }
+        }, httpClient);
+
+        // Call AsIChatClient() without passing toolSerializerOptions explicitly
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var timestamp = new DateTime(2026, 11, 2, 12, 30, 0, DateTimeKind.Utc);
+        await chatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Weather?"),
+            new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("c1", "get_weather")]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", new WeatherReport("Tokyo", 21.5, timestamp))])
+        ]);
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var responseObj = sentDoc.RootElement
+            .GetProperty("contents")[2]
+            .GetProperty("parts")[0]
+            .GetProperty("functionResponse")
+            .GetProperty("response");
+        Assert.Equal("Tokyo", responseObj.GetProperty("city").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_ToolSerializerOptionsWithNullResolver_ThrowsActionableMessageForCustomType()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient(toolSerializerOptions: new JsonSerializerOptions { TypeInfoResolver = null });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => chatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Weather?"),
+            new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("c1", "get_weather")]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", new WeatherReport("Tokyo", 21.5, DateTime.UtcNow))])
+        ]));
+
+        Assert.Contains("JsonSerializerContext", ex.Message);
     }
 }

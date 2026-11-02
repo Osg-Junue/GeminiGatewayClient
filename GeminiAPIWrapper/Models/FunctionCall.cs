@@ -21,7 +21,11 @@ public sealed class FunctionCall
     /// Required. Name of the function to call (matches a <see cref="FunctionDeclaration.Name"/>).
     /// </summary>
     [JsonPropertyName("name")]
-    public required string Name { get; set; }
+    public required string Name
+    {
+        get;
+        set => field = value ?? "";
+    } = "";
 
     /// <summary>
     /// Optional. Function parameters and values represented as a JSON object.

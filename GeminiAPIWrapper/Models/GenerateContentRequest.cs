@@ -22,7 +22,11 @@ public sealed class GenerateContentRequest
     /// Each <see cref="Content"/> item specifies a <see cref="Content.Role"/> and one or more <see cref="Content.Parts"/>.
     /// </summary>
     [JsonPropertyName("contents")]
-    public IList<Content> Contents { get; set; } = [];
+    public IList<Content> Contents
+    {
+        get;
+        set => field = value ?? [];
+    } = [];
 
     /// <summary>
     /// Optional. Developer-provided system instructions for the model. Only <see cref="Content.Parts"/> is used;
@@ -105,6 +109,7 @@ public sealed class GenerateContentRequest
         clone.Contents = contents;
         clone.SystemInstruction = SystemInstruction?.Clone();
         clone.GenerationConfig = GenerationConfig?.Clone();
+        clone.ToolConfig = ToolConfig?.Clone();
         if (Tools is not null)
         {
             clone.Tools = [.. Tools];
@@ -148,34 +153,58 @@ public sealed class GenerateContentRequest
                 throw new ArgumentException($"GenerateContentRequest.Contents[{i}] cannot be null.", paramName);
             }
 
-            if ((content.Parts is null || content.Parts.Count == 0) &&
-                (content.ExtensionData is null || content.ExtensionData.Count == 0))
-            {
-                throw new ArgumentException($"GenerateContentRequest.Contents[{i}].Parts must contain at least one Part item.", paramName);
-            }
+            ValidateContentParts(content, $"GenerateContentRequest.Contents[{i}]", paramName);
+        }
 
-            if (content.Parts is not null)
-            {
-                for (var j = 0; j < content.Parts.Count; j++)
-                {
-                    if (content.Parts[j] is null)
-                    {
-                        throw new ArgumentException($"GenerateContentRequest.Contents[{i}].Parts[{j}] cannot be null.", paramName);
-                    }
-                }
-            }
+        if (SystemInstruction is not null)
+        {
+            ValidateContentParts(SystemInstruction, "GenerateContentRequest.SystemInstruction", paramName);
         }
 
         GenerationConfig?.Validate(paramName);
+        ToolConfig?.Validate(paramName);
+
+        if (SafetySettings is not null)
+        {
+            for (var i = 0; i < SafetySettings.Count; i++)
+            {
+                var setting = SafetySettings[i];
+                if (setting is null)
+                {
+                    throw new ArgumentException($"GenerateContentRequest.SafetySettings[{i}] cannot be null.", paramName);
+                }
+
+                if (setting.Category == HarmCategory.Unknown)
+                {
+                    throw new ArgumentException($"GenerateContentRequest.SafetySettings[{i}].Category cannot be HarmCategory.Unknown.", paramName);
+                }
+
+                if (setting.Threshold == HarmBlockThreshold.Unknown)
+                {
+                    throw new ArgumentException($"GenerateContentRequest.SafetySettings[{i}].Threshold cannot be HarmBlockThreshold.Unknown.", paramName);
+                }
+
+                if (setting.Method == HarmBlockMethod.Unknown)
+                {
+                    throw new ArgumentException($"GenerateContentRequest.SafetySettings[{i}].Method cannot be HarmBlockMethod.Unknown.", paramName);
+                }
+            }
+        }
 
         if (Tools is null)
         {
             return;
         }
 
-        foreach (var tool in Tools)
+        for (var i = 0; i < Tools.Count; i++)
         {
-            if (tool?.FunctionDeclarations is null)
+            var tool = Tools[i];
+            if (tool is null)
+            {
+                throw new ArgumentException($"GenerateContentRequest.Tools[{i}] cannot be null.", paramName);
+            }
+
+            if (tool.FunctionDeclarations is null)
             {
                 continue;
             }
@@ -188,6 +217,34 @@ public sealed class GenerateContentRequest
                 }
 
                 declaration.Validate(paramName);
+            }
+        }
+    }
+
+    private static void ValidateContentParts(Content content, string pathPrefix, string paramName)
+    {
+        if ((content.Parts is null || content.Parts.Count == 0) &&
+            (content.ExtensionData is null || content.ExtensionData.Count == 0))
+        {
+            throw new ArgumentException($"{pathPrefix}.Parts must contain at least one Part item.", paramName);
+        }
+
+        if (content.Parts is null)
+        {
+            return;
+        }
+
+        for (var j = 0; j < content.Parts.Count; j++)
+        {
+            var part = content.Parts[j];
+            if (part is null)
+            {
+                throw new ArgumentException($"{pathPrefix}.Parts[{j}] cannot be null.", paramName);
+            }
+
+            if (part.IsEmpty)
+            {
+                throw new ArgumentException($"{pathPrefix}.Parts[{j}] must have at least one field set.", paramName);
             }
         }
     }

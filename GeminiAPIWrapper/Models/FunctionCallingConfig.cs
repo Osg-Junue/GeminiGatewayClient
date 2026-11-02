@@ -29,6 +29,22 @@ public sealed class FunctionCallingConfig
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    internal FunctionCallingConfig Clone()
+    {
+        var clone = (FunctionCallingConfig)MemberwiseClone();
+        if (AllowedFunctionNames is not null)
+        {
+            clone.AllowedFunctionNames = [.. AllowedFunctionNames];
+        }
+
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
 }
 
 /// <summary>

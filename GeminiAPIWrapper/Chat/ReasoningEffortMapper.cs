@@ -72,7 +72,7 @@ internal static class ReasoningEffortMapper
         return false;
     }
 
-    private static bool IsGemini3OrLater(string model)
+    private static bool IsGemini3OrLater(ReadOnlySpan<char> model)
     {
         const string prefix = "gemini-";
         if (!model.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || model.Length <= prefix.Length)
@@ -80,7 +80,7 @@ internal static class ReasoningEffortMapper
             return false;
         }
 
-        var span = model.AsSpan(prefix.Length);
+        var span = model[prefix.Length..];
         var end = 0;
         while (end < span.Length && char.IsAsciiDigit(span[end]))
         {
@@ -90,9 +90,9 @@ internal static class ReasoningEffortMapper
         return end > 0 && int.TryParse(span[..end], out var major) && major >= 3;
     }
 
-    private static string NormalizeModelId(string? modelId)
+    private static ReadOnlySpan<char> NormalizeModelId(string? modelId)
     {
-        var model = modelId?.Trim() ?? string.Empty;
+        var model = modelId.AsSpan().Trim();
         var slash = model.LastIndexOf('/');
         return slash >= 0 ? model[(slash + 1)..] : model;
     }

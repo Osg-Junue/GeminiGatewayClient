@@ -71,6 +71,11 @@ public sealed class ThinkingConfig
                 "ThinkingConfig.ThinkingBudget and ThinkingConfig.ThinkingLevel are mutually exclusive and cannot both be set.",
                 paramName);
         }
+
+        if (ThinkingLevel == Models.ThinkingLevel.Unknown)
+        {
+            throw new ArgumentException("ThinkingConfig.ThinkingLevel cannot be ThinkingLevel.Unknown.", paramName);
+        }
     }
 }
 

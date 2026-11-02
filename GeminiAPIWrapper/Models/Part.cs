@@ -87,6 +87,22 @@ public sealed class Part
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
     /// <summary>
+    /// <c>true</c> when no data, metadata, or extension field is set on this part.
+    /// </summary>
+    internal bool IsEmpty =>
+        Text is null &&
+        Thought is null &&
+        ThoughtSignature is null &&
+        InlineData is null &&
+        FileData is null &&
+        FunctionCall is null &&
+        FunctionResponse is null &&
+        VideoMetadata is null &&
+        ExecutableCode is null &&
+        CodeExecutionResult is null &&
+        (ExtensionData is null || ExtensionData.Count == 0);
+
+    /// <summary>
     /// Creates a text part.
     /// </summary>
     /// <param name="text">The text content.</param>

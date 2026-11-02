@@ -69,16 +69,21 @@ public static class GeminiServiceCollectionExtensions
 
     private static IHttpClientBuilder RegisterCore(IServiceCollection services)
     {
+        var alreadyRegistered = services.Any(static d => d.ServiceType == typeof(GeminiClientSettings));
+
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GeminiClientOptions>, GeminiClientOptionsValidator>());
 
         services.TryAddSingleton(static sp =>
             GeminiClientSettings.Create(sp.GetRequiredService<IOptions<GeminiClientOptions>>().Value));
 
-        var httpClientBuilder = services
-            .AddHttpClient(HttpClientName)
-            .ConfigureHttpClient(static (sp, httpClient) =>
-                httpClient.Timeout = sp.GetRequiredService<GeminiClientSettings>().Timeout)
-            .ConfigurePrimaryHttpMessageHandler(static () => GeminiClient.CreateDefaultHandler());
+        var httpClientBuilder = services.AddHttpClient(HttpClientName);
+        if (!alreadyRegistered)
+        {
+            httpClientBuilder
+                .ConfigureHttpClient(static (sp, httpClient) =>
+                    httpClient.Timeout = sp.GetRequiredService<GeminiClientSettings>().Timeout)
+                .ConfigurePrimaryHttpMessageHandler(static () => GeminiClient.CreateDefaultHandler());
+        }
 
         services.TryAddTransient(static sp => new GeminiClient(
             sp.GetRequiredService<GeminiClientSettings>(),
@@ -100,6 +105,11 @@ public static class GeminiServiceCollectionExtensions
     {
         public ValidateOptionsResult Validate(string? name, GeminiClientOptions options)
         {
+            if (!string.IsNullOrEmpty(name))
+            {
+                return ValidateOptionsResult.Skip;
+            }
+
             try
             {
                 GeminiClientSettings.Create(options);

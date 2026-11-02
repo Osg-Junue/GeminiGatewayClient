@@ -26,14 +26,19 @@ public sealed class GeminiChatClient : IChatClient
     /// </summary>
     /// <param name="client">The underlying Gemini client.</param>
     /// <param name="defaultModelId">The model used when <see cref="ChatOptions.ModelId"/> is not set; defaults to <see cref="IGeminiClient.DefaultModel"/>.</param>
-    /// <param name="toolSerializerOptions">Serializer options for function arguments and results; defaults to <see cref="AIJsonUtilities.DefaultOptions"/>.</param>
+    /// <param name="toolSerializerOptions">
+    /// Serializer options for function arguments and results; defaults to <see cref="GeminiClientOptions.ToolSerializerOptions"/>
+    /// (when <paramref name="client"/> is a <see cref="GeminiClient"/>) or <see cref="AIJsonUtilities.DefaultOptions"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
     public GeminiChatClient(IGeminiClient client, string? defaultModelId = null, JsonSerializerOptions? toolSerializerOptions = null)
     {
         ArgumentNullException.ThrowIfNull(client);
 
         _client = client;
-        _toolSerializerOptions = toolSerializerOptions ?? AIJsonUtilities.DefaultOptions;
+        _toolSerializerOptions = toolSerializerOptions
+            ?? (client as GeminiClient)?.ToolSerializerOptions
+            ?? AIJsonUtilities.DefaultOptions;
         _metadata = new ChatClientMetadata("gemini", client.Endpoint, string.IsNullOrWhiteSpace(defaultModelId) ? client.DefaultModel : defaultModelId);
     }
 

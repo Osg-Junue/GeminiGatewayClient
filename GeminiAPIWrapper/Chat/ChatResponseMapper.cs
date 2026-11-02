@@ -89,7 +89,7 @@ internal static class ChatResponseMapper
                     break;
 
                 case { Thought: true }:
-                case { ThoughtSignature: { Length: > 0 }, Text: null, InlineData: null, FileData: null, ExecutableCode: null, CodeExecutionResult: null, FunctionResponse: null }:
+                case { ThoughtSignature: { Length: > 0 }, Text: null or "", InlineData: null, FileData: null, ExecutableCode: null, CodeExecutionResult: null, FunctionResponse: null }:
                     contents.Add(new TextReasoningContent(part.Text ?? string.Empty)
                     {
                         ProtectedData = part.ThoughtSignature,
@@ -101,13 +101,6 @@ internal static class ChatResponseMapper
                     var textContent = new TextContent(text) { RawRepresentation = part };
                     AttachThoughtSignature(textContent, part.ThoughtSignature);
                     contents.Add(textContent);
-                    if (!string.IsNullOrEmpty(part.ThoughtSignature))
-                    {
-                        // Exposes the signature to consumers that persist history without RawRepresentation.
-                        // ChatRequestMapper skips this companion when the preceding part already carries the same signature.
-                        contents.Add(new TextReasoningContent(string.Empty) { ProtectedData = part.ThoughtSignature });
-                    }
-
                     break;
 
                 case { InlineData: { Data.Length: > 0 } blob }:
@@ -130,6 +123,7 @@ internal static class ChatResponseMapper
 
                 case { ExecutableCode: not null } or { CodeExecutionResult: not null }:
                     var codeContent = new AIContent { RawRepresentation = part };
+                    AttachCodeExecutionProperties(codeContent, part);
                     AttachThoughtSignature(codeContent, part.ThoughtSignature);
                     contents.Add(codeContent);
                     break;
@@ -137,6 +131,37 @@ internal static class ChatResponseMapper
         }
 
         return contents;
+    }
+
+    private static void AttachCodeExecutionProperties(AIContent content, Part part)
+    {
+        var properties = content.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+
+        if (part.ExecutableCode is { } exec)
+        {
+            if (exec.Language is { } language)
+            {
+                properties[GeminiChatPropertyNames.ExecutableCodeLanguage] = language.ToString();
+            }
+
+            if (exec.Code is not null)
+            {
+                properties[GeminiChatPropertyNames.ExecutableCode] = exec.Code;
+            }
+        }
+
+        if (part.CodeExecutionResult is { } result)
+        {
+            if (result.Outcome is { } outcome)
+            {
+                properties[GeminiChatPropertyNames.CodeExecutionOutcome] = outcome.ToString();
+            }
+
+            if (result.Output is not null)
+            {
+                properties[GeminiChatPropertyNames.CodeExecutionOutput] = result.Output;
+            }
+        }
     }
 
     private static void AttachThoughtSignature(AIContent content, string? thoughtSignature)

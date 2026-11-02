@@ -660,6 +660,222 @@ public class GeminiClientTests
         Assert.NotNull(ex.RetryAfter);
     }
 
+    [Fact]
+    public async Task StreamIdleWatchdog_TimerExpiringInRaceWindowAfterReadCompletes_DoesNotCauseFalseTimeoutOnNextRead()
+    {
+        // Simulate the exact race where the idle timer fires after ReadAsync has returned bytes
+        // but before AfterRead(succeeded: true) runs in the finally block.
+        using var watchdog = new GeminiAPIWrapper.Http.StreamIdleWatchdog(TimeSpan.FromMilliseconds(15), CancellationToken.None);
+
+        watchdog.BeforeRead();
+        await Task.Delay(40); // timer fires while read has conceptually just completed with data
+        watchdog.AfterRead(succeeded: true);
+
+        Assert.False(watchdog.HasTimedOut);
+        Assert.False(watchdog.Token.IsCancellationRequested);
+
+        // Next read must start with a fresh, uncancelled token
+        watchdog.BeforeRead();
+        Assert.False(watchdog.Token.IsCancellationRequested);
+        watchdog.AfterRead(succeeded: true);
+    }
+
+    [Fact]
+    public async Task Endpoint_ModelWithSpacesOrSpecialChars_PercentEncodesOnceWithoutDoubleEncoding()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Endpoint = new Uri("https://example.com/v1beta"),
+            Model = "tunedModels/my custom model",
+            ApiKey = "key"
+        }, httpClient);
+
+        await client.GenerateContentAsync("Hi");
+
+        Assert.Equal(
+            "https://example.com/v1beta/tunedModels/my%20custom%20model:generateContent",
+            handler.LastRequest?.RequestUri?.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task Endpoint_ModelContainingOperationColon_ThrowsArgumentException()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+
+        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions
+        {
+            Model = "gemini-2.5-flash:generateContent",
+            ApiKey = "key"
+        }, httpClient));
+
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.GenerateContentAsync("Hi", model: "gemini-2.5-pro:generateContent"));
+    }
+
+    [Fact]
+    public async Task Stream_SseWithSplitCrLfAndMultiByteUtf8AcrossByteReads_ParsesCleanly()
+    {
+        const string sse = "\uFEFFdata: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"こんにちは🌸\"}]}}]}\r\n\r\ndata: [DONE]\r\n\r\n";
+        var rawBytes = Encoding.UTF8.GetBytes(sse);
+
+        using var handler = new RecordingHandler((_, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteByByteStreamContent(rawBytes)
+            };
+            return Task.FromResult(response);
+        });
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var chunks = new List<string?>();
+        await foreach (var chunk in client.StreamGenerateContentAsync("Hi"))
+        {
+            chunks.Add(chunk.Text);
+        }
+
+        Assert.Equal(["こんにちは🌸"], chunks);
+    }
+
+    [Fact]
+    public async Task Stream_InStreamErrorWithGrpcUnknownCode_MapsToInternalServerErrorInsteadOfHttp200()
+    {
+        const string sseError = """
+            data: {"error":{"code":2,"message":"Stream broken upstream","status":"UNKNOWN"}}
+
+            """;
+
+        using var handler = new RecordingHandler(sseError, HttpStatusCode.OK, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
+        {
+            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
+            {
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
+        Assert.True(ex.IsTransient);
+        Assert.Equal("UNKNOWN", ex.ErrorStatus);
+        Assert.Equal("Stream broken upstream", ex.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Stream_JsonArrayFormat_RawErrorObjectOnHttp200_PreservesGoogleErrorDetails()
+    {
+        const string rawJsonError = """
+            {
+              "error": {
+                "code": 8,
+                "message": "Quota exceeded on JsonArray stream",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [ { "retryDelay": "5s" } ]
+              }
+            }
+            """;
+
+        using var handler = new RecordingHandler(rawJsonError, HttpStatusCode.OK);
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key",
+            StreamingFormat = GeminiStreamingFormat.JsonArray
+        }, httpClient);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
+        {
+            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
+            {
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, ex.StatusCode);
+        Assert.Equal("RESOURCE_EXHAUSTED", ex.ErrorStatus);
+        Assert.Equal("Quota exceeded on JsonArray stream", ex.ErrorMessage);
+        Assert.Equal(TimeSpan.FromSeconds(5), ex.RetryAfter);
+    }
+
+    [Fact]
+    public async Task DisposedClient_ThrowsObjectDisposedExceptionEagerly()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        client.Dispose();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => client.GenerateContentAsync("Hi"));
+        Assert.Throws<ObjectDisposedException>(() => { _ = client.StreamGenerateContentAsync("Hi"); });
+    }
+
+    private sealed class ByteByByteStreamContent(byte[] bytes) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            throw new NotSupportedException();
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = -1;
+            return false;
+        }
+
+        protected override Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<Stream>(new OneByteAtATimeStream(bytes));
+    }
+
+    private sealed class OneByteAtATimeStream(byte[] bytes) : Stream
+    {
+        private int _offset;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_offset >= bytes.Length || buffer.IsEmpty)
+            {
+                return ValueTask.FromResult(0);
+            }
+
+            buffer.Span[0] = bytes[_offset++];
+            return ValueTask.FromResult(1);
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private sealed class StallingStreamContent(string initialChunk) : HttpContent
     {
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>

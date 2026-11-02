@@ -12,7 +12,11 @@ public sealed class TokenLogProbability
     /// The token text.
     /// </summary>
     [JsonPropertyName("token")]
-    public string Token { get; set; } = "";
+    public string Token
+    {
+        get;
+        set => field = value ?? "";
+    } = "";
 
     /// <summary>
     /// Optional. The vocabulary token ID corresponding to <see cref="Token"/>.

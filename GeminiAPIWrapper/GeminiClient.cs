@@ -22,12 +22,14 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 {
     private const string GenerateContentOperation = "generateContent";
     private const string StreamGenerateContentOperation = "streamGenerateContent";
+    private const int MaxPreallocatedBufferBytes = 10 * 1024 * 1024;
 
     private static readonly TimeSpan s_pooledConnectionLifetime = TimeSpan.FromMinutes(2);
 
     private readonly GeminiClientSettings _settings;
     private readonly HttpClient _httpClient;
     private readonly bool _disposeHttpClient;
+    private volatile bool _disposed;
 
     /// <summary>
     /// Initializes a new <see cref="GeminiClient"/> for the Gemini Developer API using the default endpoint and header.
@@ -72,6 +74,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 
     internal TimeSpan HttpClientTimeout => _httpClient.Timeout;
 
+    internal JsonSerializerOptions? ToolSerializerOptions => _settings.ToolSerializerOptions;
+
     /// <inheritdoc />
     public async Task<GenerateContentResponse> GenerateContentAsync(
         GenerateContentRequest request,
@@ -89,7 +93,10 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
             var stream = await httpResponse.Content.ReadAsStreamAsync(watchdog.Token).ConfigureAwait(false);
             await using (stream.ConfigureAwait(false))
             {
-                var buffer = new ArrayBufferWriter<byte>(1024);
+                var initialCapacity = httpResponse.Content.Headers.ContentLength is > 0 and <= MaxPreallocatedBufferBytes and var contentLength
+                    ? (int)contentLength
+                    : 1024;
+                var buffer = new ArrayBufferWriter<byte>(initialCapacity);
                 var rented = ArrayPool<byte>.Shared.Rent(4096);
                 try
                 {
@@ -97,13 +104,15 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                     {
                         int read;
                         watchdog.BeforeRead();
+                        var readSucceeded = false;
                         try
                         {
                             read = await stream.ReadAsync(rented.AsMemory(), watchdog.Token).ConfigureAwait(false);
+                            readSucceeded = true;
                         }
                         finally
                         {
-                            watchdog.AfterRead();
+                            watchdog.AfterRead(readSucceeded);
                         }
 
                         if (read == 0)
@@ -153,6 +162,12 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
     /// </summary>
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         if (_disposeHttpClient)
         {
             _httpClient.Dispose();
@@ -208,6 +223,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 
     private Uri PrepareRequest(GenerateContentRequest request, string? model, string operation, bool serverSentEvents)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(request);
         request.Validate(nameof(request));
         return _settings.Endpoint.GetOperationUri(model, operation, serverSentEvents);
@@ -278,13 +294,16 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
             try
             {
                 watchdog.BeforeRead();
+                var readSucceeded = false;
                 try
                 {
-                    throw await GeminiErrorParser.CreateFromResponseAsync(response, watchdog.Token).ConfigureAwait(false);
+                    var exception = await GeminiErrorParser.CreateFromResponseAsync(response, watchdog.Token).ConfigureAwait(false);
+                    readSucceeded = true;
+                    throw exception;
                 }
                 finally
                 {
-                    watchdog.AfterRead();
+                    watchdog.AfterRead(readSucceeded);
                 }
             }
             catch (OperationCanceledException ex) when (watchdog.HasTimedOut)

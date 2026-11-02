@@ -13,13 +13,21 @@ public sealed class Blob
     /// Required. IANA MIME type of the media data (see <see cref="MimeTypes"/> for common constants).
     /// </summary>
     [JsonPropertyName("mimeType")]
-    public required string MimeType { get; set; }
+    public required string MimeType
+    {
+        get;
+        set => field = value ?? "";
+    } = "";
 
     /// <summary>
     /// Required. Raw bytes of the media payload (Base64-encoded in JSON).
     /// </summary>
     [JsonPropertyName("data")]
-    public required byte[] Data { get; set; }
+    public required byte[] Data
+    {
+        get;
+        set => field = value ?? [];
+    } = [];
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

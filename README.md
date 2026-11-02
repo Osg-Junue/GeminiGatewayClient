@@ -226,7 +226,7 @@ By default, streaming requests use Server-Sent Events (`?alt=sse`), which flushe
 - An `{"error": {...}}` payload that arrives *inside* a stream (after HTTP 200) is surfaced as a `GeminiApiException` (with `ErrorStatus`/`ErrorMessage`/`RetryAfter`/`IsTransient`) instead of an empty chunk.
 - `StreamGenerateContentAsync` / `GetStreamingResponseAsync` validate their arguments when called, not on first enumeration.
 - Through `IChatClient`, token usage is reported **once**, as a single trailing `UsageContent` carrying the final cumulative counts (Gemini repeats cumulative `usageMetadata` on streamed chunks, so emitting it per chunk would over-count when updates are aggregated).
-- `ChatOptions.Tools` supports `AIFunctionDeclaration` tools only; other `AITool` types (for example `HostedWebSearchTool`) throw `NotSupportedException` instead of being silently dropped.
+- `ChatOptions.Tools` supports `AIFunctionDeclaration`, `HostedWebSearchTool` (mapped to `googleSearch`), and `HostedCodeInterpreterTool` (mapped to `codeExecution`); other `AITool` types throw `NotSupportedException` instead of being silently dropped.
 - Function-call `thoughtSignature` and locally generated call IDs are kept in `FunctionCallContent.AdditionalProperties` (`GeminiChatPropertyNames.ThoughtSignature`, `GeminiChatPropertyNames.SynthesizedCallId`), so persisted chat history can be replayed on Gemini 3 models.
 
 ```csharp

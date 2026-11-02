@@ -172,7 +172,74 @@ internal static class ChatRequestMapper
                     }
                 });
                 break;
+
+            default:
+                if (TryCreateCodeExecutionPart(item.AdditionalProperties, signature) is { } codePart)
+                {
+                    parts.Add(codePart);
+                }
+
+                break;
         }
+    }
+
+    private static Part? TryCreateCodeExecutionPart(AdditionalPropertiesDictionary? properties, string? signature)
+    {
+        if (properties is null || properties.Count == 0)
+        {
+            return null;
+        }
+
+        var hasCode = TryGetRawStringProperty(properties, GeminiChatPropertyNames.ExecutableCode, out var code);
+        var hasLang = TryGetRawStringProperty(properties, GeminiChatPropertyNames.ExecutableCodeLanguage, out var langStr);
+        var hasOutput = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutput, out var output);
+        var hasOutcome = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutcome, out var outcomeStr);
+
+        if (!hasCode && !hasLang && !hasOutput && !hasOutcome)
+        {
+            return null;
+        }
+
+        var part = new Part { ThoughtSignature = signature };
+
+        if (hasCode || hasLang)
+        {
+            part.ExecutableCode = new ExecutableCode
+            {
+                Code = code,
+                Language = hasLang && Enum.TryParse<CodeExecutionLanguage>(langStr, ignoreCase: true, out var lang) ? lang : null
+            };
+        }
+
+        if (hasOutput || hasOutcome)
+        {
+            part.CodeExecutionResult = new CodeExecutionResult
+            {
+                Output = output,
+                Outcome = hasOutcome && Enum.TryParse<CodeExecutionOutcome>(outcomeStr, ignoreCase: true, out var outcome) ? outcome : null
+            };
+        }
+
+        return part;
+    }
+
+    private static bool TryGetRawStringProperty(AdditionalPropertiesDictionary properties, string key, out string? value)
+    {
+        if (properties.TryGetValue(key, out var raw))
+        {
+            switch (raw)
+            {
+                case string s:
+                    value = s;
+                    return true;
+                case JsonElement { ValueKind: JsonValueKind.String } element:
+                    value = element.GetString();
+                    return true;
+            }
+        }
+
+        value = null;
+        return false;
     }
 
     private static void AppendReasoningPart(List<Part> parts, TextReasoningContent reasoning)

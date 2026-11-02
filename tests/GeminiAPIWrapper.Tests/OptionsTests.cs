@@ -242,4 +242,30 @@ public class OptionsTests
         Assert.Equal("From SP!", response.Text);
         Assert.Equal("resolved-secret-key", Assert.Single(handler.LastRequest!.Headers.GetValues("x-goog-api-key")));
     }
+
+    [Fact]
+    public void AddGeminiClient_CalledMultipleTimes_DoesNotDuplicateConfigureHttpClientActions_AndSkipsUnrelatedNamedOptions()
+    {
+        var services = new ServiceCollection();
+        services.AddGeminiClient(options =>
+        {
+            options.Model = DefaultModel;
+            options.ApiKey = "first-key";
+        });
+        services.AddGeminiClient(options =>
+        {
+            options.Timeout = TimeSpan.FromMinutes(3);
+        });
+
+        // Unrelated named GeminiClientOptions instance should not trigger default validator failure
+        services.AddOptions<GeminiClientOptions>("unrelated-named")
+            .Configure(o => o.Endpoint = new Uri("http://remote-insecure-host.example.com/v1beta"));
+
+        using var provider = services.BuildServiceProvider();
+        var client = provider.GetRequiredService<GeminiClient>();
+        Assert.Equal(TimeSpan.FromMinutes(3), client.HttpClientTimeout);
+
+        var named = provider.GetRequiredService<IOptionsSnapshot<GeminiClientOptions>>().Get("unrelated-named");
+        Assert.Equal(new Uri("http://remote-insecure-host.example.com/v1beta"), named.Endpoint);
+    }
 }

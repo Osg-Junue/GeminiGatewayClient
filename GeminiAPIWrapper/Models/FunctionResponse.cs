@@ -20,7 +20,11 @@ public sealed class FunctionResponse
     /// Required. Name of the function that was called (corresponding to <see cref="FunctionCall.Name"/>).
     /// </summary>
     [JsonPropertyName("name")]
-    public required string Name { get; set; }
+    public required string Name
+    {
+        get;
+        set => field = value ?? "";
+    } = "";
 
     /// <summary>
     /// Required. Function output structured as a JSON object.
