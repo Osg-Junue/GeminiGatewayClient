@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using GeminiAPIWrapper.Serialization;
 
@@ -38,21 +39,37 @@ public sealed class ThinkingConfig
     public bool? IncludeThoughts { get; set; }
 
     /// <summary>
-    /// Creates a shallow copy of this configuration.
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
     /// </summary>
-    internal ThinkingConfig Clone() => (ThinkingConfig)MemberwiseClone();
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    /// <summary>
+    /// Creates a copy of this configuration.
+    /// </summary>
+    internal ThinkingConfig Clone()
+    {
+        var clone = (ThinkingConfig)MemberwiseClone();
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
 
     /// <summary>
     /// Validates that <see cref="ThinkingBudget"/> and <see cref="ThinkingLevel"/> are not both set.
     /// </summary>
+    /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
     /// <exception cref="ArgumentException">Both members are set.</exception>
-    internal void Validate()
+    internal void Validate(string paramName = "request")
     {
         if (ThinkingBudget is not null && ThinkingLevel is not null)
         {
             throw new ArgumentException(
                 "ThinkingConfig.ThinkingBudget and ThinkingConfig.ThinkingLevel are mutually exclusive and cannot both be set.",
-                "request");
+                paramName);
         }
     }
 }

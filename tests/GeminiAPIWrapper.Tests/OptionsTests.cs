@@ -215,6 +215,10 @@ public class OptionsTests
 
         Assert.Throws<ArgumentNullException>(() => options.Endpoint = null!);
         Assert.Throws<ArgumentException>(() => options.ApiKeyHeader = "   ");
+        Assert.Throws<ArgumentNullException>(() => options.AdditionalHeaders = null!);
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Timeout = TimeSpan.Zero);
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.StreamIdleTimeout = TimeSpan.FromSeconds(-2));
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.StreamingFormat = (GeminiStreamingFormat)999);
     }
 
     [Fact]

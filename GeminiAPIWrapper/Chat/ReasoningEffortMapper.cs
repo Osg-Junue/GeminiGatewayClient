@@ -12,13 +12,14 @@ internal static class ReasoningEffortMapper
     public static void Apply(ThinkingConfig thinking, ReasoningEffort effort, string? modelId)
     {
         var model = NormalizeModelId(modelId);
-        var isPro = model.Contains("-pro", StringComparison.OrdinalIgnoreCase);
+        var isPro = IsProModel(model);
 
         if (IsGemini3OrLater(model))
         {
             // Gemini 3+: thinkingLevel. "minimal" is Flash-only and Gemini 3 Pro supports only LOW and HIGH
             // ("medium" requires 3.1+), so clamp to the nearest supported level for those models.
-            var isGemini3Pro = model.StartsWith("gemini-3-pro", StringComparison.OrdinalIgnoreCase);
+            var isGemini3Pro = model.StartsWith("gemini-3-pro", StringComparison.OrdinalIgnoreCase) &&
+                               (model.Length == "gemini-3-pro".Length || model["gemini-3-pro".Length] is '-' or '.');
 
             thinking.ThinkingLevel = effort switch
             {
@@ -45,6 +46,30 @@ internal static class ReasoningEffortMapper
                 _ => null
             };
         }
+    }
+
+    private static bool IsProModel(ReadOnlySpan<char> model)
+    {
+        const string token = "-pro";
+        var remaining = model;
+        while (!remaining.IsEmpty)
+        {
+            var idx = remaining.IndexOf(token, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+            {
+                return false;
+            }
+
+            var afterIdx = idx + token.Length;
+            if (afterIdx == remaining.Length || remaining[afterIdx] is '-' or '.')
+            {
+                return true;
+            }
+
+            remaining = remaining[(idx + 1)..];
+        }
+
+        return false;
     }
 
     private static bool IsGemini3OrLater(string model)

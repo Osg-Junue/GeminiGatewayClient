@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Net;
 using System.Text;
@@ -54,7 +55,7 @@ internal static class GeminiErrorParser
         }
 
         var details = ParseErrorObject(error);
-        var statusCode = details.Code is >= 100 and <= 599 ? (HttpStatusCode)details.Code.Value : httpStatusCode;
+        var statusCode = MapStatusCode(details.Code, details.Status, httpStatusCode);
 
         return new GeminiApiException(
             "The Gemini API reported an error in the response stream",
@@ -63,6 +64,67 @@ internal static class GeminiErrorParser
             details.Status,
             details.Message,
             details.RetryDelay);
+    }
+
+    private static HttpStatusCode MapStatusCode(int? code, string? rpcStatus, HttpStatusCode fallback)
+    {
+        if (code is >= 100 and <= 599)
+        {
+            return (HttpStatusCode)code.Value;
+        }
+
+        // Map canonical gRPC status codes (1..16) when returned in-stream instead of an HTTP status code.
+        switch (code)
+        {
+            case 3:
+            case 9:
+            case 11:
+                return HttpStatusCode.BadRequest;
+            case 4:
+                return HttpStatusCode.GatewayTimeout;
+            case 5:
+                return HttpStatusCode.NotFound;
+            case 6:
+            case 10:
+                return HttpStatusCode.Conflict;
+            case 7:
+                return HttpStatusCode.Forbidden;
+            case 8:
+                return HttpStatusCode.TooManyRequests;
+            case 12:
+                return HttpStatusCode.NotImplemented;
+            case 13:
+                return HttpStatusCode.InternalServerError;
+            case 14:
+                return HttpStatusCode.ServiceUnavailable;
+            case 16:
+                return HttpStatusCode.Unauthorized;
+        }
+
+        if (!string.IsNullOrEmpty(rpcStatus))
+        {
+            if (rpcStatus.Equals("RESOURCE_EXHAUSTED", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.TooManyRequests;
+            }
+
+            if (rpcStatus.Equals("UNAVAILABLE", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.ServiceUnavailable;
+            }
+
+            if (rpcStatus.Equals("DEADLINE_EXCEEDED", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.GatewayTimeout;
+            }
+
+            if (rpcStatus.Equals("INTERNAL", StringComparison.OrdinalIgnoreCase))
+            {
+                return HttpStatusCode.InternalServerError;
+            }
+        }
+
+        return fallback;
     }
 
     private static ErrorDetails Parse(string? body)
@@ -153,26 +215,36 @@ internal static class GeminiErrorParser
 
     private static async Task<string> ReadBoundedAsync(HttpContent content, CancellationToken cancellationToken)
     {
-        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true);
-
-        var buffer = new char[4096];
-        var builder = new StringBuilder();
-        var remaining = MaxErrorBodyChars;
-
-        while (remaining > 0)
+        var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using (stream.ConfigureAwait(false))
         {
-            var read = await reader.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true);
+
+            var buffer = ArrayPool<char>.Shared.Rent(4096);
+            try
             {
-                break;
+                var builder = new StringBuilder();
+                var remaining = MaxErrorBodyChars;
+
+                while (remaining > 0)
+                {
+                    var read = await reader.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    builder.Append(buffer, 0, read);
+                    remaining -= read;
+                }
+
+                return builder.ToString();
             }
-
-            builder.Append(buffer, 0, read);
-            remaining -= read;
+            finally
+            {
+                ArrayPool<char>.Shared.Return(buffer);
+            }
         }
-
-        return builder.ToString();
     }
 
     /// <summary>
@@ -193,6 +265,17 @@ internal static class GeminiErrorParser
             span = span[..^2];
             scale = 1.0;
         }
+        else if (span.EndsWith("us", StringComparison.OrdinalIgnoreCase) ||
+                 span.EndsWith("µs", StringComparison.OrdinalIgnoreCase))
+        {
+            span = span[..^2];
+            scale = 0.001;
+        }
+        else if (span.EndsWith("ns", StringComparison.OrdinalIgnoreCase))
+        {
+            span = span[..^2];
+            scale = 0.000001;
+        }
         else if (span.EndsWith("s", StringComparison.OrdinalIgnoreCase))
         {
             span = span[..^1];
@@ -211,7 +294,7 @@ internal static class GeminiErrorParser
         }
 
         var milliseconds = amount * scale;
-        if (milliseconds > TimeSpan.MaxValue.TotalMilliseconds)
+        if (milliseconds >= TimeSpan.MaxValue.TotalMilliseconds)
         {
             return false;
         }

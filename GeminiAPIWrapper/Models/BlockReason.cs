@@ -47,6 +47,12 @@ public enum BlockReason
     ImageSafety,
 
     /// <summary>
+    /// Prompt was blocked due to jailbreak or prompt-injection detection.
+    /// </summary>
+    [JsonStringEnumMemberName("JAILBREAK")]
+    Jailbreak,
+
+    /// <summary>
     /// Fallback value used when the server returns a block reason not yet defined in this version of the library.
     /// </summary>
     Unknown

@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace GeminiAPIWrapper.Http;
 
 /// <summary>
@@ -9,11 +11,21 @@ internal sealed class GeminiEndpoint
     private const string ModelsSegment = "models/";
 
     private readonly Uri _baseUri;
+    private readonly Uri? _defaultGenerateContentUri;
+    private readonly Uri? _defaultStreamSseUri;
+    private readonly Uri? _defaultStreamJsonUri;
 
     private GeminiEndpoint(Uri baseUri, string? defaultModel)
     {
         _baseUri = baseUri;
         DefaultModel = defaultModel;
+
+        if (ToResourcePath(defaultModel) is { } defaultResourcePath)
+        {
+            _defaultGenerateContentUri = BuildOperationUri(_baseUri, defaultResourcePath, "generateContent", serverSentEvents: false);
+            _defaultStreamSseUri = BuildOperationUri(_baseUri, defaultResourcePath, "streamGenerateContent", serverSentEvents: true);
+            _defaultStreamJsonUri = BuildOperationUri(_baseUri, defaultResourcePath, "streamGenerateContent", serverSentEvents: false);
+        }
     }
 
     /// <summary>
@@ -63,13 +75,34 @@ internal sealed class GeminiEndpoint
     /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultModel"/> is set.</exception>
     public Uri GetOperationUri(string? model, string operation, bool serverSentEvents)
     {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            if (_defaultGenerateContentUri is not null)
+            {
+                if (!serverSentEvents && string.Equals(operation, "generateContent", StringComparison.Ordinal))
+                {
+                    return _defaultGenerateContentUri;
+                }
+
+                if (string.Equals(operation, "streamGenerateContent", StringComparison.Ordinal))
+                {
+                    return serverSentEvents ? _defaultStreamSseUri! : _defaultStreamJsonUri!;
+                }
+            }
+        }
+
         var resourcePath = ToResourcePath(string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim())
             ?? throw new InvalidOperationException(
                 "No model was specified. Set GeminiClientOptions.Model or pass a model to the call (ChatOptions.ModelId for IChatClient).");
 
-        var builder = new UriBuilder(_baseUri)
+        return BuildOperationUri(_baseUri, resourcePath, operation, serverSentEvents);
+    }
+
+    private static Uri BuildOperationUri(Uri baseUri, string resourcePath, string operation, bool serverSentEvents)
+    {
+        var builder = new UriBuilder(baseUri)
         {
-            Path = $"{_baseUri.AbsolutePath.TrimEnd('/')}/{resourcePath}:{operation}"
+            Path = $"{baseUri.AbsolutePath.TrimEnd('/')}/{resourcePath}:{operation}"
         };
 
         if (serverSentEvents)
@@ -84,7 +117,7 @@ internal sealed class GeminiEndpoint
     /// <summary>
     /// Converts a model identifier to a URL path relative to the endpoint. Bare IDs (<c>gemini-2.5-flash</c>) become
     /// <c>models/gemini-2.5-flash</c>; resource names containing <c>/</c> (<c>models/x</c>, <c>tunedModels/x</c>) are used as-is.
-    /// Each segment is percent-encoded.
+    /// Each segment is percent-encoded without intermediate array allocations.
     /// </summary>
     private static string? ToResourcePath(string? model)
     {
@@ -93,8 +126,37 @@ internal sealed class GeminiEndpoint
             return null;
         }
 
-        var path = model.Contains('/') ? model.Trim('/') : ModelsSegment + model;
-        return string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
+        var span = model.AsSpan().Trim('/');
+        if (span.IsEmpty)
+        {
+            return null;
+        }
+
+        if (!span.Contains('/'))
+        {
+            return string.Concat(ModelsSegment, Uri.EscapeDataString(span));
+        }
+
+        var sb = new StringBuilder(span.Length + 8);
+        var first = true;
+        foreach (var range in span.Split('/'))
+        {
+            var segment = span[range];
+            if (segment.IsEmpty || segment.IsWhiteSpace())
+            {
+                throw new ArgumentException($"Model resource name '{model}' contains an empty path segment.", nameof(model));
+            }
+
+            if (!first)
+            {
+                sb.Append('/');
+            }
+
+            first = false;
+            sb.Append(Uri.EscapeDataString(segment));
+        }
+
+        return sb.ToString();
     }
 }
 

@@ -29,4 +29,10 @@ public sealed class FunctionCall
     [JsonPropertyName("args")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? Args { get; set; }
+
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 }

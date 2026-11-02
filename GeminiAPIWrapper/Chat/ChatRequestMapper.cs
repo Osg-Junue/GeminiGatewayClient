@@ -23,7 +23,18 @@ internal static class ChatRequestMapper
         JsonSerializerOptions toolSerializerOptions)
     {
         var template = options?.RawRepresentationFactory?.Invoke(client) as GenerateContentRequest;
-        var contents = template?.Contents is { Count: > 0 } existing ? new List<Content>(existing) : [];
+        var contents = new List<Content>(template?.Contents?.Count ?? 0);
+        if (template?.Contents is { Count: > 0 } existing)
+        {
+            for (var i = 0; i < existing.Count; i++)
+            {
+                if (existing[i] is { } existingContent)
+                {
+                    contents.Add(existingContent.Clone());
+                }
+            }
+        }
+
         var systemParts = new List<Part>();
 
         if (!string.IsNullOrWhiteSpace(options?.Instructions))
@@ -38,10 +49,14 @@ internal static class ChatRequestMapper
         {
             if (message.Role == ChatRole.System)
             {
-                systemParts.AddRange(message.Contents
-                    .OfType<TextContent>()
-                    .Where(t => !string.IsNullOrEmpty(t.Text))
-                    .Select(t => Part.FromText(t.Text)));
+                foreach (var contentItem in message.Contents)
+                {
+                    if (contentItem is TextContent { Text.Length: > 0 } sysText)
+                    {
+                        systemParts.Add(Part.FromText(sysText.Text));
+                    }
+                }
+
                 continue;
             }
 
@@ -203,16 +218,22 @@ internal static class ChatRequestMapper
     /// </summary>
     private sealed class FunctionCallRegistry
     {
-        private readonly Dictionary<string, (string Name, string? ApiId)> _calls = new(StringComparer.Ordinal);
+        private Dictionary<string, (string Name, string? ApiId)>? _calls;
 
-        public static FunctionCallRegistry Create(IEnumerable<ChatMessage> messages)
+        public static FunctionCallRegistry Create(IReadOnlyCollection<ChatMessage> messages)
         {
             var registry = new FunctionCallRegistry();
-            foreach (var call in messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>())
+            foreach (var message in messages)
             {
-                if (!string.IsNullOrEmpty(call.CallId) && !string.IsNullOrEmpty(call.Name))
+                foreach (var item in message.Contents)
                 {
-                    registry._calls[call.CallId] = (call.Name, GetApiId(call));
+                    if (item is FunctionCallContent call &&
+                        !string.IsNullOrEmpty(call.CallId) &&
+                        !string.IsNullOrEmpty(call.Name))
+                    {
+                        (registry._calls ??= new Dictionary<string, (string Name, string? ApiId)>(StringComparer.Ordinal))[call.CallId] =
+                            (call.Name, GetApiId(call));
+                    }
                 }
             }
 
@@ -223,13 +244,13 @@ internal static class ChatRequestMapper
         /// Returns the ID to send in <see cref="FunctionCall.Id"/>, or <c>null</c> when the ID was generated locally.
         /// </summary>
         public string? GetApiId(string callId) =>
-            !string.IsNullOrEmpty(callId) && _calls.TryGetValue(callId, out var call) ? call.ApiId : null;
+            !string.IsNullOrEmpty(callId) && _calls is not null && _calls.TryGetValue(callId, out var call) ? call.ApiId : null;
 
         /// <summary>
         /// Returns the function name and API call ID for a result. Unknown call IDs fall back to using the ID as the name.
         /// </summary>
         public (string Name, string? ApiId) Resolve(string callId) =>
-            _calls.TryGetValue(callId, out var call) ? call : (callId, null);
+            _calls is not null && _calls.TryGetValue(callId, out var call) ? call : (callId, null);
 
         private static string? GetApiId(FunctionCallContent call)
         {

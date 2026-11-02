@@ -26,9 +26,9 @@ internal static class ToolJsonConverter
     /// </summary>
     public static JsonElement ToResponseObject(object? result, JsonSerializerOptions options)
     {
-        if (result is JsonNode node)
+        if (result is JsonObject jsonObject)
         {
-            result = WriteElement(writer => node.WriteTo(writer));
+            return WriteElement(writer => jsonObject.WriteTo(writer));
         }
 
         switch (result)
@@ -39,7 +39,7 @@ internal static class ToolJsonConverter
             case IEnumerable<KeyValuePair<string, object?>> dictionary:
                 return WriteElement(writer => WriteObject(writer, dictionary, options));
 
-            case not null and not JsonElement and not string and not IEnumerable
+            case not null and not JsonElement and not JsonNode and not string and not IEnumerable
                 when TrySerialize(result, options, out var serialized) && serialized.ValueKind == JsonValueKind.Object:
                 return serialized;
 
@@ -112,7 +112,17 @@ internal static class ToolJsonConverter
             case TimeOnly time: writer.WriteStringValue(time.ToString("O", CultureInfo.InvariantCulture)); break;
             case TimeSpan span: writer.WriteStringValue(span.ToString("c", CultureInfo.InvariantCulture)); break;
             case Uri uri: writer.WriteStringValue(uri.ToString()); break;
-            case Enum enumValue: writer.WriteStringValue(enumValue.ToString()); break;
+            case Enum enumValue:
+                if (TrySerialize(enumValue, options, out var serializedEnum))
+                {
+                    serializedEnum.WriteTo(writer);
+                }
+                else
+                {
+                    writer.WriteStringValue(enumValue.ToString());
+                }
+
+                break;
             case byte[] bytes: writer.WriteBase64StringValue(bytes); break;
             case ReadOnlyMemory<byte> memory: writer.WriteBase64StringValue(memory.Span); break;
             case IEnumerable<KeyValuePair<string, object?>> dictionary: WriteObject(writer, dictionary, options); break;

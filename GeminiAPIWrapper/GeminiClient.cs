@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
@@ -81,18 +82,57 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 
         using var httpRequest = await CreateRequestMessageAsync(requestUri, request, serverSentEvents: false, cancellationToken).ConfigureAwait(false);
         using var httpResponse = await SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
+        using var watchdog = new StreamIdleWatchdog(_settings.StreamIdleTimeout, cancellationToken);
 
-        await using var stream = await httpResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await JsonSerializer
-                       .DeserializeAsync(stream, GeminiJsonContext.Default.GenerateContentResponse, cancellationToken)
-                       .ConfigureAwait(false)
-                   ?? throw new GeminiApiException("The Gemini API returned an empty (null) response body.", httpResponse.StatusCode);
+            var stream = await httpResponse.Content.ReadAsStreamAsync(watchdog.Token).ConfigureAwait(false);
+            await using (stream.ConfigureAwait(false))
+            {
+                var buffer = new ArrayBufferWriter<byte>(1024);
+                var rented = ArrayPool<byte>.Shared.Rent(4096);
+                try
+                {
+                    while (true)
+                    {
+                        int read;
+                        watchdog.BeforeRead();
+                        try
+                        {
+                            read = await stream.ReadAsync(rented.AsMemory(), watchdog.Token).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            watchdog.AfterRead();
+                        }
+
+                        if (read == 0)
+                        {
+                            break;
+                        }
+
+                        rented.AsSpan(0, read).CopyTo(buffer.GetSpan(read));
+                        buffer.Advance(read);
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rented);
+                }
+
+                return GeminiStreamReader.DeserializeUtf8Response(
+                    buffer.WrittenSpan,
+                    httpResponse.StatusCode,
+                    "The Gemini API returned an empty (null) response body.",
+                    "Failed to deserialize the Gemini API response.",
+                    "API request failed");
+            }
         }
-        catch (JsonException ex)
+        catch (OperationCanceledException ex) when (watchdog.HasTimedOut)
         {
-            throw new GeminiApiException("Failed to deserialize the Gemini API response.", httpResponse.StatusCode, null, ex);
+            throw new TimeoutException(
+                $"No data was received from the Gemini response within {watchdog.IdleTimeout} (GeminiClientOptions.StreamIdleTimeout).",
+                ex);
         }
     }
 
@@ -127,44 +167,53 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
     {
         using var httpRequest = await CreateRequestMessageAsync(requestUri, request, serverSentEvents, cancellationToken).ConfigureAwait(false);
         using var httpResponse = await SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
-        await using var stream = await httpResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var watchdog = new StreamIdleWatchdog(_settings.StreamIdleTimeout, cancellationToken);
-
-        await using var chunks = GeminiStreamReader
-            .ReadAsync(stream, _settings.StreamingFormat, httpResponse.StatusCode, watchdog)
-            .GetAsyncEnumerator(cancellationToken);
-
-        while (true)
+        var stream = await httpResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using (stream.ConfigureAwait(false))
         {
-            GenerateContentResponse chunk;
+            using var watchdog = new StreamIdleWatchdog(_settings.StreamIdleTimeout, cancellationToken);
+
+            var chunks = GeminiStreamReader
+                .ReadAsync(stream, _settings.StreamingFormat, httpResponse.StatusCode, watchdog)
+                .GetAsyncEnumerator(cancellationToken);
             try
             {
-                if (!await chunks.MoveNextAsync().ConfigureAwait(false))
+                while (true)
                 {
-                    yield break;
+                    GenerateContentResponse chunk;
+                    try
+                    {
+                        if (!await chunks.MoveNextAsync().ConfigureAwait(false))
+                        {
+                            yield break;
+                        }
+
+                        chunk = chunks.Current;
+                    }
+                    catch (OperationCanceledException ex) when (watchdog.HasTimedOut)
+                    {
+                        throw new TimeoutException(
+                            $"No data was received from the Gemini streaming response within {watchdog.IdleTimeout} (GeminiClientOptions.StreamIdleTimeout).",
+                            ex);
+                    }
+
+                    yield return chunk;
                 }
-
-                chunk = chunks.Current;
             }
-            catch (OperationCanceledException ex) when (watchdog.HasTimedOut)
+            finally
             {
-                throw new TimeoutException(
-                    $"No data was received from the Gemini streaming response within {watchdog.IdleTimeout} (GeminiClientOptions.StreamIdleTimeout).",
-                    ex);
+                await chunks.DisposeAsync().ConfigureAwait(false);
             }
-
-            yield return chunk;
         }
     }
 
     private Uri PrepareRequest(GenerateContentRequest request, string? model, string operation, bool serverSentEvents)
     {
         ArgumentNullException.ThrowIfNull(request);
-        request.Validate();
+        request.Validate(nameof(request));
         return _settings.Endpoint.GetOperationUri(model, operation, serverSentEvents);
     }
 
-    private async Task<HttpRequestMessage> CreateRequestMessageAsync(
+    private ValueTask<HttpRequestMessage> CreateRequestMessageAsync(
         Uri requestUri,
         GenerateContentRequest request,
         bool serverSentEvents,
@@ -180,7 +229,29 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                 message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
             }
 
-            await _settings.Headers.ApplyAsync(message, cancellationToken).ConfigureAwait(false);
+            var applyTask = _settings.Headers.ApplyAsync(message, cancellationToken);
+            if (applyTask.IsCompletedSuccessfully)
+            {
+                applyTask.GetAwaiter().GetResult();
+                return ValueTask.FromResult(message);
+            }
+
+            return CompleteRequestMessageAsync(message, applyTask);
+        }
+        catch
+        {
+            message.Dispose();
+            throw;
+        }
+    }
+
+    private static async ValueTask<HttpRequestMessage> CompleteRequestMessageAsync(
+        HttpRequestMessage message,
+        ValueTask applyTask)
+    {
+        try
+        {
+            await applyTask.ConfigureAwait(false);
             return message;
         }
         catch
@@ -202,8 +273,26 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         }
 
         using (response)
+        using (var watchdog = new StreamIdleWatchdog(_settings.StreamIdleTimeout, cancellationToken))
         {
-            throw await GeminiErrorParser.CreateFromResponseAsync(response, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                watchdog.BeforeRead();
+                try
+                {
+                    throw await GeminiErrorParser.CreateFromResponseAsync(response, watchdog.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    watchdog.AfterRead();
+                }
+            }
+            catch (OperationCanceledException ex) when (watchdog.HasTimedOut)
+            {
+                throw new TimeoutException(
+                    $"No data was received while reading the Gemini error response body within {watchdog.IdleTimeout} (GeminiClientOptions.StreamIdleTimeout).",
+                    ex);
+            }
         }
     }
 

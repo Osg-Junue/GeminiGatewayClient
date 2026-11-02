@@ -283,5 +283,99 @@ public class SerializationTests
             Contents = [null!]
         };
         Assert.Throws<ArgumentException>(() => nullContentRequest.Validate());
+
+        var nullPartRequest = new GenerateContentRequest
+        {
+            Contents = [new Content { Role = Role.User, Parts = [null!] }]
+        };
+        Assert.Throws<ArgumentException>(() => nullPartRequest.Validate());
+    }
+
+    [Fact]
+    public void VideoOffset_SerializesAsProtobufDurationString_AndDeserializesBothStringAndObjectFormats()
+    {
+        var request = new GenerateContentRequest
+        {
+            Contents =
+            [
+                new Content
+                {
+                    Role = Role.User,
+                    Parts =
+                    [
+                        new Part
+                        {
+                            FileData = new FileData { FileUri = "https://example.com/video.mp4", MimeType = "video/mp4" },
+                            VideoMetadata = new VideoMetadata
+                            {
+                                StartOffset = new VideoOffset { Seconds = 10 },
+                                EndOffset = VideoOffset.FromTimeSpan(TimeSpan.FromSeconds(42.5)),
+                                Fps = 1.0
+                            }
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var json = JsonSerializer.Serialize(request, GeminiJsonContext.Default.GenerateContentRequest);
+        using var doc = JsonDocument.Parse(json);
+        var videoMeta = doc.RootElement.GetProperty("contents")[0].GetProperty("parts")[0].GetProperty("videoMetadata");
+        Assert.Equal("10s", videoMeta.GetProperty("startOffset").GetString());
+        Assert.Equal("42.5s", videoMeta.GetProperty("endOffset").GetString());
+
+        var roundTripped = JsonSerializer.Deserialize(json, GeminiJsonContext.Default.GenerateContentRequest);
+        var rtMeta = roundTripped!.Contents[0].Parts[0].VideoMetadata!;
+        Assert.Equal(10, rtMeta.StartOffset?.Seconds);
+        Assert.Null(rtMeta.StartOffset?.Nanos);
+        Assert.Equal(42, rtMeta.EndOffset?.Seconds);
+        Assert.Equal(500_000_000, rtMeta.EndOffset?.Nanos);
+        Assert.Equal(TimeSpan.FromSeconds(42.5), rtMeta.EndOffset?.ToTimeSpan());
+
+        const string objectFormatJson = """
+            {
+              "contents": [
+                {
+                  "role": "user",
+                  "parts": [
+                    {
+                      "text": "clip",
+                      "videoMetadata": {
+                        "startOffset": { "seconds": 5, "nanos": 250000000 },
+                        "endOffset": "15.75s"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+
+        var parsedFromBoth = JsonSerializer.Deserialize(objectFormatJson, GeminiJsonContext.Default.GenerateContentRequest);
+        var parsedMeta = parsedFromBoth!.Contents[0].Parts[0].VideoMetadata!;
+        Assert.Equal(5, parsedMeta.StartOffset?.Seconds);
+        Assert.Equal(250_000_000, parsedMeta.StartOffset?.Nanos);
+        Assert.Equal(15, parsedMeta.EndOffset?.Seconds);
+        Assert.Equal(750_000_000, parsedMeta.EndOffset?.Nanos);
+    }
+
+    [Fact]
+    public void NullCollectionsInJson_NormalizeToEmptyLists_InsteadOfNull()
+    {
+        const string jsonWithNullArrays = """
+            {
+              "candidates": null,
+              "promptFeedback": {
+                "safetyRatings": null
+              }
+            }
+            """;
+
+        var response = JsonSerializer.Deserialize(jsonWithNullArrays, GeminiJsonContext.Default.GenerateContentResponse);
+        Assert.NotNull(response);
+        Assert.NotNull(response.Candidates);
+        Assert.Empty(response.Candidates);
+        Assert.NotNull(response.PromptFeedback?.SafetyRatings);
+        Assert.Empty(response.PromptFeedback.SafetyRatings);
     }
 }

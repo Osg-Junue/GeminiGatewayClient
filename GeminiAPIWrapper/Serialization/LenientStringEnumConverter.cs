@@ -16,13 +16,13 @@ namespace GeminiAPIWrapper.Serialization;
 public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields)] TEnum> : JsonConverter<TEnum>
     where TEnum : struct, Enum
 {
-    private static readonly FrozenDictionary<TEnum, string> s_toWire;
+    private static readonly FrozenDictionary<TEnum, JsonEncodedText> s_toWire;
     private static readonly FrozenDictionary<string, TEnum> s_fromWire;
     private static readonly TEnum s_unknownValue;
 
     static LenientStringEnumConverter()
     {
-        var toWire = new Dictionary<TEnum, string>();
+        var toWire = new Dictionary<TEnum, JsonEncodedText>();
         var fromWire = new Dictionary<string, TEnum>(StringComparer.OrdinalIgnoreCase);
         TEnum unknown = default;
 
@@ -37,13 +37,13 @@ public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(Dynam
             {
                 unknown = value;
                 var unknownWire = wireAttr?.Name ?? "UNKNOWN";
-                toWire[value] = unknownWire;
+                toWire[value] = JsonEncodedText.Encode(unknownWire);
                 fromWire.TryAdd(unknownWire, value);
                 fromWire.TryAdd(name, value);
                 continue;
             }
 
-            toWire[value] = wire;
+            toWire[value] = JsonEncodedText.Encode(wire);
             fromWire[wire] = value;
             fromWire.TryAdd(name, value);
         }

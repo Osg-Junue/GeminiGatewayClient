@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace GeminiAPIWrapper.Models;
@@ -24,4 +25,10 @@ public sealed class PublicationDate
     /// </summary>
     [JsonPropertyName("day")]
     public int? Day { get; set; }
+
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 }

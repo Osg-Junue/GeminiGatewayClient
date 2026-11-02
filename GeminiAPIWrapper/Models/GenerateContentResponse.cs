@@ -15,7 +15,11 @@ public sealed class GenerateContentResponse
     /// May be empty when the prompt was blocked (inspect <see cref="PromptFeedback"/>).
     /// </summary>
     [JsonPropertyName("candidates")]
-    public IList<Candidate> Candidates { get; set; } = [];
+    public IList<Candidate> Candidates
+    {
+        get => field;
+        set => field = value ?? [];
+    } = [];
 
     /// <summary>
     /// Optional. Content-filtering metadata and block reason for the input prompt.

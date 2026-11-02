@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace GeminiAPIWrapper.Http;
 
 /// <summary>
@@ -11,13 +13,15 @@ internal sealed class GeminiClientSettings
         GeminiRequestHeaders headers,
         TimeSpan timeout,
         TimeSpan? streamIdleTimeout,
-        GeminiStreamingFormat streamingFormat)
+        GeminiStreamingFormat streamingFormat,
+        JsonSerializerOptions? toolSerializerOptions)
     {
         Endpoint = endpoint;
         Headers = headers;
         Timeout = timeout;
         StreamIdleTimeout = streamIdleTimeout;
         StreamingFormat = streamingFormat;
+        ToolSerializerOptions = toolSerializerOptions;
     }
 
     public GeminiEndpoint Endpoint { get; }
@@ -29,6 +33,8 @@ internal sealed class GeminiClientSettings
     public TimeSpan? StreamIdleTimeout { get; }
 
     public GeminiStreamingFormat StreamingFormat { get; }
+
+    public JsonSerializerOptions? ToolSerializerOptions { get; }
 
     /// <summary>
     /// Validates <paramref name="options"/> and captures an immutable snapshot.
@@ -59,7 +65,8 @@ internal sealed class GeminiClientSettings
             GeminiRequestHeaders.Create(options),
             options.Timeout,
             options.StreamIdleTimeout,
-            options.StreamingFormat);
+            options.StreamingFormat,
+            options.ToolSerializerOptions);
     }
 
     private static bool IsValidTimeout(TimeSpan value) => value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan;

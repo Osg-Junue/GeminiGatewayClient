@@ -131,7 +131,7 @@ internal static class ChatOptionsMapper
             };
         }
 
-        if (thinking is not { ThinkingLevel: null, ThinkingBudget: null, IncludeThoughts: null })
+        if (thinking is not { ThinkingLevel: null, ThinkingBudget: null, IncludeThoughts: null, ExtensionData: null })
         {
             config.ThinkingConfig = thinking;
         }
@@ -225,7 +225,7 @@ internal static class ChatOptionsMapper
 
         if (schema.TryGetProperty("properties", out var properties))
         {
-            return properties.ValueKind == JsonValueKind.Object && properties.EnumerateObject().Any()
+            return properties.ValueKind == JsonValueKind.Object && properties.EnumerateObject().MoveNext()
                 ? schema.Clone()
                 : null;
         }

@@ -151,22 +151,28 @@ public sealed class GenerationConfig
             clone.StopSequences = [.. StopSequences];
         }
 
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
         return clone;
     }
 
     /// <summary>
     /// Validates mutually exclusive settings.
     /// </summary>
+    /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
     /// <exception cref="ArgumentException">Mutually exclusive members are both set.</exception>
-    internal void Validate()
+    internal void Validate(string paramName = "request")
     {
         if (ResponseSchema is not null && ResponseJsonSchema is not null)
         {
             throw new ArgumentException(
                 "GenerationConfig.ResponseSchema and GenerationConfig.ResponseJsonSchema are mutually exclusive and cannot both be set.",
-                "request");
+                paramName);
         }
 
-        ThinkingConfig?.Validate();
+        ThinkingConfig?.Validate(paramName);
     }
 }

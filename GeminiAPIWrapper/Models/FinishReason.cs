@@ -77,10 +77,46 @@ public enum FinishReason
     ImageSafety,
 
     /// <summary>
+    /// Image generation stopped because the generated images violated prohibited content policies.
+    /// </summary>
+    [JsonStringEnumMemberName("IMAGE_PROHIBITED_CONTENT")]
+    ImageProhibitedContent,
+
+    /// <summary>
+    /// Image generation stopped because of other miscellaneous issues.
+    /// </summary>
+    [JsonStringEnumMemberName("IMAGE_OTHER")]
+    ImageOther,
+
+    /// <summary>
+    /// Image generation stopped because the generated image flagged recitation checks.
+    /// </summary>
+    [JsonStringEnumMemberName("IMAGE_RECITATION")]
+    ImageRecitation,
+
+    /// <summary>
+    /// The model was expected to generate an image, but none was generated.
+    /// </summary>
+    [JsonStringEnumMemberName("NO_IMAGE")]
+    NoImage,
+
+    /// <summary>
     /// Model generated a tool call when no tools were enabled or expected.
     /// </summary>
     [JsonStringEnumMemberName("UNEXPECTED_TOOL_CALL")]
     UnexpectedToolCall,
+
+    /// <summary>
+    /// The model called too many tools consecutively, stopping execution.
+    /// </summary>
+    [JsonStringEnumMemberName("TOO_MANY_TOOL_CALLS")]
+    TooManyToolCalls,
+
+    /// <summary>
+    /// Request was missing a required <c>thoughtSignature</c> on a multi-turn thinking/tool request.
+    /// </summary>
+    [JsonStringEnumMemberName("MISSING_THOUGHT_SIGNATURE")]
+    MissingThoughtSignature,
 
     /// <summary>
     /// Unknown or uncategorized reason returned by the server (<c>OTHER</c>).

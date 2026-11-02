@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using GeminiAPIWrapper.Serialization;
 
@@ -22,6 +23,12 @@ public sealed class FunctionCallingConfig
     [JsonPropertyName("allowedFunctionNames")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IList<string>? AllowedFunctionNames { get; set; }
+
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 /// <summary>

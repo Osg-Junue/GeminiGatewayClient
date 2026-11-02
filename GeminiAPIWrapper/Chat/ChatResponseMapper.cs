@@ -10,7 +10,7 @@ internal static class ChatResponseMapper
 {
     public static ChatResponse ToChatResponse(GenerateContentResponse response, string? modelId)
     {
-        var candidate = response.Candidates.FirstOrDefault();
+        var candidate = response.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
         var contents = MapContents(candidate, out var hasFunctionCall);
 
         var message = new ChatMessage(ChatRole.Assistant, contents)
@@ -36,7 +36,7 @@ internal static class ChatResponseMapper
     /// </summary>
     public static ChatResponseUpdate ToChatResponseUpdate(GenerateContentResponse chunk, string? modelId)
     {
-        var candidate = chunk.Candidates.FirstOrDefault();
+        var candidate = chunk.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
         var contents = MapContents(candidate, out var hasFunctionCall);
 
         return new ChatResponseUpdate(ChatRole.Assistant, contents)
@@ -89,7 +89,7 @@ internal static class ChatResponseMapper
                     break;
 
                 case { Thought: true }:
-                case { ThoughtSignature: { Length: > 0 }, Text: null, InlineData: null, FileData: null }:
+                case { ThoughtSignature: { Length: > 0 }, Text: null, InlineData: null, FileData: null, ExecutableCode: null, CodeExecutionResult: null, FunctionResponse: null }:
                     contents.Add(new TextReasoningContent(part.Text ?? string.Empty)
                     {
                         ProtectedData = part.ThoughtSignature,
@@ -126,6 +126,12 @@ internal static class ChatResponseMapper
                     };
                     AttachThoughtSignature(uriContent, part.ThoughtSignature);
                     contents.Add(uriContent);
+                    break;
+
+                case { ExecutableCode: not null } or { CodeExecutionResult: not null }:
+                    var codeContent = new AIContent { RawRepresentation = part };
+                    AttachThoughtSignature(codeContent, part.ThoughtSignature);
+                    contents.Add(codeContent);
                     break;
             }
         }
@@ -183,8 +189,9 @@ internal static class ChatResponseMapper
             FinishReason.Stop => ChatFinishReason.Stop,
             FinishReason.MaxTokens => ChatFinishReason.Length,
             FinishReason.Safety or FinishReason.Recitation or FinishReason.BlockList
-                or FinishReason.ProhibitedContent or FinishReason.Spii or FinishReason.ImageSafety => ChatFinishReason.ContentFilter,
-            FinishReason.MalformedFunctionCall or FinishReason.UnexpectedToolCall => ChatFinishReason.ToolCalls,
+                or FinishReason.ProhibitedContent or FinishReason.Spii or FinishReason.ImageSafety
+                or FinishReason.ImageProhibitedContent or FinishReason.ImageRecitation => ChatFinishReason.ContentFilter,
+            FinishReason.MalformedFunctionCall or FinishReason.UnexpectedToolCall or FinishReason.TooManyToolCalls => ChatFinishReason.ToolCalls,
             _ => null
         };
     }

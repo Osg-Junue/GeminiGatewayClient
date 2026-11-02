@@ -37,7 +37,11 @@ public sealed class Candidate
     /// Safety ratings evaluated for this candidate response.
     /// </summary>
     [JsonPropertyName("safetyRatings")]
-    public IList<SafetyRating> SafetyRatings { get; set; } = [];
+    public IList<SafetyRating> SafetyRatings
+    {
+        get => field;
+        set => field = value ?? [];
+    } = [];
 
     /// <summary>
     /// Number of tokens in this candidate response.

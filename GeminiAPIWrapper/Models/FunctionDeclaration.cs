@@ -57,19 +57,26 @@ public sealed class FunctionDeclaration
     public JsonElement? ResponseJsonSchema { get; set; }
 
     /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    /// <summary>
     /// Validates mutually exclusive schema members.
     /// </summary>
+    /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
     /// <exception cref="ArgumentException">Mutually exclusive members are both set.</exception>
-    internal void Validate()
+    internal void Validate(string paramName = "request")
     {
         if (Parameters is not null && ParametersJsonSchema is not null)
         {
-            throw new ArgumentException($"FunctionDeclaration '{Name}' cannot set both Parameters and ParametersJsonSchema.", "request");
+            throw new ArgumentException($"FunctionDeclaration '{Name}' cannot set both Parameters and ParametersJsonSchema.", paramName);
         }
 
         if (Response is not null && ResponseJsonSchema is not null)
         {
-            throw new ArgumentException($"FunctionDeclaration '{Name}' cannot set both Response and ResponseJsonSchema.", "request");
+            throw new ArgumentException($"FunctionDeclaration '{Name}' cannot set both Response and ResponseJsonSchema.", paramName);
         }
     }
 }

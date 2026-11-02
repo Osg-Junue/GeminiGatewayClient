@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using GeminiAPIWrapper.Serialization;
 
@@ -27,6 +28,12 @@ public sealed class SafetySetting
     [JsonPropertyName("method")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public HarmBlockMethod? Method { get; set; }
+
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 /// <summary>

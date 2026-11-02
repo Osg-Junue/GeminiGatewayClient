@@ -591,6 +591,75 @@ public class GeminiClientTests
         Assert.Equal("Hello from Gemini!", response.Text);
     }
 
+    [Fact]
+    public async Task GenerateContentAsync_StalledBodyAfterHeaders_ThrowsTimeoutExceptionAfterStreamIdleTimeout()
+    {
+        using var handler = new RecordingHandler((_, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StallingStreamContent("{\"candidates\":[")
+            };
+            return Task.FromResult(response);
+        });
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key",
+            StreamIdleTimeout = TimeSpan.FromMilliseconds(150)
+        }, httpClient);
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.GenerateContentAsync("Hi"));
+    }
+
+    [Fact]
+    public async Task GenerateContentAsync_MalformedJsonOnHttp200_IncludesRawBodyInErrorContent()
+    {
+        const string gatewayHtml = "<html><body>502 Bad Gateway</body></html>";
+        using var handler = new RecordingHandler(gatewayHtml, HttpStatusCode.OK, contentType: "text/html");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("Hi"));
+        Assert.IsAssignableFrom<JsonException>(ex.InnerException);
+        Assert.Equal(gatewayHtml, ex.ErrorContent);
+    }
+
+    [Fact]
+    public async Task Stream_ErrorPayloadWithErrorPropertyNotFirst_ThrowsGeminiApiException()
+    {
+        const string sseErrorWithLeadingProp = """
+            data: {"id":"req-99","error":{"code":8,"message":"Quota exceeded","status":"RESOURCE_EXHAUSTED","details":[{"retryDelay":"500us"}]}}
+
+            """;
+
+        using var handler = new RecordingHandler(sseErrorWithLeadingProp, HttpStatusCode.OK, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
+        {
+            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
+            {
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, ex.StatusCode);
+        Assert.True(ex.IsTransient);
+        Assert.Equal("RESOURCE_EXHAUSTED", ex.ErrorStatus);
+        Assert.Equal("Quota exceeded", ex.ErrorMessage);
+        Assert.NotNull(ex.RetryAfter);
+    }
+
     private sealed class StallingStreamContent(string initialChunk) : HttpContent
     {
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>

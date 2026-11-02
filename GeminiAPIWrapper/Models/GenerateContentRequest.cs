@@ -96,25 +96,48 @@ public sealed class GenerateContentRequest
     }
 
     /// <summary>
-    /// Creates a shallow copy of this request that uses <paramref name="contents"/> as its conversation turns.
-    /// Every other member (including members added in future versions) is copied automatically.
+    /// Creates a copy of this request that uses <paramref name="contents"/> as its conversation turns
+    /// with isolated top-level collection and configuration containers.
     /// </summary>
     internal GenerateContentRequest CloneWithContents(IList<Content> contents)
     {
         var clone = (GenerateContentRequest)MemberwiseClone();
         clone.Contents = contents;
+        clone.SystemInstruction = SystemInstruction?.Clone();
+        clone.GenerationConfig = GenerationConfig?.Clone();
+        if (Tools is not null)
+        {
+            clone.Tools = [.. Tools];
+        }
+
+        if (SafetySettings is not null)
+        {
+            clone.SafetySettings = [.. SafetySettings];
+        }
+
+        if (Labels is not null)
+        {
+            clone.Labels = new Dictionary<string, string>(Labels, StringComparer.Ordinal);
+        }
+
+        if (ExtensionData is not null)
+        {
+            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
+        }
+
         return clone;
     }
 
     /// <summary>
     /// Validates client-side invariants that the API would otherwise reject with HTTP 400.
     /// </summary>
+    /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
     /// <exception cref="ArgumentException">The request is invalid.</exception>
-    internal void Validate()
+    internal void Validate(string paramName = "request")
     {
         if (Contents is null || Contents.Count == 0)
         {
-            throw new ArgumentException("GenerateContentRequest.Contents must contain at least one Content item.", "request");
+            throw new ArgumentException("GenerateContentRequest.Contents must contain at least one Content item.", paramName);
         }
 
         for (var i = 0; i < Contents.Count; i++)
@@ -122,17 +145,28 @@ public sealed class GenerateContentRequest
             var content = Contents[i];
             if (content is null)
             {
-                throw new ArgumentException($"GenerateContentRequest.Contents[{i}] cannot be null.", "request");
+                throw new ArgumentException($"GenerateContentRequest.Contents[{i}] cannot be null.", paramName);
             }
 
             if ((content.Parts is null || content.Parts.Count == 0) &&
                 (content.ExtensionData is null || content.ExtensionData.Count == 0))
             {
-                throw new ArgumentException($"GenerateContentRequest.Contents[{i}].Parts must contain at least one Part item.", "request");
+                throw new ArgumentException($"GenerateContentRequest.Contents[{i}].Parts must contain at least one Part item.", paramName);
+            }
+
+            if (content.Parts is not null)
+            {
+                for (var j = 0; j < content.Parts.Count; j++)
+                {
+                    if (content.Parts[j] is null)
+                    {
+                        throw new ArgumentException($"GenerateContentRequest.Contents[{i}].Parts[{j}] cannot be null.", paramName);
+                    }
+                }
             }
         }
 
-        GenerationConfig?.Validate();
+        GenerationConfig?.Validate(paramName);
 
         if (Tools is null)
         {
@@ -150,10 +184,10 @@ public sealed class GenerateContentRequest
             {
                 if (declaration is null)
                 {
-                    throw new ArgumentException("Tool.FunctionDeclarations cannot contain null elements.", "request");
+                    throw new ArgumentException("Tool.FunctionDeclarations cannot contain null elements.", paramName);
                 }
 
-                declaration.Validate();
+                declaration.Validate(paramName);
             }
         }
     }

@@ -37,9 +37,16 @@ internal static class GeminiStreamReader
 
         while (true)
         {
+            string? line;
             watchdog.BeforeRead();
-            var line = await reader.ReadLineAsync(watchdog.Token).ConfigureAwait(false);
-            watchdog.AfterRead();
+            try
+            {
+                line = await reader.ReadLineAsync(watchdog.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                watchdog.AfterRead();
+            }
 
             // End of stream or blank line: dispatch the buffered event (if any).
             if (line is null || line.Length == 0)
@@ -83,14 +90,21 @@ internal static class GeminiStreamReader
                 }
 
                 // A proxy or upstream server may return a raw JSON error payload with HTTP 200 instead of SSE framing.
+                // Cap buffered non-SSE bytes at MaxErrorBodyChars * 4 to prevent unbounded memory growth on unexpected responses.
                 if (!sawSseEvent)
                 {
-                    Encoding.UTF8.GetBytes(line.AsSpan(), nonSseBuffer ??= new ArrayBufferWriter<byte>(256));
+                    nonSseBuffer ??= new ArrayBufferWriter<byte>(256);
+                    const int maxNonSseBytes = GeminiErrorParser.MaxErrorBodyChars * 4;
+                    if (nonSseBuffer.WrittenCount < maxNonSseBytes)
+                    {
+                        Encoding.UTF8.GetBytes(line.AsSpan(), nonSseBuffer);
+                    }
                 }
 
                 continue;
             }
 
+            sawSseEvent = true;
             var payload = line.AsSpan(5);
             if (payload.Length > 0 && payload[0] == ' ')
             {
@@ -99,7 +113,6 @@ internal static class GeminiStreamReader
 
             if (payload.SequenceEqual("[DONE]"))
             {
-                sawSseEvent = true;
                 continue;
             }
 
@@ -113,7 +126,12 @@ internal static class GeminiStreamReader
         }
     }
 
-    private static GenerateContentResponse DeserializeUtf8Chunk(ReadOnlySpan<byte> utf8Json, HttpStatusCode statusCode)
+    internal static GenerateContentResponse DeserializeUtf8Response(
+        ReadOnlySpan<byte> utf8Json,
+        HttpStatusCode statusCode,
+        string emptyMessage,
+        string parseFailureMessage,
+        string? errorStreamMessage = null)
     {
         try
         {
@@ -129,27 +147,99 @@ internal static class GeminiStreamReader
 
                 if (GeminiErrorParser.TryCreateFromStreamPayload(root, statusCode) is { } streamError)
                 {
+                    if (errorStreamMessage is not null && !string.Equals(errorStreamMessage, "The Gemini API reported an error in the response stream", StringComparison.Ordinal))
+                    {
+                        throw new GeminiApiException(
+                            errorStreamMessage,
+                            streamError.StatusCode,
+                            streamError.ErrorContent,
+                            streamError.ErrorStatus,
+                            streamError.ErrorMessage,
+                            streamError.RetryAfter);
+                    }
+
                     throw streamError;
                 }
             }
 
             return JsonSerializer.Deserialize(utf8Json, GeminiJsonContext.Default.GenerateContentResponse)
-                   ?? throw new GeminiApiException("Received an empty (null) Gemini streaming chunk.", statusCode);
+                   ?? throw new GeminiApiException(emptyMessage, statusCode);
         }
         catch (JsonException ex)
         {
-            throw new GeminiApiException("Failed to deserialize a Gemini streaming chunk.", statusCode, null, ex);
+            var rawPreview = ExtractBoundedString(utf8Json);
+            throw new GeminiApiException(parseFailureMessage, statusCode, rawPreview, ex);
         }
     }
 
-    private static bool LooksLikeErrorPayload(ReadOnlySpan<byte> utf8Json)
+    private static GenerateContentResponse DeserializeUtf8Chunk(ReadOnlySpan<byte> utf8Json, HttpStatusCode statusCode) =>
+        DeserializeUtf8Response(
+            utf8Json,
+            statusCode,
+            "Received an empty (null) Gemini streaming chunk.",
+            "Failed to deserialize a Gemini streaming chunk.");
+
+    private static string? ExtractBoundedString(ReadOnlySpan<byte> utf8Bytes)
+    {
+        if (utf8Bytes.IsEmpty)
+        {
+            return null;
+        }
+
+        var maxBytes = Math.Min(utf8Bytes.Length, GeminiErrorParser.MaxErrorBodyChars * 4);
+        var text = Encoding.UTF8.GetString(utf8Bytes[..maxBytes]);
+        return text.Length > GeminiErrorParser.MaxErrorBodyChars
+            ? text[..GeminiErrorParser.MaxErrorBodyChars]
+            : text;
+    }
+
+    internal static bool LooksLikeErrorPayload(ReadOnlySpan<byte> utf8Json)
     {
         var reader = new Utf8JsonReader(utf8Json);
+        if (!reader.Read())
+        {
+            return false;
+        }
+
+        if (reader.TokenType == JsonTokenType.StartArray)
+        {
+            if (!reader.Read())
+            {
+                return false;
+            }
+        }
+
+        if (reader.TokenType != JsonTokenType.StartObject)
+        {
+            return false;
+        }
+
         while (reader.Read())
         {
-            if (reader.TokenType == JsonTokenType.PropertyName)
+            if (reader.TokenType == JsonTokenType.EndObject)
             {
-                return reader.ValueTextEquals("error"u8);
+                return false;
+            }
+
+            if (reader.TokenType != JsonTokenType.PropertyName)
+            {
+                return false;
+            }
+
+            var isErrorProp = reader.ValueTextEquals("error"u8);
+            if (!reader.Read())
+            {
+                return false;
+            }
+
+            if (isErrorProp)
+            {
+                return reader.TokenType == JsonTokenType.StartObject;
+            }
+
+            if (!reader.TrySkip())
+            {
+                return false;
             }
         }
 
@@ -161,32 +251,45 @@ internal static class GeminiStreamReader
         HttpStatusCode statusCode,
         StreamIdleWatchdog watchdog)
     {
-        await using var enumerator = JsonSerializer
+        var enumerator = JsonSerializer
             .DeserializeAsyncEnumerable(stream, GeminiJsonContext.Default.JsonElement, watchdog.Token)
             .GetAsyncEnumerator(watchdog.Token);
-
-        while (true)
+        try
         {
-            GenerateContentResponse current;
-            try
+            while (true)
             {
-                watchdog.BeforeRead();
-                var hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
-                watchdog.AfterRead();
-
-                if (!hasNext)
+                GenerateContentResponse current;
+                try
                 {
-                    yield break;
+                    bool hasNext;
+                    watchdog.BeforeRead();
+                    try
+                    {
+                        hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        watchdog.AfterRead();
+                    }
+
+                    if (!hasNext)
+                    {
+                        yield break;
+                    }
+
+                    current = ToResponse(enumerator.Current, statusCode);
+                }
+                catch (JsonException ex)
+                {
+                    throw new GeminiApiException("Failed to deserialize a Gemini streaming chunk.", statusCode, null, ex);
                 }
 
-                current = ToResponse(enumerator.Current, statusCode);
+                yield return current;
             }
-            catch (JsonException ex)
-            {
-                throw new GeminiApiException("Failed to deserialize a Gemini streaming chunk.", statusCode, null, ex);
-            }
-
-            yield return current;
+        }
+        finally
+        {
+            await enumerator.DisposeAsync().ConfigureAwait(false);
         }
     }
 

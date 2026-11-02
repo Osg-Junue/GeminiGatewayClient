@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace GeminiAPIWrapper.Models;
@@ -14,8 +15,21 @@ public sealed class TokenLogProbability
     public string Token { get; set; } = "";
 
     /// <summary>
+    /// Optional. The vocabulary token ID corresponding to <see cref="Token"/>.
+    /// </summary>
+    [JsonPropertyName("tokenId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TokenId { get; set; }
+
+    /// <summary>
     /// Natural log probability of <see cref="Token"/> at its decoding step.
     /// </summary>
     [JsonPropertyName("logProbability")]
     public float LogProbability { get; set; }
+
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 }

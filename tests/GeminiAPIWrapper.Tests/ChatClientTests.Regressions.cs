@@ -448,4 +448,90 @@ public partial class ChatClientTests
         var response = await geminiClient.GenerateContentAsync("Direct after adapter dispose");
         Assert.Equal("Hello from Gemini!", response.Text);
     }
+
+    [Fact]
+    public async Task IChatClient_RawRepresentationFactory_DoesNotMutateTemplateContentParts()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var templateTurn = Content.FromText("Template prefix", Role.User);
+        var sharedTemplate = new GenerateContentRequest
+        {
+            Contents = [templateTurn]
+        };
+
+        var options = new ChatOptions
+        {
+            RawRepresentationFactory = _ => sharedTemplate
+        };
+
+        await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Call 1")], options);
+        await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Call 2")], options);
+
+        // Template turn Parts must remain untouched across calls
+        Assert.Single(templateTurn.Parts);
+        Assert.Equal("Template prefix", templateTurn.Parts[0].Text);
+    }
+
+    [Fact]
+    public async Task IChatClient_ExecutableCodeWithThoughtSignature_PreservesCodePartOnRoundTrip()
+    {
+        const string codeResponseJson = """
+            {
+              "candidates": [
+                {
+                  "index": 0,
+                  "content": {
+                    "role": "model",
+                    "parts": [
+                      {
+                        "executableCode": {
+                          "language": "PYTHON",
+                          "code": "print(6 * 7)"
+                        },
+                        "thoughtSignature": "sig-exec-code"
+                      },
+                      {
+                        "codeExecutionResult": {
+                          "outcome": "OUTCOME_OK",
+                          "output": "42\n"
+                        }
+                      },
+                      {
+                        "text": "The answer is 42."
+                      }
+                    ]
+                  },
+                  "finishReason": "STOP"
+                }
+              ]
+            }
+            """;
+
+        using var handler = new RecordingHandler(codeResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var first = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Compute 6*7")]);
+        Assert.Equal(3, first.Messages[0].Contents.Count);
+
+        await chatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Compute 6*7"),
+            first.Messages[0],
+            new ChatMessage(ChatRole.User, "Now multiply by 2")
+        ]);
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var modelParts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
+        Assert.Equal(3, modelParts.GetArrayLength());
+        Assert.Equal("print(6 * 7)", modelParts[0].GetProperty("executableCode").GetProperty("code").GetString());
+        Assert.Equal("sig-exec-code", modelParts[0].GetProperty("thoughtSignature").GetString());
+        Assert.Equal("42\n", modelParts[1].GetProperty("codeExecutionResult").GetProperty("output").GetString());
+    }
 }

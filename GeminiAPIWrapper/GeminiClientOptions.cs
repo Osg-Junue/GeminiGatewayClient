@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 
 namespace GeminiAPIWrapper;
 
@@ -99,21 +100,37 @@ public sealed class GeminiClientOptions
     /// Extra request headers sent with every call (for example gateway authentication, routing, or tracing headers).
     /// Must not duplicate <see cref="ApiKeyHeader"/> (when a credential is configured) or contain content headers such as <c>Content-Type</c>.
     /// </summary>
-    public IDictionary<string, string> AdditionalHeaders { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public IDictionary<string, string> AdditionalHeaders
+    {
+        get => field;
+        set => field = value ?? throw new ArgumentNullException(nameof(value));
+    } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Time allowed until response headers arrive. Applied to the <see cref="HttpClient"/> created internally and to clients
     /// created by <c>AddGeminiClient</c>; ignored when you pass your own <see cref="HttpClient"/>.
     /// Must be positive or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>. Defaults to <see cref="DefaultTimeout"/>.
     /// </summary>
-    public TimeSpan Timeout { get; set; } = DefaultTimeout;
+    public TimeSpan Timeout
+    {
+        get => field;
+        set => field = value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.Timeout must be positive or Timeout.InfiniteTimeSpan.");
+    } = DefaultTimeout;
 
     /// <summary>
     /// Maximum time to wait for the next chunk of a streaming response before failing with <see cref="TimeoutException"/>.
     /// Defaults to <see cref="DefaultStreamIdleTimeout"/> (2 minutes). Set to <c>null</c> or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to disable.
     /// Must be positive or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> when set.
     /// </summary>
-    public TimeSpan? StreamIdleTimeout { get; set; } = DefaultStreamIdleTimeout;
+    public TimeSpan? StreamIdleTimeout
+    {
+        get => field;
+        set => field = value is null || value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamIdleTimeout must be positive or Timeout.InfiniteTimeSpan.");
+    } = DefaultStreamIdleTimeout;
 
     /// <summary>
     /// When <c>false</c> (default), <c>http://</c> endpoints are only permitted for loopback hosts (<c>localhost</c>, <c>127.0.0.1</c>, <c>::1</c>)
@@ -125,7 +142,20 @@ public sealed class GeminiClientOptions
     /// Wire format used by <c>:streamGenerateContent</c>.
     /// Defaults to <see cref="GeminiStreamingFormat.ServerSentEvents"/> (<c>?alt=sse</c>), matching the official Gemini SDKs.
     /// </summary>
-    public GeminiStreamingFormat StreamingFormat { get; set; } = GeminiStreamingFormat.ServerSentEvents;
+    public GeminiStreamingFormat StreamingFormat
+    {
+        get => field;
+        set => field = Enum.IsDefined(value)
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamingFormat is not a defined value.");
+    } = GeminiStreamingFormat.ServerSentEvents;
+
+    /// <summary>
+    /// Optional <see cref="JsonSerializerOptions"/> used by the <c>IChatClient</c> adapter when serializing custom
+    /// tool/function return values that are not covered by the built-in primitive types.
+    /// Provide options backed by a source-generated <see cref="System.Text.Json.Serialization.JsonSerializerContext"/> when publishing with NativeAOT.
+    /// </summary>
+    public JsonSerializerOptions? ToolSerializerOptions { get; set; }
 
     /// <summary>
     /// Formats option members while redacting <see cref="ApiKey"/> and <see cref="AdditionalHeaders"/> values

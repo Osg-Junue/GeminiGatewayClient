@@ -21,7 +21,11 @@ public sealed class Content
     /// Ordered parts that make up this conversation turn.
     /// </summary>
     [JsonPropertyName("parts")]
-    public IList<Part> Parts { get; set; } = [];
+    public IList<Part> Parts
+    {
+        get => field;
+        set => field = value ?? [];
+    } = [];
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -47,9 +51,22 @@ public sealed class Content
     /// <param name="role">The producer of the turn.</param>
     /// <param name="parts">The parts of the turn.</param>
     /// <returns>A new <see cref="Content"/>.</returns>
-    public static Content FromParts(Role role, params Part[] parts)
+    public static Content FromParts(Role role, params ReadOnlySpan<Part> parts)
     {
-        ArgumentNullException.ThrowIfNull(parts);
-        return new Content { Role = role, Parts = [.. parts] };
+        var list = new List<Part>(parts.Length);
+        foreach (var part in parts)
+        {
+            ArgumentNullException.ThrowIfNull(part, nameof(parts));
+            list.Add(part);
+        }
+
+        return new Content { Role = role, Parts = list };
     }
+
+    internal Content Clone() => new()
+    {
+        Role = Role,
+        Parts = Parts is { Count: > 0 } ? [.. Parts] : [],
+        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
+    };
 }

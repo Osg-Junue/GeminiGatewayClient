@@ -53,13 +53,18 @@ internal sealed class StreamIdleWatchdog : IDisposable
 
     /// <summary>
     /// Disarms the idle timer immediately after a stream read completes so consumer processing time is never counted as stream idle time.
+    /// Preserves <see cref="HasTimedOut"/> when the read was aborted by the idle timer.
     /// </summary>
     public void AfterRead()
     {
-        _reading = false;
         if (_cts is { IsCancellationRequested: false })
         {
+            _reading = false;
             _cts.CancelAfter(Timeout.InfiniteTimeSpan);
+        }
+        else if (_cts is null || _callerToken.IsCancellationRequested)
+        {
+            _reading = false;
         }
     }
 
