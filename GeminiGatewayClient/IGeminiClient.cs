@@ -31,8 +31,18 @@ public interface IGeminiClient
     /// <returns>The parsed response.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="request"/> is invalid.</exception>
-    /// <exception cref="InvalidOperationException">No model was specified and <see cref="DefaultModel"/> is <c>null</c>.</exception>
-    /// <exception cref="GeminiApiException">The endpoint returned an error status or an unreadable payload.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// No model was specified and <see cref="DefaultModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
+    /// returned an empty or invalid value.
+    /// </exception>
+    /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
+    /// <exception cref="TimeoutException">
+    /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
+    /// </exception>
+    /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred before an HTTP response was received.</exception>
+    /// <exception cref="OperationCanceledException">
+    /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
+    /// </exception>
     Task<GenerateContentResponse> GenerateContentAsync(
         GenerateContentRequest request,
         string? model = null,
@@ -48,7 +58,22 @@ public interface IGeminiClient
     /// <returns>An async stream of response chunks.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="request"/> is invalid.</exception>
-    /// <exception cref="InvalidOperationException">No model was specified and <see cref="DefaultModel"/> is <c>null</c>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// No model was specified and <see cref="DefaultModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
+    /// returned an empty or invalid value during enumeration.
+    /// </exception>
+    /// <exception cref="GeminiApiException">
+    /// Thrown during enumeration when the endpoint returns a non-2xx status, an in-stream <c>{"error": ...}</c> payload, or malformed JSON.
+    /// </exception>
+    /// <exception cref="TimeoutException">
+    /// Thrown during enumeration when no chunk data is received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
+    /// </exception>
+    /// <exception cref="HttpRequestException">
+    /// Thrown during enumeration when a transport-level network or TLS failure occurs.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// Thrown during enumeration when <paramref name="cancellationToken"/> is canceled or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapses.
+    /// </exception>
     IAsyncEnumerable<GenerateContentResponse> StreamGenerateContentAsync(
         GenerateContentRequest request,
         string? model = null,

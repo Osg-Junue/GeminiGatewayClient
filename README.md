@@ -149,6 +149,28 @@ Every feature is verified against both deterministic unit tests ([`tests/GeminiG
 
 ---
 
+## Operational & Compatibility Notes
+
+### Failure Modes & Exception Boundaries
+
+| Failure Scenario | Exception Thrown | Operational Guidance |
+|---|---|---|
+| **Non-2xx HTTP status** or **in-stream `{"error": ...}`** after HTTP 200 | `GeminiApiException` | Check `ex.IsTransient` (`408`, `429`, `500`, `502`, `503`, `504`, `RESOURCE_EXHAUSTED`, `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `INTERNAL`), `ex.StatusCode`, `ex.ErrorStatus`, and honor `ex.RetryAfter` when present. |
+| **Stalled response body or stream** (no bytes received within `StreamIdleTimeout`, default **2 min**) | `TimeoutException` | Thrown by `StreamIdleWatchdog` when an upstream proxy or connection hangs mid-stream after headers arrive. |
+| **Initial header timeout** (`Timeout`, default **5 min**) or **caller cancellation** | `OperationCanceledException` (`TaskCanceledException`) | Distinguish caller cancellation (`ct.IsCancellationRequested`) from `HttpClient.Timeout` expiration (`!ct.IsCancellationRequested`). |
+| **Invalid request or options** (including `StreamGenerateContentAsync` before enumeration) | `ArgumentException` / `InvalidOperationException` | Validated eagerly before any network call is made. |
+
+### Production Deployment Checklist
+
+- **Resilience Handler Timeouts**: `Microsoft.Extensions.Http.Resilience`'s `AddStandardResilienceHandler()` defaults to a **10-second** per-attempt timeout, which will prematurely cancel Gemini 2.5 / 3 thinking requests. Explicitly increase `AttemptTimeout`, `TotalRequestTimeout`, and `CircuitBreaker.SamplingDuration` (see [`docs/USAGE.md`](docs/USAGE.md#2-dependency-injection-ihttpclientfactory--resilience)).
+- **Caller-Supplied `HttpClient`**: Passing a custom `HttpClient` to `new GeminiClient(options, httpClient)` does not overwrite `httpClient.Timeout` or handler redirect settings. Ensure `SocketsHttpHandler.AllowAutoRedirect = false` is set on custom handlers to prevent credential headers from leaking on redirects (`services.AddGeminiClient()` configures this automatically).
+- **API Scope & Vertex AI Compatibility**:
+  - **In Scope**: Stateless generation and streaming (`:generateContent`, `:streamGenerateContent` via SSE or JSON array, `tunedModels/{id}`, consuming `fileData.fileUri` and `cachedContent`).
+  - **Out of Scope**: Stateful/management endpoints (`files` upload, `cachedContents` CRUD, `batches`, `embedContent`, `countTokens`, and WebSocket `BidiGenerateContent` Live API).
+  - **Vertex AI-Only Fields**: `GenerateContentRequest.Labels` and `GenerationConfig.AudioTimestamp` are supported for Vertex AI gateways (`aiplatform.googleapis.com`) and are rejected with HTTP 400 by Google AI Studio (`generativelanguage.googleapis.com`). See [`docs/API_COMPATIBILITY.md`](docs/API_COMPATIBILITY.md) for the full field matrix.
+
+---
+
 ## Documentation
 
 - 📘 **[Usage Guide & Recipes (`docs/USAGE.md`)](docs/USAGE.md)** — Full code examples for DI & resilience handlers, streaming, structured JSON output, thinking/reasoning, multimodal inputs, `IChatClient` tool chains, database chat persistence, and `GeminiClientOptions`.
