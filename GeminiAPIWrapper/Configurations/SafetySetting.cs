@@ -1,62 +1,99 @@
 using System.Text.Json.Serialization;
+using GeminiAPIWrapper.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Safety setting affecting the safety-blocking behavior for a specific <see cref="HarmCategory"/>.
+/// See <see href="https://ai.google.dev/api/generate-content#safetysetting"/>.
+/// </summary>
+public sealed class SafetySetting
 {
     /// <summary>
-    /// 安全性設定。各カテゴリのブロックしきい値と評価方法。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#safety
+    /// Harm category controlled by this safety setting.
     /// </summary>
-    public sealed class SafetySetting
-    {
-        /// <summary>
-        /// 安全性カテゴリ（例: HARM_CATEGORY_HARASSMENT）。
-        /// 参考: Inference → HarmCategory
-        /// </summary>
-        [JsonPropertyName("category")]
-        public HarmCategory Category { get; set; }
+    [JsonPropertyName("category")]
+    public HarmCategory Category { get; set; }
 
-        /// <summary>
-        /// ブロックしきい値レベル。
-        /// 値: BLOCK_NONE / BLOCK_LOW_AND_ABOVE / BLOCK_MEDIUM_AND_ABOVE / BLOCK_ONLY_HIGH / OFF / UNSPECIFIED。
-        /// 参考: Inference → HarmBlockThreshold
-        /// </summary>
-        [JsonPropertyName("threshold")]
-        public HarmBlockThreshold Threshold { get; set; }
+    /// <summary>
+    /// Blocking threshold applied to <see cref="Category"/>.
+    /// </summary>
+    [JsonPropertyName("threshold")]
+    public HarmBlockThreshold Threshold { get; set; }
 
-        /// <summary>
-        /// しきい値適用方法。確率（PROBABILITY）または重大度（SEVERITY）。
-        /// 参考: Inference → HarmBlockMethod
-        /// </summary>
-        [JsonPropertyName("method")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public HarmBlockMethod? Method { get; set; }
-    }
+    /// <summary>
+    /// Optional. Method used to evaluate the threshold (probability or severity, where supported).
+    /// </summary>
+    [JsonPropertyName("method")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HarmBlockMethod? Method { get; set; }
+}
 
-    [JsonConverter(typeof(JsonStringEnumConverter<HarmBlockThreshold>))]
-    public enum HarmBlockThreshold
-    {
-        [JsonStringEnumMemberName("HARM_BLOCK_THRESHOLD_UNSPECIFIED")]
-        Unspecified,
-        [JsonStringEnumMemberName("BLOCK_NONE")]
-        BlockNone,
-        [JsonStringEnumMemberName("BLOCK_LOW_AND_ABOVE")]
-        BlockLowAndAbove,
-        [JsonStringEnumMemberName("BLOCK_MEDIUM_AND_ABOVE")]
-        BlockMediumAndAbove,
-        [JsonStringEnumMemberName("BLOCK_ONLY_HIGH")]
-        BlockOnlyHigh,
-        [JsonStringEnumMemberName("OFF")]
-        Off
-    }
+/// <summary>
+/// Threshold above which content in a <see cref="HarmCategory"/> is blocked.
+/// See <see href="https://ai.google.dev/api/generate-content#harmblockthreshold"/>.
+/// </summary>
+[JsonConverter(typeof(LenientStringEnumConverter<HarmBlockThreshold>))]
+public enum HarmBlockThreshold
+{
+    /// <summary>
+    /// Threshold is unspecified.
+    /// </summary>
+    [JsonStringEnumMemberName("HARM_BLOCK_THRESHOLD_UNSPECIFIED")]
+    Unspecified,
 
-    [JsonConverter(typeof(JsonStringEnumConverter<HarmBlockMethod>))]
-    public enum HarmBlockMethod
-    {
-        [JsonStringEnumMemberName("HARM_BLOCK_METHOD_UNSPECIFIED")]
-        Unspecified,
-        [JsonStringEnumMemberName("SEVERITY")]
-        Severity,
-        [JsonStringEnumMemberName("PROBABILITY")]
-        Probability
-    }
+    /// <summary>
+    /// Content is allowed regardless of probability.
+    /// </summary>
+    [JsonStringEnumMemberName("BLOCK_NONE")]
+    BlockNone,
+
+    /// <summary>
+    /// Block content when the probability of unsafe content is low, medium, or high.
+    /// </summary>
+    [JsonStringEnumMemberName("BLOCK_LOW_AND_ABOVE")]
+    BlockLowAndAbove,
+
+    /// <summary>
+    /// Block content when the probability of unsafe content is medium or high.
+    /// </summary>
+    [JsonStringEnumMemberName("BLOCK_MEDIUM_AND_ABOVE")]
+    BlockMediumAndAbove,
+
+    /// <summary>
+    /// Block content only when the probability of unsafe content is high.
+    /// </summary>
+    [JsonStringEnumMemberName("BLOCK_ONLY_HIGH")]
+    BlockOnlyHigh,
+
+    /// <summary>
+    /// Turn off the safety filter for this category.
+    /// </summary>
+    [JsonStringEnumMemberName("OFF")]
+    Off
+}
+
+/// <summary>
+/// Method used to evaluate whether a safety threshold is exceeded.
+/// </summary>
+[JsonConverter(typeof(LenientStringEnumConverter<HarmBlockMethod>))]
+public enum HarmBlockMethod
+{
+    /// <summary>
+    /// Evaluation method is unspecified.
+    /// </summary>
+    [JsonStringEnumMemberName("HARM_BLOCK_METHOD_UNSPECIFIED")]
+    Unspecified,
+
+    /// <summary>
+    /// Evaluate based on both probability and severity scores.
+    /// </summary>
+    [JsonStringEnumMemberName("SEVERITY")]
+    Severity,
+
+    /// <summary>
+    /// Evaluate based on probability score only.
+    /// </summary>
+    [JsonStringEnumMemberName("PROBABILITY")]
+    Probability
 }

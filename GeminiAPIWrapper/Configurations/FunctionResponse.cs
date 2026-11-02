@@ -1,22 +1,31 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Result output from a <see cref="FunctionCall"/> returned to the model.
+/// See <see href="https://ai.google.dev/api/caching#FunctionResponse"/>.
+/// </summary>
+public sealed class FunctionResponse
 {
     /// <summary>
-    /// 関数結果（tool → model）。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/function-calling?hl=ja
+    /// Optional. Identifier of the corresponding <see cref="FunctionCall.Id"/> when provided by the model.
     /// </summary>
-    public sealed class FunctionResponse
-    {
-        [JsonPropertyName("name")]
-        public required string Name { get; init; }
+    [JsonPropertyName("id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Id { get; init; }
 
-        /// <summary>
-        /// レスポンス（JSON オブジェクト）。
-        /// </summary>
-        [JsonPropertyName("response")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public JsonElement? Response { get; init; }
-    }
+    /// <summary>
+    /// Required. Name of the function that was called (corresponding to <see cref="FunctionCall.Name"/>).
+    /// </summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Required. Function output structured as a JSON object.
+    /// </summary>
+    [JsonPropertyName("response")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? Response { get; init; }
 }

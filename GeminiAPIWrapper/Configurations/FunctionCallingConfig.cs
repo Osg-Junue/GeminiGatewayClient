@@ -1,34 +1,56 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
+using GeminiAPIWrapper.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Configuration specifying how the model should use declared functions.
+/// See <see href="https://ai.google.dev/api/caching#FunctionCallingConfig"/>.
+/// </summary>
+public sealed class FunctionCallingConfig
 {
-    public sealed class FunctionCallingConfig
-    {
-        /// <summary>
-        /// 関数呼び出しモード。
-        /// </summary>
-        [JsonPropertyName("mode")]
-        public FunctionCallingMode Mode { get; init; } = FunctionCallingMode.AUTO;
+    /// <summary>
+    /// Execution mode for function calling. Defaults to <see cref="FunctionCallingMode.AUTO"/>.
+    /// </summary>
+    [JsonPropertyName("mode")]
+    public FunctionCallingMode Mode { get; init; } = FunctionCallingMode.AUTO;
 
-        /// <summary>
-        /// 許可する関数名（指定時のみ呼び出し可能）。
-        /// </summary>
-        [JsonPropertyName("allowed_function_names")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public List<string>? AllowedFunctionNames { get; init; }
-    }
+    /// <summary>
+    /// Optional. Set of function names the model is allowed to call.
+    /// Only applicable when <see cref="Mode"/> is <see cref="FunctionCallingMode.ANY"/> or <see cref="FunctionCallingMode.VALIDATED"/>.
+    /// </summary>
+    [JsonPropertyName("allowedFunctionNames")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? AllowedFunctionNames { get; init; }
+}
 
-    [JsonConverter(typeof(JsonStringEnumConverter<FunctionCallingMode>))]
-    public enum FunctionCallingMode
-    {
-        //AIが必要に応じて関数を呼び出す
-        [JsonStringEnumMemberName("AUTO")]
-        AUTO,
-        //AIが関数を呼び出さない
-        [JsonStringEnumMemberName("NONE")]
-        NONE,
-        //allowed_function_namesで指定された関数のみを呼び出す
-        [JsonStringEnumMemberName("ANY")]
-        ANY,
-    }
+/// <summary>
+/// Defines the execution behavior for function calling.
+/// </summary>
+[JsonConverter(typeof(LenientStringEnumConverter<FunctionCallingMode>))]
+public enum FunctionCallingMode
+{
+    /// <summary>
+    /// The model decides whether to predict a function call or a natural language response.
+    /// </summary>
+    [JsonStringEnumMemberName("AUTO")]
+    AUTO,
+
+    /// <summary>
+    /// The model is prohibited from making function calls.
+    /// </summary>
+    [JsonStringEnumMemberName("NONE")]
+    NONE,
+
+    /// <summary>
+    /// The model is constrained to always predict a function call from the allowed functions.
+    /// </summary>
+    [JsonStringEnumMemberName("ANY")]
+    ANY,
+
+    /// <summary>
+    /// The model predicts either a function call or a natural language response, enforcing schema adherence on function calls.
+    /// </summary>
+    [JsonStringEnumMemberName("VALIDATED")]
+    VALIDATED,
 }

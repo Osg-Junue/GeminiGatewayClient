@@ -1,35 +1,51 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Metadata describing how an input video should be clipped or sampled before being processed by the model.
+/// See <see href="https://ai.google.dev/api/caching#VideoMetadata"/>.
+/// </summary>
+public sealed class VideoMetadata
 {
     /// <summary>
-    /// 動画メタデータ（開始/終了オフセット、fps）。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#video
+    /// Optional. Start offset of the video clip to process.
     /// </summary>
-    public sealed class VideoMetadata
-    {
-        [JsonPropertyName("startOffset")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public VideoOffset? StartOffset { get; init; }
+    [JsonPropertyName("startOffset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public VideoOffset? StartOffset { get; init; }
 
-        [JsonPropertyName("endOffset")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public VideoOffset? EndOffset { get; init; }
+    /// <summary>
+    /// Optional. End offset of the video clip to process.
+    /// </summary>
+    [JsonPropertyName("endOffset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public VideoOffset? EndOffset { get; init; }
 
-        [JsonPropertyName("fps")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public double? Fps { get; init; }
-    }
+    /// <summary>
+    /// Optional. Frame rate (frames per second) at which the video should be sampled.
+    /// </summary>
+    [JsonPropertyName("fps")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Fps { get; init; }
+}
 
-    public sealed class VideoOffset
-    {
-        [JsonPropertyName("seconds")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public int? Seconds { get; init; }
+/// <summary>
+/// Time offset within a video stream.
+/// </summary>
+public sealed class VideoOffset
+{
+    /// <summary>
+    /// Whole seconds of the time offset.
+    /// </summary>
+    [JsonPropertyName("seconds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Seconds { get; init; }
 
-        [JsonPropertyName("nanos")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public int? Nanos { get; init; }
-    }
-
+    /// <summary>
+    /// Sub-second nanosecond fraction of the time offset.
+    /// </summary>
+    [JsonPropertyName("nanos")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Nanos { get; init; }
 }

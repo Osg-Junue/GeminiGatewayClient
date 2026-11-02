@@ -1,42 +1,47 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
+using GeminiAPIWrapper.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Probability level that a piece of content is harmful in a given <see cref="HarmCategory"/>.
+/// See <see href="https://ai.google.dev/api/generate-content#harmprobability"/>.
+/// </summary>
+[JsonConverter(typeof(LenientStringEnumConverter<HarmProbability>))]
+public enum HarmProbability
 {
     /// <summary>
-    /// 有害性の確率レベル。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#response-body
+    /// Probability is unspecified.
     /// </summary>
-    [JsonConverter(typeof(JsonStringEnumConverter<HarmProbability>))]
-    public enum HarmProbability
-    {
-        /// <summary>
-        /// 未指定。
-        /// </summary>
-        [JsonStringEnumMemberName("HARM_PROBABILITY_UNSPECIFIED")]
-        Unspecified,
+    [JsonStringEnumMemberName("HARM_PROBABILITY_UNSPECIFIED")]
+    Unspecified,
 
-        /// <summary>
-        /// ごくわずか。
-        /// </summary>
-        [JsonStringEnumMemberName("NEGLIGIBLE")]
-        Negligible,
+    /// <summary>
+    /// Content has a negligible probability of being unsafe.
+    /// </summary>
+    [JsonStringEnumMemberName("NEGLIGIBLE")]
+    Negligible,
 
-        /// <summary>
-        /// 低い。
-        /// </summary>
-        [JsonStringEnumMemberName("LOW")]
-        Low,
+    /// <summary>
+    /// Content has a low probability of being unsafe.
+    /// </summary>
+    [JsonStringEnumMemberName("LOW")]
+    Low,
 
-        /// <summary>
-        /// 中程度。
-        /// </summary>
-        [JsonStringEnumMemberName("MEDIUM")]
-        Medium,
+    /// <summary>
+    /// Content has a medium probability of being unsafe.
+    /// </summary>
+    [JsonStringEnumMemberName("MEDIUM")]
+    Medium,
 
-        /// <summary>
-        /// 高い。
-        /// </summary>
-        [JsonStringEnumMemberName("HIGH")]
-        High
-    }
+    /// <summary>
+    /// Content has a high probability of being unsafe.
+    /// </summary>
+    [JsonStringEnumMemberName("HIGH")]
+    High,
+
+    /// <summary>
+    /// Fallback value used when the server returns a harm probability not yet defined in this version of the library.
+    /// </summary>
+    Unknown
 }

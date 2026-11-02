@@ -1,23 +1,21 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// A token string paired with its log probability.
+/// </summary>
+public class TokenLogProbability
 {
     /// <summary>
-    /// トークンとその対数確率。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#response-body
+    /// The token text.
     /// </summary>
-    public class TokenLogProbability
-    {
-        /// <summary>
-        /// トークン文字列。
-        /// </summary>
-        [JsonPropertyName("token")]
-        public string Token { get; set; } = "";
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = "";
 
-        /// <summary>
-        /// 対数確率。
-        /// </summary>
-        [JsonPropertyName("logProbability")]
-        public float LogProbability { get; set; }
-    }
+    /// <summary>
+    /// Natural log probability of <see cref="Token"/> at its decoding step.
+    /// </summary>
+    [JsonPropertyName("logProbability")]
+    public float LogProbability { get; set; }
 }

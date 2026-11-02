@@ -1,17 +1,16 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Tool specification containing one or more <see cref="FunctionDeclaration"/> definitions that the model may invoke.
+/// See <see href="https://ai.google.dev/api/caching#Tool"/>.
+/// </summary>
+public sealed class Tool
 {
     /// <summary>
-    /// ツール群（関数宣言）。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling?hl=ja
+    /// Function declarations exposed to the model for tool calling.
     /// </summary>
-    public sealed class Tool
-    {
-        /// <summary>
-        /// 関数宣言一覧。
-        /// </summary>
-        [JsonPropertyName("functionDeclarations")]
-        public List<FunctionDeclaration> FunctionDeclarations { get; init; } = [];
-    }
+    [JsonPropertyName("functionDeclarations")]
+    public List<FunctionDeclaration> FunctionDeclarations { get; init; } = [];
 }

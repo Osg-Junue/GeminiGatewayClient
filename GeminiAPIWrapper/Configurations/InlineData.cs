@@ -1,26 +1,22 @@
 using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Inline media bytes encoded as Base64.
+/// See <see href="https://ai.google.dev/api/caching#Blob"/>.
+/// </summary>
+public sealed class InlineData
 {
     /// <summary>
-    /// インラインデータ（base64エンコードした元バイト）。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#blob
+    /// IANA MIME type of the media data (see <see cref="MimeTypes"/> for common constants).
     /// </summary>
-    public sealed class InlineData
-    {
-        /// <summary>
-        /// MIME タイプ。IANA MIME タイプ。
-        /// 参考: 同ページ mimeType
-        /// </summary>
-        [JsonPropertyName("mimeType")]
-        public MimeType MimeType { get; set; }
+    [JsonPropertyName("mimeType")]
+    public string MimeType { get; set; } = "";
 
-        /// <summary>
-        /// base64 エンコードデータ。
-        /// 上限サイズ: 20MB（モデル・形式により制約あり）。
-        /// 参考: 同ページ data（blob）
-        /// </summary>
-        [JsonPropertyName("data")]
-        public string Data { get; set; } = "";
-    }
+    /// <summary>
+    /// Base64-encoded raw bytes of the media payload.
+    /// </summary>
+    [JsonPropertyName("data")]
+    public string Data { get; set; } = "";
 }

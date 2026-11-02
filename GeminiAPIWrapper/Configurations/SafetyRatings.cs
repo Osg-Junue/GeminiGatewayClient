@@ -1,29 +1,28 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Safety rating evaluated for a single <see cref="HarmCategory"/> on a response candidate.
+/// See <see href="https://ai.google.dev/api/generate-content#safetyrating"/>.
+/// </summary>
+public sealed class SafetyRating
 {
     /// <summary>
-    /// 安全性評価。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#response-body
+    /// Harm category evaluated by this rating.
     /// </summary>
-    public sealed class SafetyRating
-    {
-        /// <summary>
-        /// カテゴリ。
-        /// </summary>
-        [JsonPropertyName("category")]
-        public HarmCategory Category { get; set; }
+    [JsonPropertyName("category")]
+    public HarmCategory Category { get; set; }
 
-        /// <summary>
-        /// 確率評価。
-        /// </summary>
-        [JsonPropertyName("probability")]
-        public HarmProbability Probability { get; set; }
+    /// <summary>
+    /// Assessed probability of harm in <see cref="Category"/>.
+    /// </summary>
+    [JsonPropertyName("probability")]
+    public HarmProbability Probability { get; set; }
 
-        /// <summary>
-        /// このカテゴリが原因でブロックされたか。
-        /// </summary>
-        [JsonPropertyName("blocked")]
-        public bool? Blocked { get; set; }
-    }
+    /// <summary>
+    /// Indicates whether the candidate was blocked due to this safety rating.
+    /// </summary>
+    [JsonPropertyName("blocked")]
+    public bool? Blocked { get; set; }
 }

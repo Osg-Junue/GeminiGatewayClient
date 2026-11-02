@@ -1,15 +1,17 @@
-﻿using System.Runtime.Serialization;
 using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Configuration for how the model uses the tools provided in <see cref="GeminiRequest.Tools"/>.
+/// See <see href="https://ai.google.dev/api/caching#ToolConfig"/>.
+/// </summary>
+public sealed class ToolConfig
 {
     /// <summary>
-    /// ツール/関数呼び出しの挙動設定。
+    /// Optional. Configuration for function calling behavior.
     /// </summary>
-    public sealed class ToolConfig
-    {
-        [JsonPropertyName("functionCallingConfig")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public FunctionCallingConfig? FunctionCallingConfig { get; init; }
-    }
+    [JsonPropertyName("functionCallingConfig")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FunctionCallingConfig? FunctionCallingConfig { get; init; }
 }

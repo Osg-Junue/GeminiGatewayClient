@@ -1,67 +1,65 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Text.Json.Serialization;
-using System.Threading.Tasks;
 
 namespace GeminiAPIWrapper.Configurations;
 
+/// <summary>
+/// OpenAPI 3.03 schema object used to define structured output formats and function parameter/response types.
+/// See <see href="https://ai.google.dev/api/caching#Schema"/>.
+/// </summary>
 public sealed class Schema
 {
     /// <summary>
-    /// 【必須】型。
+    /// Required. Data type of the schema element.
     /// </summary>
     [JsonPropertyName("type")]
     public SchemaType Type { get; set; }
 
     /// <summary>
-    /// 【任意】説明。
+    /// Optional. Human- and model-readable description of the value represented by this schema.
     /// </summary>
     [JsonPropertyName("description")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Description { get; set; }
 
     /// <summary>
-    /// 【任意】フォーマット（例: date-time, email）。
+    /// Optional. Data format modifier (for example <c>date-time</c>, <c>int64</c>, <c>double</c>, <c>enum</c>).
     /// </summary>
     [JsonPropertyName("format")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Format { get; set; }
 
     /// <summary>
-    /// 【任意】null 許容。
+    /// Optional. Indicates whether the value may be <c>null</c>.
     /// </summary>
     [JsonPropertyName("nullable")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Nullable { get; set; }
 
     /// <summary>
-    /// 【任意】列挙値。
+    /// Optional. Allowed string values when <see cref="Type"/> is <see cref="SchemaType.String"/>.
     /// </summary>
     [JsonPropertyName("enum")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? Enum { get; set; }
 
     /// <summary>
-    /// 【Object の場合】プロパティ定義。
+    /// Optional. Named property schemas when <see cref="Type"/> is <see cref="SchemaType.Object"/>.
     /// </summary>
     [JsonPropertyName("properties")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, Schema>? Properties { get; set; }
 
     /// <summary>
-    /// 【Object の場合】必須プロパティ名。
+    /// Optional. Names of required properties when <see cref="Type"/> is <see cref="SchemaType.Object"/>.
     /// </summary>
     [JsonPropertyName("required")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? Required { get; set; }
 
     /// <summary>
-    /// 【Array の場合】要素スキーマ。
+    /// Optional. Schema of array elements when <see cref="Type"/> is <see cref="SchemaType.Array"/>.
     /// </summary>
     [JsonPropertyName("items")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Schema? Items { get; set; }
-
 }

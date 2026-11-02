@@ -1,29 +1,27 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Publication date of a cited source.
+/// </summary>
+public sealed class PublicationDate
 {
     /// <summary>
-    /// 発行日。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#response-body
+    /// Year of publication (for example <c>2026</c>).
     /// </summary>
-    public sealed class PublicationDate
-    {
-        /// <summary>
-        /// 年。
-        /// </summary>
-        [JsonPropertyName("year")]
-        public int? Year { get; set; }
+    [JsonPropertyName("year")]
+    public int? Year { get; set; }
 
-        /// <summary>
-        /// 月。
-        /// </summary>
-        [JsonPropertyName("month")]
-        public int? Month { get; set; }
+    /// <summary>
+    /// Month of publication (<c>1</c> to <c>12</c>).
+    /// </summary>
+    [JsonPropertyName("month")]
+    public int? Month { get; set; }
 
-        /// <summary>
-        /// 日。
-        /// </summary>
-        [JsonPropertyName("day")]
-        public int? Day { get; set; }
-    }
+    /// <summary>
+    /// Day of the month (<c>1</c> to <c>31</c>).
+    /// </summary>
+    [JsonPropertyName("day")]
+    public int? Day { get; set; }
 }

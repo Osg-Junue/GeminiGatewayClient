@@ -1,17 +1,15 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Top candidate tokens and their log probabilities at a single decoding step.
+/// </summary>
+public sealed class TokenCandidates
 {
     /// <summary>
-    /// トークン候補群（位置ごと）。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#response-body
+    /// Candidate tokens considered by the model at this decoding position, ordered by descending probability.
     /// </summary>
-    public sealed class TokenCandidates
-    {
-        /// <summary>
-        /// 特定のトークン位置における、モデルが考慮した候補トークンとその対数確率のリストを取得または設定します。
-        /// </summary>
-        [JsonPropertyName("candidates")]
-        public List<TokenLogProbability> Candidates { get; set; } = [];
-    }
+    [JsonPropertyName("candidates")]
+    public List<TokenLogProbability> Candidates { get; set; } = [];
 }

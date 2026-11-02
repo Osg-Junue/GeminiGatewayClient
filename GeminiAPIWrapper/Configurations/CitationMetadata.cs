@@ -1,17 +1,16 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Collection of source attributions for a generated candidate response.
+/// See <see href="https://ai.google.dev/api/generate-content#citationmetadata"/>.
+/// </summary>
+public sealed class CitationMetadata
 {
     /// <summary>
-    /// 引用メタデータ。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#response-body
+    /// Citations to sources for a specific response.
     /// </summary>
-    public sealed class CitationMetadata
-    {
-        /// <summary>
-        /// 引用リスト。
-        /// </summary>
-        [JsonPropertyName("citations")]
-        public List<Citation> Citations { get; set; } = [];
-    }
+    [JsonPropertyName("citations")]
+    public List<Citation> Citations { get; set; } = [];
 }

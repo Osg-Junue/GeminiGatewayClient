@@ -1,65 +1,64 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// A single response candidate returned by the model.
+/// See <see href="https://ai.google.dev/api/generate-content#candidate"/>.
+/// </summary>
+public sealed class Candidate
 {
     /// <summary>
-    /// 応答候補。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#response-body
+    /// Zero-based index of this candidate in the list of response candidates.
     /// </summary>
-    public sealed class Candidate
-    {
-        /// <summary>
-        /// 候補インデックス。
-        /// </summary>
-        [JsonPropertyName("index")]
-        public int Index { get; set; }
+    [JsonPropertyName("index")]
+    public int Index { get; set; }
 
-        /// <summary>
-        /// 生成コンテンツ。
-        /// </summary>
-        [JsonPropertyName("content")]
-        public Content? Content { get; set; }
+    /// <summary>
+    /// Generated content returned by the model for this candidate.
+    /// </summary>
+    [JsonPropertyName("content")]
+    public Content? Content { get; set; }
 
-        /// <summary>
-        /// 生成停止理由。
-        /// </summary>
-        [JsonPropertyName("finishReason")]
-        public FinishReason? FinishReason { get; set; }
+    /// <summary>
+    /// Reason why the model stopped generating tokens for this candidate.
+    /// </summary>
+    [JsonPropertyName("finishReason")]
+    public FinishReason? FinishReason { get; set; }
 
-        /// <summary>
-        /// 安全性評価リスト。
-        /// </summary>
-        [JsonPropertyName("safetyRatings")]
-        public List<SafetyRating> SafetyRatings { get; set; } = [];
+    /// <summary>
+    /// Safety ratings evaluated for this candidate response.
+    /// </summary>
+    [JsonPropertyName("safetyRatings")]
+    public List<SafetyRating> SafetyRatings { get; set; } = [];
 
-        /// <summary>
-        /// 使用トークン数（候補）。
-        /// </summary>
-        [JsonPropertyName("tokenCount")]
-        public int? TokenCount { get; set; }
+    /// <summary>
+    /// Number of tokens in this candidate response.
+    /// </summary>
+    [JsonPropertyName("tokenCount")]
+    public int? TokenCount { get; set; }
 
-        /// <summary>
-        /// 生成モデルのバージョン。
-        /// </summary>
-        [JsonPropertyName("modelVersion")]
-        public string? ModelVersion { get; set; }
+    /// <summary>
+    /// Version of the model used to generate this candidate.
+    /// </summary>
+    [JsonPropertyName("modelVersion")]
+    public string? ModelVersion { get; set; }
 
-        /// <summary>
-        /// 引用メタデータ。
-        /// </summary>
-        [JsonPropertyName("citationMetadata")]
-        public CitationMetadata? CitationMetadata { get; set; }
+    /// <summary>
+    /// Attribution and citation metadata for sources referenced in this candidate.
+    /// </summary>
+    [JsonPropertyName("citationMetadata")]
+    public CitationMetadata? CitationMetadata { get; set; }
 
-        /// <summary>
-        /// 平均ログ確率（logprobs）。
-        /// </summary>
-        [JsonPropertyName("avgLogprobs")]
-        public double? AvgLogprobs { get; set; }
+    /// <summary>
+    /// Average log probability across tokens in this candidate.
+    /// </summary>
+    [JsonPropertyName("avgLogprobs")]
+    public double? AvgLogprobs { get; set; }
 
-        /// <summary>
-        /// ログ確率詳細（logprobs）。
-        /// </summary>
-        [JsonPropertyName("logprobsResult")]
-        public LogprobsResult? LogprobsResult { get; set; }
-    }
+    /// <summary>
+    /// Detailed per-token log probability information when requested via <see cref="GenerationConfig.ResponseLogprobs"/>.
+    /// </summary>
+    [JsonPropertyName("logprobsResult")]
+    public LogprobsResult? LogprobsResult { get; set; }
 }

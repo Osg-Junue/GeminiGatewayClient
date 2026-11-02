@@ -1,36 +1,53 @@
 using System.Text.Json.Serialization;
+using GeminiAPIWrapper.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Category of potential harm evaluated by Gemini safety filters.
+/// See <see href="https://ai.google.dev/api/generate-content#harmcategory"/>.
+/// </summary>
+[JsonConverter(typeof(LenientStringEnumConverter<HarmCategory>))]
+public enum HarmCategory
 {
     /// <summary>
-    /// 有害性カテゴリ。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#response-body
+    /// Category is unspecified.
     /// </summary>
-    [JsonConverter(typeof(JsonStringEnumConverter<HarmCategory>))]
-    public enum HarmCategory
-    {
-        /// <summary>
-        /// ハラスメント（嫌がらせ）。
-        /// </summary>
-        [JsonStringEnumMemberName("HARM_CATEGORY_HARASSMENT")]
-        Harassment,
+    [JsonStringEnumMemberName("HARM_CATEGORY_UNSPECIFIED")]
+    Unspecified,
 
-        /// <summary>
-        /// ヘイトスピーチ（憎悪表現）。
-        /// </summary>
-        [JsonStringEnumMemberName("HARM_CATEGORY_HATE_SPEECH")]
-        HateSpeech,
+    /// <summary>
+    /// Harassment content.
+    /// </summary>
+    [JsonStringEnumMemberName("HARM_CATEGORY_HARASSMENT")]
+    Harassment,
 
-        /// <summary>
-        /// 性的に露骨な内容。
-        /// </summary>
-        [JsonStringEnumMemberName("HARM_CATEGORY_SEXUALLY_EXPLICIT")]
-        SexuallyExplicit,
+    /// <summary>
+    /// Hate speech and content that promotes discrimination or disparagement.
+    /// </summary>
+    [JsonStringEnumMemberName("HARM_CATEGORY_HATE_SPEECH")]
+    HateSpeech,
 
-        /// <summary>
-        /// 危険な内容（暴力、自傷の助長など）。
-        /// </summary>
-        [JsonStringEnumMemberName("HARM_CATEGORY_DANGEROUS_CONTENT")]
-        DangerousContent
-    }
+    /// <summary>
+    /// Sexually explicit content.
+    /// </summary>
+    [JsonStringEnumMemberName("HARM_CATEGORY_SEXUALLY_EXPLICIT")]
+    SexuallyExplicit,
+
+    /// <summary>
+    /// Dangerous content that promotes harm, illegal acts, or self-harm.
+    /// </summary>
+    [JsonStringEnumMemberName("HARM_CATEGORY_DANGEROUS_CONTENT")]
+    DangerousContent,
+
+    /// <summary>
+    /// Content that may harm civic integrity.
+    /// </summary>
+    [JsonStringEnumMemberName("HARM_CATEGORY_CIVIC_INTEGRITY")]
+    CivicIntegrity,
+
+    /// <summary>
+    /// Fallback value used when the server returns a harm category not yet defined in this version of the library.
+    /// </summary>
+    Unknown
 }

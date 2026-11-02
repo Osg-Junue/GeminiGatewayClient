@@ -1,23 +1,22 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// A single conversation turn containing a <see cref="Role"/> and a list of <see cref="Part"/> items.
+/// See <see href="https://ai.google.dev/api/caching#Content"/>.
+/// </summary>
+public sealed class Content
 {
     /// <summary>
-    /// コンテンツブロック。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#contents
+    /// Producer of the content (<see cref="Role.User"/> or <see cref="Role.Model"/>).
     /// </summary>
-    public sealed class Content
-    {
-        /// <summary>
-        /// 役割（ユーザー/モデル）。
-        /// </summary>
-        [JsonPropertyName("role")]
-        public required Role Role { get; init; }
+    [JsonPropertyName("role")]
+    public Role Role { get; set; } = Role.User;
 
-        /// <summary>
-        /// パート一覧。
-        /// </summary>
-        [JsonPropertyName("parts")]
-        public required List<Part> Parts { get; init; }
-    }
+    /// <summary>
+    /// Ordered parts that make up this conversation turn.
+    /// </summary>
+    [JsonPropertyName("parts")]
+    public List<Part> Parts { get; set; } = [];
 }

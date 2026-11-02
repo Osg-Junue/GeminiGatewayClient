@@ -1,17 +1,16 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
-namespace GeminiAPIWrapper.Configurations
+namespace GeminiAPIWrapper.Configurations;
+
+/// <summary>
+/// Developer-provided system instructions that guide model behavior across the conversation.
+/// See <see href="https://ai.google.dev/gemini-api/docs/text-generation#system-instructions"/>.
+/// </summary>
+public class SystemInstruction
 {
     /// <summary>
-    /// システム指示（対応モデルのみ、role は無視）。
-    /// 参考: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=ja#systeminstruction
+    /// Required. Content parts that make up the system instruction (typically text parts).
     /// </summary>
-    public class SystemInstruction
-    {
-        /// <summary>
-        /// 指示のパーツ（通常はテキスト）。
-        /// </summary>
-        [JsonPropertyName("parts")]
-        public required List<Part> Parts { get; init; }
-    }
+    [JsonPropertyName("parts")]
+    public required List<Part> Parts { get; init; }
 }
