@@ -268,4 +268,41 @@ public class OptionsTests
         var named = provider.GetRequiredService<IOptionsSnapshot<GeminiClientOptions>>().Get("unrelated-named");
         Assert.Equal(new Uri("http://remote-insecure-host.example.com/v1beta"), named.Endpoint);
     }
+
+    [Fact]
+    public void GeminiClientOptions_WhitespaceOnlyApiKey_ThrowsArgumentException_AndEmptyStringIsAllowed()
+    {
+        var whitespaceOptions = new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "   "
+        };
+
+        Assert.Throws<ArgumentException>(() => new GeminiClient(whitespaceOptions));
+        Assert.Contains("ApiKey = <none>", whitespaceOptions.ToString());
+
+        using var emptyKeyClient = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = string.Empty
+        });
+        Assert.Equal(DefaultModel, emptyKeyClient.DefaultModel);
+    }
+
+    [Fact]
+    public async Task ApiKeyProvider_ReturningWhitespaceOnly_ThrowsInvalidOperationException()
+    {
+        const string okJson = """{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"ok"}]}}]}""";
+        using var handler = new RecordingHandler(okJson);
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKeyHeader = "Authorization",
+            ApiKeyPrefix = "Bearer ",
+            ApiKeyProvider = _ => ValueTask.FromResult("   ")
+        }, httpClient);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GenerateContentAsync("Hi"));
+    }
 }

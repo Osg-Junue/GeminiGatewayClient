@@ -400,6 +400,44 @@ public class GeminiClientTests
         Assert.Equal("Backend unavailable mid-stream", ex.ErrorMessage);
     }
 
+    [Fact]
+    public async Task Stream_RawJsonErrorAfterSseKeepAliveCommentAndEventField_ThrowsGeminiApiException()
+    {
+        const string keepAliveFollowedByRawJsonError = """
+            : keep-alive
+            event: message
+            retry: 3000
+
+            {
+              "error": {
+                "code": 502,
+                "message": "Bad gateway after initial keep-alive",
+                "status": "UNAVAILABLE"
+              }
+            }
+            """;
+
+        using var handler = new RecordingHandler(keepAliveFollowedByRawJsonError, HttpStatusCode.OK, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
+        {
+            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
+            {
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.BadGateway, ex.StatusCode);
+        Assert.True(ex.IsTransient);
+        Assert.Equal("UNAVAILABLE", ex.ErrorStatus);
+        Assert.Equal("Bad gateway after initial keep-alive", ex.ErrorMessage);
+    }
+
     [Theory]
     [InlineData("-5s")]
     [InlineData("999999999999999999999s")]

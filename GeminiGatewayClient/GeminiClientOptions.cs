@@ -168,7 +168,7 @@ public sealed class GeminiClientOptions
         builder.Append(", Model = ").Append(Model);
         builder.Append(", ApiKeyHeader = ").Append(ApiKeyHeader);
         builder.Append(", ApiKey = ").Append(
-            !string.IsNullOrEmpty(ApiKey) ? "***" : ApiKeyProvider is not null ? "<provider>" : "<none>");
+            !string.IsNullOrWhiteSpace(ApiKey) ? "***" : ApiKeyProvider is not null ? "<provider>" : "<none>");
         builder.Append(", ApiKeyPrefix = ").Append(ApiKeyPrefix);
         builder.Append(", AdditionalHeaders = [");
         if (AdditionalHeaders is { Count: > 0 })

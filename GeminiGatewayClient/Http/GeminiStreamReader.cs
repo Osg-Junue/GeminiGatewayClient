@@ -206,19 +206,23 @@ internal static class GeminiStreamReader
 
         if (line[0] == (byte)':')
         {
-            // Comment / keep-alive line.
-            sawSseEvent = true;
+            // Comment / keep-alive line: ignore without buffering into nonSseBuffer,
+            // but do not mark sawSseEvent until an actual data field is seen so raw proxy error bodies after a keep-alive are still caught.
             return false;
         }
 
         if (!line.StartsWith("data:"u8))
         {
-            if (line.SequenceEqual("data"u8) ||
-                line.StartsWith("event:"u8) || line.SequenceEqual("event"u8) ||
+            if (line.SequenceEqual("data"u8))
+            {
+                sawSseEvent = true;
+                return false;
+            }
+
+            if (line.StartsWith("event:"u8) || line.SequenceEqual("event"u8) ||
                 line.StartsWith("id:"u8) || line.SequenceEqual("id"u8) ||
                 line.StartsWith("retry:"u8) || line.SequenceEqual("retry"u8))
             {
-                sawSseEvent = true;
                 return false;
             }
 

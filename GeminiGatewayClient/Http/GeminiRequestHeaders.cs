@@ -31,7 +31,14 @@ internal sealed class GeminiRequestHeaders
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ApiKeyHeader, nameof(GeminiClientOptions.ApiKeyHeader));
 
-        var hasStaticKey = !string.IsNullOrEmpty(options.ApiKey);
+        if (options.ApiKey is { Length: > 0 } && string.IsNullOrWhiteSpace(options.ApiKey))
+        {
+            throw new ArgumentException(
+                "GeminiClientOptions.ApiKey cannot be whitespace-only. Leave it null or empty when no key header should be sent.",
+                nameof(GeminiClientOptions.ApiKey));
+        }
+
+        var hasStaticKey = !string.IsNullOrWhiteSpace(options.ApiKey);
         if (hasStaticKey && options.ApiKeyProvider is not null)
         {
             throw new ArgumentException(
@@ -95,9 +102,9 @@ internal sealed class GeminiRequestHeaders
     private async ValueTask ApplyDynamicKeyAsync(HttpRequestMessage message, CancellationToken cancellationToken)
     {
         var key = await _apiKeyProvider!(cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrEmpty(key) || ContainsNewLine(key))
+        if (string.IsNullOrWhiteSpace(key) || ContainsNewLine(key))
         {
-            throw new InvalidOperationException("GeminiClientOptions.ApiKeyProvider returned an empty value or a value containing newline characters.");
+            throw new InvalidOperationException("GeminiClientOptions.ApiKeyProvider returned an empty, whitespace-only, or newline-containing value.");
         }
 
         message.Headers.TryAddWithoutValidation(_apiKeyHeader, $"{_apiKeyPrefix}{key}");

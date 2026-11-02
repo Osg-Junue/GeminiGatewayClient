@@ -161,4 +161,3 @@ Every feature is verified against both deterministic unit tests ([`tests/GeminiG
 
 - Released under the [MIT License](LICENSE.txt).
 - Issues and pull requests are welcome at [Osg-Junue/GeminiGatewayClient](https://github.com/Osg-Junue/GeminiGatewayClient).
-- Japanese article (日本語): [GeminiGatewayClient (旧 GeminiAPIWrapper) 紹介記事](https://osg.junue.net/articles/geminiapiwrapper/)
