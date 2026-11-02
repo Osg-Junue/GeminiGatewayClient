@@ -24,7 +24,7 @@ All notable changes to this project are documented in this file.
   - Model-aware `ReasoningEffort` mapping (`thinkingBudget` for Gemini 2.5 vs `thinkingLevel` for Gemini 3+).
 - **Rich error handling (`GeminiApiException`)**:
   - Added `IsTransient` (`408`, `429`, `500`, `502`, `503`, `504`), `ErrorStatus`, `ErrorMessage`, `RetryAfter`, and in-stream `{"error": ...}` detection.
-- **Official Gemini API model alignment (`namespace GeminiAPIWrapper.Models`)**:
+- **Official Gemini API model alignment (`namespace GeminiGatewayClient.Models`)**:
   - `GenerateContentRequest` (with `FromPrompt`, `SystemInstruction` as `Content?`) and `GenerateContentResponse` (with `[JsonIgnore]` convenience properties `Text`, `FunctionCalls`, `FinishReason`, `BlockReason`).
   - `Blob` (replacing `InlineData`) with `byte[] Data` automatically serialized as Base64.
   - Factory methods `Part.FromText`, `Part.FromBytes`, `Part.FromUri`, `Part.FromFunctionResponse` and `Content.FromText`, `Content.FromParts`.
@@ -32,12 +32,13 @@ All notable changes to this project are documented in this file.
 - **NativeAOT & trim compatibility**: enabled `<IsAotCompatible>true</IsAotCompatible>` and `<EnableTrimAnalyzer>true</EnableTrimAnalyzer>` with unified `GeminiJsonContext`.
 
 ### Changed (Breaking)
+- **Renamed package, assembly, and root namespace from `GeminiAPIWrapper` to `GeminiGatewayClient`**.
 - **Target framework**: updated from `net9.0` to `net10.0`.
 - **Replaced `GeminiService` / `GeminiServiceBuilder` / `GenerativeLanguageOptions` / `GeminiResponseExtensions`**:
   - Use `GeminiClient` (or `IGeminiClient`), `GeminiClientOptions`, `services.AddGeminiClient(...)`, `client.AsIChatClient()`, and direct properties on `GenerateContentResponse` (`response.Text`, `response.FunctionCalls`, `response.FinishReason`, `response.BlockReason`).
 - **Consolidated namespaces**:
-  - Core client types (`GeminiClient`, `IGeminiClient`, `GeminiClientOptions`, `GeminiStreamingFormat`, `GeminiApiException`, `GeminiChatClient`, `GeminiChatPropertyNames`, `GeminiClientExtensions`) live in root `namespace GeminiAPIWrapper`.
-  - Request/response DTOs live in `namespace GeminiAPIWrapper.Models` (`GenerateContentRequest`, `GenerateContentResponse`, `Blob`, `SafetyRating`, etc.).
+  - Core client types (`GeminiClient`, `IGeminiClient`, `GeminiClientOptions`, `GeminiStreamingFormat`, `GeminiApiException`, `GeminiChatClient`, `GeminiChatPropertyNames`, `GeminiClientExtensions`) live in root `namespace GeminiGatewayClient`.
+  - Request/response DTOs live in `namespace GeminiGatewayClient.Models` (`GenerateContentRequest`, `GenerateContentResponse`, `Blob`, `SafetyRating`, etc.).
   - DI extension `AddGeminiClient` lives in `namespace Microsoft.Extensions.DependencyInjection`.
 - **Removed `SystemInstruction` wrapper class**: `GenerateContentRequest.SystemInstruction` now uses `Content?` directly (`Role` is nullable on `Content`).
 - **MIME types and `Blob.Data`**: `GenerationConfig.ResponseMimeType`, `Blob.MimeType`, and `FileData.MimeType` are `string` (use `MimeTypes` constants); `Blob.Data` is `byte[]` instead of a manual Base64 `string`.

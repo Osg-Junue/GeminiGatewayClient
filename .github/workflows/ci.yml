@@ -29,8 +29,8 @@ jobs:
         run: dotnet test --no-build -c Release --verbosity normal
 
       - name: Pack NuGet package
-        run: dotnet pack GeminiAPIWrapper/GeminiAPIWrapper.csproj --no-build -c Release -o artifacts
+        run: dotnet pack GeminiGatewayClient/GeminiGatewayClient.csproj --no-build -c Release -o artifacts
 
       - name: Verify package contents
         run: |
-          unzip -l artifacts/GeminiAPIWrapper.2.0.0.nupkg | grep -E "README.md|GeminiAPIWrapper.xml|LICENSE.txt"
+          unzip -l artifacts/GeminiGatewayClient.2.0.0.nupkg | grep -E "README.md|GeminiGatewayClient.xml|LICENSE.txt"

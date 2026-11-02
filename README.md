@@ -1,14 +1,14 @@
-# GeminiAPIWrapper
+# GeminiGatewayClient
 
-[![NuGet](https://img.shields.io/nuget/v/GeminiAPIWrapper.svg)](https://www.nuget.org/packages/GeminiAPIWrapper)
-[![CI](https://github.com/Osg-Junue/GeminiAPIWrapper/actions/workflows/ci.yml/badge.svg)](https://github.com/Osg-Junue/GeminiAPIWrapper/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/GeminiGatewayClient.svg)](https://www.nuget.org/packages/GeminiGatewayClient)
+[![CI](https://github.com/Osg-Junue/GeminiGatewayClient/actions/workflows/ci.yml/badge.svg)](https://github.com/Osg-Junue/GeminiGatewayClient/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.txt)
 
 A lightweight, NativeAOT-compatible .NET 10 client for the **Gemini (Generative Language) API** — built to run cleanly behind API gateways and proxies, with built-in **`Microsoft.Extensions.AI` (`IChatClient`)**, **`IOptions<GeminiClientOptions>`**, and **`IHttpClientFactory`** support.
 
 ---
 
-## Why GeminiAPIWrapper?
+## Why GeminiGatewayClient?
 
 Google's official `Google.GenAI` SDK is designed around calling Google endpoints directly, sending the API key in the `x-goog-api-key` header.
 
@@ -19,7 +19,7 @@ In production, LLM traffic often passes through an **API gateway, reverse proxy,
 3. **Both a gateway header and a Gemini key are required** — for example, an authenticated Cloudflare AI Gateway requires `cf-aig-authorization: Bearer <token>` in addition to `x-goog-api-key`.
 4. **You want a gateway-first `HttpClient` lifecycle** — headers applied per `HttpRequestMessage` (never mutating `HttpClient.DefaultRequestHeaders`), first-class `services.AddGeminiClient(...)` registration with `IHttpClientFactory` and `IOptions<GeminiClientOptions>`, and source-generated `System.Text.Json` serialization (`<IsAotCompatible>true</IsAotCompatible>`).
 
-| Capability | `GeminiAPIWrapper` | Official `Google.GenAI` |
+| Capability | `GeminiGatewayClient` | Official `Google.GenAI` |
 |---|---|---|
 | Replace the API key header name (`ApiKeyHeader`) | Yes (`x-goog-api-key` is not sent when overridden) | Possible via `HttpOptions` (manual header wiring) |
 | Key value prefix (`ApiKeyPrefix`, e.g. `"Bearer "`) | Built-in option | Via custom headers |
@@ -34,7 +34,7 @@ In production, LLM traffic often passes through an **API gateway, reverse proxy,
 ## Installation
 
 ```bash
-dotnet add package GeminiAPIWrapper
+dotnet add package GeminiGatewayClient
 ```
 
 Targets **.NET 10** (`net10.0`).
@@ -44,7 +44,7 @@ Targets **.NET 10** (`net10.0`).
 ## Quick Start
 
 ```csharp
-using GeminiAPIWrapper;
+using GeminiGatewayClient;
 
 using var client = new GeminiClient(
     apiKey: Environment.GetEnvironmentVariable("GEMINI_API_KEY")!,
@@ -57,7 +57,7 @@ Console.WriteLine(response.Text);
 Or configure `GeminiClientOptions` for custom endpoints, headers, and timeouts:
 
 ```csharp
-using GeminiAPIWrapper;
+using GeminiGatewayClient;
 
 using var client = new GeminiClient(new GeminiClientOptions
 {
@@ -131,7 +131,7 @@ var options = new GeminiClientOptions
 Register `GeminiClient`, `IGeminiClient`, and `IChatClient` with `IServiceCollection.AddGeminiClient(...)`. It integrates with `Microsoft.Extensions.Options` (`IOptions<GeminiClientOptions>` and `IValidateOptions<GeminiClientOptions>`) and returns an `IHttpClientBuilder` so you can chain standard resilience pipelines, custom handlers, or logging:
 
 ```csharp
-using GeminiAPIWrapper;
+using GeminiGatewayClient;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -185,7 +185,7 @@ using var client = new GeminiClient(options, httpClient);
 Adapt any `IGeminiClient` to `Microsoft.Extensions.AI.IChatClient` via `client.AsIChatClient()` (or resolve `IChatClient` directly from DI after calling `services.AddGeminiClient(...)`). Supports multi-turn chat, streaming, tool calling (`FunctionInvokingChatClient`), structured output (`ChatResponseFormat.ForJsonSchema`), per-request model overrides (`ChatOptions.ModelId`), and reasoning configuration (`ChatOptions.Reasoning`):
 
 ```csharp
-using GeminiAPIWrapper;
+using GeminiGatewayClient;
 using Microsoft.Extensions.AI;
 
 using var gemini = new GeminiClient(
@@ -253,7 +253,7 @@ await foreach (var chunk in client.StreamGenerateContentAsync("Write a short sto
   For exact control, set `GenerationConfig.ThinkingConfig` yourself via `ChatOptions.RawRepresentationFactory` (it takes precedence).
 
 ```csharp
-using GeminiAPIWrapper.Models;
+using GeminiGatewayClient.Models;
 
 // Gemini 3 series: qualitative thinking level
 var config = new GenerationConfig
@@ -272,8 +272,8 @@ Pass a standard JSON Schema (`JsonElement`) via `GenerationConfig.ResponseJsonSc
 
 ```csharp
 using System.Text.Json;
-using GeminiAPIWrapper;
-using GeminiAPIWrapper.Models;
+using GeminiGatewayClient;
+using GeminiGatewayClient.Models;
 
 using var schemaDoc = JsonDocument.Parse("""
     {
@@ -306,7 +306,7 @@ Console.WriteLine(response.Text);
 When `response.Text` returns `null`, inspect `response.BlockReason` (prompt-level block in `PromptFeedback`) or `response.FinishReason` (candidate-level stop reason such as `FinishReason.Safety`):
 
 ```csharp
-using GeminiAPIWrapper;
+using GeminiGatewayClient;
 
 try
 {
@@ -361,5 +361,5 @@ catch (GeminiApiException ex)
 ## License & Resources
 
 - Released under the [MIT License](LICENSE.txt).
-- Issues and pull requests are welcome at [Osg-Junue/GeminiAPIWrapper](https://github.com/Osg-Junue/GeminiAPIWrapper).
-- Japanese article (日本語): [GeminiAPIWrapper 紹介記事](https://osg.junue.net/articles/geminiapiwrapper/)
+- Issues and pull requests are welcome at [Osg-Junue/GeminiGatewayClient](https://github.com/Osg-Junue/GeminiGatewayClient).
+- Japanese article (日本語): [GeminiGatewayClient (旧 GeminiAPIWrapper) 紹介記事](https://osg.junue.net/articles/geminiapiwrapper/)
