@@ -33,4 +33,4 @@ jobs:
 
       - name: Verify package contents
         run: |
-          unzip -l artifacts/GeminiGatewayClient.2.0.0.nupkg | grep -E "README.md|GeminiGatewayClient.xml|LICENSE.txt"
+          unzip -l artifacts/GeminiGatewayClient.*.nupkg | grep -E "README.md|GeminiGatewayClient.xml|LICENSE.txt"
