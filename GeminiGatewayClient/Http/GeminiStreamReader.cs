@@ -42,6 +42,7 @@ internal static class GeminiStreamReader
 
         var buffer = ArrayPool<byte>.Shared.Rent(InitialReadBufferBytes);
         var start = 0;
+        var searchStart = 0;
         var buffered = 0;
 
         try
@@ -57,6 +58,7 @@ internal static class GeminiStreamReader
                     }
 
                     buffered = remaining;
+                    searchStart = Math.Max(0, searchStart - start);
                     start = 0;
                 }
 
@@ -125,23 +127,29 @@ internal static class GeminiStreamReader
                     if (buffer[start] == (byte)'\n')
                     {
                         start++;
+                        if (searchStart < start)
+                        {
+                            searchStart = start;
+                        }
                     }
 
                     skipLeadingLf = false;
                 }
 
-                while (start < buffered)
+                while (searchStart < buffered)
                 {
-                    var unread = buffer.AsSpan(start, buffered - start);
-                    var newlineIdx = unread.IndexOfAny((byte)'\r', (byte)'\n');
-                    if (newlineIdx < 0)
+                    var unsearched = buffer.AsSpan(searchStart, buffered - searchStart);
+                    var relativeNewlineIdx = unsearched.IndexOfAny((byte)'\r', (byte)'\n');
+                    if (relativeNewlineIdx < 0)
                     {
+                        searchStart = buffered;
                         break;
                     }
 
-                    var line = unread[..newlineIdx];
-                    var delimiter = unread[newlineIdx];
-                    start += newlineIdx + 1;
+                    var newlineIdx = searchStart + relativeNewlineIdx;
+                    var line = buffer.AsSpan(start, newlineIdx - start);
+                    var delimiter = buffer[newlineIdx];
+                    start = newlineIdx + 1;
 
                     if (delimiter == (byte)'\r')
                     {
@@ -157,6 +165,8 @@ internal static class GeminiStreamReader
                             skipLeadingLf = true;
                         }
                     }
+
+                    searchStart = start;
 
                     if (ProcessSseLine(line, ref isFirstLine, ref sawSseEvent, dataBuffer, ref nonSseBuffer))
                     {

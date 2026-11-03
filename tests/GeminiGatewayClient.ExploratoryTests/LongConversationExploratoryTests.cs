@@ -70,10 +70,10 @@ public sealed class LongConversationExploratoryTests(ExploratoryTestFixture fixt
 
             Assert.NotNull(response.Text);
             Assert.NotEmpty(response.Candidates);
-            Assert.NotNull(response.Candidates[0].Content);
+            Assert.True(response.TryGetModelContent(out var modelContent));
 
             // Preserve the exact model Content (including any thoughtSignature parts) in conversation history
-            conversation.Add(response.Candidates[0].Content!);
+            conversation.Add(modelContent!);
 
             if (response.UsageMetadata is { } usage)
             {
@@ -166,6 +166,136 @@ public sealed class LongConversationExploratoryTests(ExploratoryTestFixture fixt
         Assert.Contains("42", finalResponse.Text, StringComparison.Ordinal);
     }
 
+    [ExploratoryFact]
+    public async Task MultiTurn_IChatClient_Streaming_PreservesThoughtSignatureAcrossToChatResponse_AndOmitsEmptyTextContent()
+    {
+        LogSection("Multi-Turn IChatClient Streaming + ToChatResponse() Round-Trip");
+        using var geminiClient = CreateGeminiClient();
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var history = new List<ChatMessage>
+        {
+            new(ChatRole.System, "あなたはシステム設計アシスタントです。各ターンで2〜3文の説明を添えて回答してください。")
+        };
+
+        var turns = new[]
+        {
+            "第1ターン: キャッシュ層には『Valkey 8.0』を採用し、TTLは 900秒 とします。この設定の利点を2文で説明しつつ記憶してください。",
+            "第2ターン: メッセージブローカーには『Apache Kafka』を採用し、パーティション数は 12 とします。この設定の利点を2文で説明しつつ記憶してください。",
+            "第3ターン: 第1ターンと第2ターンで決定したミドルウェア名と数値（TTL秒数・パーティション数）をすべて含めて要約してください。"
+        };
+
+        ChatResponse? finalResponse = null;
+
+        for (var t = 0; t < turns.Length; t++)
+        {
+            Output.WriteLine($"\n--- Streaming Chat Turn {t + 1} ---");
+            history.Add(new ChatMessage(ChatRole.User, turns[t]));
+
+            var updates = new List<ChatResponseUpdate>();
+            var sw = Stopwatch.StartNew();
+
+            await foreach (var update in chatClient.GetStreamingResponseAsync(history, new ChatOptions
+            {
+                Temperature = 0.0f,
+                Reasoning = new ReasoningOptions
+                {
+                    Effort = ReasoningEffort.Low,
+                    Output = ReasoningOutput.Summary
+                }
+            }))
+            {
+                updates.Add(update);
+            }
+
+            sw.Stop();
+
+            // Verify no empty TextContent("") was emitted from empty or signature-only SSE chunks
+            var allTextContents = updates.SelectMany(u => u.Contents).OfType<TextContent>().ToList();
+            Assert.NotEmpty(allTextContents);
+            Assert.All(allTextContents, tc => Assert.False(string.IsNullOrEmpty(tc.Text)));
+
+            var aggregated = updates.ToChatResponse();
+            LogChatResponseSummary(aggregated, sw.Elapsed);
+
+            // Verify thoughtSignature survived ToChatResponse() even when multiple TextContent chunks were coalesced
+            var hasSignature = aggregated.Messages
+                .SelectMany(m => m.Contents)
+                .Any(c =>
+                    (c is TextReasoningContent rc && !string.IsNullOrEmpty(rc.ProtectedData)) ||
+                    (c.AdditionalProperties?.TryGetValue(GeminiChatPropertyNames.ThoughtSignature, out var sig) == true && sig is not null));
+            Assert.True(hasSignature, $"Expected thoughtSignature to be preserved after ToChatResponse() on Turn {t + 1}.");
+
+            history.AddRange(aggregated.Messages);
+            finalResponse = aggregated;
+        }
+
+        Assert.NotNull(finalResponse?.Text);
+        Assert.Contains("Valkey", finalResponse.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("900", finalResponse.Text, StringComparison.Ordinal);
+        Assert.Contains("Kafka", finalResponse.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("12", finalResponse.Text, StringComparison.Ordinal);
+    }
+
+    [ExploratoryFact]
+    public async Task MultiTurn_NativeStreaming_ToModelContentAsync_CoalescesChunksForSubsequentTurns()
+    {
+        LogSection("Multi-Turn Native StreamGenerateContentAsync + ToModelContentAsync()");
+        using var client = CreateGeminiClient();
+
+        var isGemini3OrLater = DefaultModel.StartsWith("gemini-3", StringComparison.OrdinalIgnoreCase);
+        var thinkingConfig = isGemini3OrLater
+            ? new ThinkingConfig { ThinkingLevel = ThinkingLevel.Low, IncludeThoughts = true }
+            : new ThinkingConfig { ThinkingBudget = 1024, IncludeThoughts = true };
+
+        var conversation = new List<Content>();
+        var turns = new[]
+        {
+            "サーバー識別子『SRV-TOKYO-07』とポート番号『8443』を記憶し、受領確認を2文で出力してください。",
+            "先ほど記憶したサーバー識別子とポート番号をそのまま答えてください。"
+        };
+
+        Content? lastModelContent = null;
+
+        for (var t = 0; t < turns.Length; t++)
+        {
+            Output.WriteLine($"\n--- Native Stream Turn {t + 1} ---");
+            conversation.Add(Content.FromText(turns[t], Role.User));
+
+            var request = new GenerateContentRequest
+            {
+                Contents = conversation,
+                GenerationConfig = new GenerationConfig
+                {
+                    Temperature = 0.0,
+                    ThinkingConfig = thinkingConfig
+                }
+            };
+
+            var sw = Stopwatch.StartNew();
+            var modelContent = await client.StreamGenerateContentAsync(request).ToModelContentAsync();
+            sw.Stop();
+
+            Assert.NotNull(modelContent);
+            Assert.Equal(Role.Model, modelContent.Role);
+            Assert.NotEmpty(modelContent.Parts);
+            Assert.All(modelContent.Parts, p => Assert.False(string.IsNullOrEmpty(p.Text) && string.IsNullOrEmpty(p.ThoughtSignature)));
+
+            Output.WriteLine(
+                $"[Aggregated Content ({sw.ElapsedMilliseconds} ms)] Parts={modelContent.Parts.Count}, " +
+                $"HasSignature={modelContent.Parts.Any(p => !string.IsNullOrEmpty(p.ThoughtSignature))}");
+
+            conversation.Add(modelContent);
+            lastModelContent = modelContent;
+        }
+
+        Assert.NotNull(lastModelContent);
+        var combinedText = string.Concat(lastModelContent.Parts.Where(p => p.Thought != true).Select(p => p.Text));
+        Output.WriteLine($"Final Answer: {combinedText}");
+        Assert.Contains("SRV-TOKYO-07", combinedText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("8443", combinedText, StringComparison.Ordinal);
+    }
+
     private static ChatMessage SimulateDatabasePersistence(ChatMessage original)
     {
         var clonedContents = new List<AIContent>(original.Contents.Count);
@@ -212,4 +342,3 @@ public sealed class LongConversationExploratoryTests(ExploratoryTestFixture fixt
         return result;
     }
 }
-
