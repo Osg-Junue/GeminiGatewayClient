@@ -18,7 +18,7 @@ public class StreamReaderBenchmarks
         var jsonBuilder = new StringBuilder("[");
         for (var i = 0; i < 16; i++)
         {
-            var chunk = $$$"""{"responseId":"resp-stream","modelVersion":"gemini-2.5-flash","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Chunk {{{i}}} content "}]}},"finishReason":null}]}""";
+            var chunk = $$$"""{"responseId":"resp-stream","modelVersion":"gemini-2.5-flash","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Chunk {{{i}}} content "}]},"finishReason":null}]}""";
             sseBuilder.Append("data: ").Append(chunk).Append("\r\n\r\n");
             if (i > 0)
             {

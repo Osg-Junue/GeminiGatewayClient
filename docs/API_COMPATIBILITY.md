@@ -9,27 +9,29 @@ This document maps the official [Google Gemini REST API (`generativelanguage.goo
 3. [`GenerationConfig` & `ThinkingConfig` Fields](#3-generationconfig--thinkingconfig-fields)
 4. [`Content` & `Part` Multimodal / Union Types](#4-content--part-multimodal--union-types)
 5. [`Tools`, `ToolConfig` & Function Calling](#5-tools-toolconfig--function-calling)
-6. [`GenerateContentResponse`, `Candidate` & `UsageMetadata`](#6-generatecontentresponse-candidate--usagemetadata)
-7. [`Microsoft.Extensions.AI` (`IChatClient`) Mapping](#7-microsoftextensionsai-ichatclient-mapping)
-8. [Forward Compatibility & Wire Enums](#8-forward-compatibility--wire-enums)
+6. [`GenerateContentResponse`, `Candidate`, `GroundingMetadata` & `UsageMetadata`](#6-generatecontentresponse-candidate-groundingmetadata--usagemetadata)
+7. [`EmbedContent` & `BatchEmbedContents` Models](#7-embedcontent--batchembedcontents-models)
+8. [`Microsoft.Extensions.AI` (`IChatClient` & `IEmbeddingGenerator`) Mapping](#8-microsoftextensionsai-ichatclient--iembeddinggenerator-mapping)
+9. [Forward Compatibility & Wire Enums](#9-forward-compatibility--wire-enums)
 
 ---
 
 ## 1. REST Endpoints Coverage
 
-`GeminiGatewayClient` is intentionally focused on stateless content generation and streaming—the endpoints routed through API gateways in production applications.
+`GeminiGatewayClient` is focused on stateless runtime endpoints (`:generateContent`, `:streamGenerateContent`, `:embedContent`, `:batchEmbedContents`)—the endpoints routed through API gateways in production applications.
 
 | Official Gemini REST Endpoint | Official Doc Reference | Status | `GeminiGatewayClient` API |
 |---|---|---|---|
 | `POST /{version}/models/{model}:generateContent` | [Generating content](https://ai.google.dev/api/generate-content#method:-models.generatecontent) | ✅ Supported | `IGeminiClient.GenerateContentAsync`<br>`IChatClient.GetResponseAsync` |
 | `POST /{version}/models/{model}:streamGenerateContent?alt=sse` | [Streaming content](https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent) | ✅ Supported | `IGeminiClient.StreamGenerateContentAsync` (`ServerSentEvents` default, or `JsonArray`)<br>`IChatClient.GetStreamingResponseAsync` |
+| `POST /{version}/models/{model}:embedContent` | [Embeddings](https://ai.google.dev/api/embeddings#method:-models.embedcontent) | ✅ Supported | `IGeminiClient.EmbedContentAsync`<br>`IEmbeddingGenerator<string, Embedding<float>>.GenerateAsync` (single input) |
+| `POST /{version}/models/{model}:batchEmbedContents` | [Batch embeddings](https://ai.google.dev/api/embeddings#method:-models.batchembedcontents) | ✅ Supported | `IGeminiClient.BatchEmbedContentsAsync`<br>`IEmbeddingGenerator<string, Embedding<float>>.GenerateAsync` (multiple inputs) |
 | `POST /{version}/tunedModels/{model}:generateContent` | [Tuned models](https://ai.google.dev/api/tuning) | ✅ Supported | Pass `"tunedModels/{id}"` as `Model` |
 | `POST /{version}/tunedModels/{model}:streamGenerateContent` | [Tuned models](https://ai.google.dev/api/tuning) | ✅ Supported | Pass `"tunedModels/{id}"` as `Model` |
 | Consuming uploaded files (`fileData.fileUri`) | [Files API](https://ai.google.dev/api/files) | ✅ Supported | `Part.FromUri(fileUri, mimeType)` / `FileData` |
 | Consuming cached context (`cachedContent`) | [Context caching](https://ai.google.dev/api/caching) | ✅ Supported | `GenerateContentRequest.CachedContent` |
 | `GET /{version}/models` (`models.list` / `models.get`) | [Models](https://ai.google.dev/api/models) | ➖ Out of scope | Management endpoint (not included in gateway runtime client) |
 | `POST /{version}/models/{model}:countTokens` | [Tokens](https://ai.google.dev/api/tokens) | ➖ Out of scope | Token usage is returned in `GenerateContentResponse.UsageMetadata` |
-| `POST /{version}/models/{model}:embedContent` | [Embeddings](https://ai.google.dev/api/embeddings) | ➖ Out of scope | Embeddings endpoint |
 | `POST /upload/{version}/files`, `cachedContents` CRUD, `batches` | [Files](https://ai.google.dev/api/files) / [Batch](https://ai.google.dev/api/batch-mode) | ➖ Out of scope | Storage/batch management endpoints |
 | `BidiGenerateContent` (WebSockets) | [Live API](https://ai.google.dev/api/live) | ➖ Out of scope | Stateful WebSocket protocol |
 
@@ -119,7 +121,7 @@ Reference: [`Tool`](https://ai.google.dev/api/caching#Tool) and [`FunctionDeclar
 
 ---
 
-## 6. `GenerateContentResponse`, `Candidate` & `UsageMetadata`
+## 6. `GenerateContentResponse`, `Candidate`, `GroundingMetadata` & `UsageMetadata`
 
 Reference: [`GenerateContentResponse`](https://ai.google.dev/api/generate-content#response-body)
 
@@ -134,17 +136,34 @@ Reference: [`GenerateContentResponse`](https://ai.google.dev/api/generate-conten
 | `candidates[].finishReason` | `FinishReason` | ✅ Supported | `Candidate.FinishReason` | All 17 official values (`Stop`, `MaxTokens`, `Safety`, `MalformedFunctionCall`, `UnexpectedToolCall`, etc.) + `Unknown` fallback |
 | `candidates[].safetyRatings` | `SafetyRating[]` | ✅ Supported | `Candidate.SafetyRatings` | `Category`, `Probability`, `ProbabilityScore`, `Severity`, `SeverityScore`, `Blocked` |
 | `candidates[].citationMetadata` | `CitationMetadata` | ✅ Supported | `Candidate.CitationMetadata` | `Citations` (`StartIndex`, `EndIndex`, `Uri`, `Title`, `License`, `PublicationDate`) |
+| `candidates[].groundingMetadata` | `GroundingMetadata` | ✅ Supported | `Candidate.GroundingMetadata` | `WebSearchQueries`, `SearchEntryPoint` (`RenderedContent`, `SdkBlob`), `GroundingChunks` (`Web`, `RetrievedContext`), `GroundingSupports` (`Segment`, `GroundingChunkIndices`, `ConfidenceScores`) |
+| `candidates[].urlContextMetadata` | `UrlContextMetadata` | ✅ Supported | `Candidate.UrlContextMetadata` | `UrlMetadata` (`RetrievedUrl`, `UrlRetrievalStatus`) |
 | `candidates[].logprobsResult` | `LogprobsResult` | ✅ Supported | `Candidate.LogprobsResult` | `TopCandidates`, `ChosenCandidates` (`Token`, `TokenId`, `LogProbability`) |
 | `candidates[].avgLogprobs` | `number` | ✅ Supported | `Candidate.AvgLogprobs` | Average log probability |
 | `candidates[].tokenCount` | `integer` | ✅ Supported | `Candidate.TokenCount` | Token count for the candidate |
 | `candidates[].finishMessage` | `string` | ✅ Supported | `Candidate.FinishMessage` | Detailed stop description |
-| `candidates[].groundingMetadata` | `GroundingMetadata` | 🔄 Via `ExtensionData` | `Candidate.ExtensionData["groundingMetadata"]` | Accessible as a `JsonElement` on `Candidate.ExtensionData` |
 
 ---
 
-## 7. `Microsoft.Extensions.AI` (`IChatClient`) Mapping
+## 7. `EmbedContent` & `BatchEmbedContents` Models
 
-`GeminiChatClient` (created via `client.AsIChatClient()` or resolved from DI) maps `Microsoft.Extensions.AI` abstractions to Gemini wire models as follows:
+Reference: [`Embeddings`](https://ai.google.dev/api/embeddings)
+
+| JSON Wire Field | Official Type | Status | C# Type / Property | Notes |
+|---|---|---|---|---|
+| `model` | `string` | ✅ Supported | `EmbedContentRequest.Model` | Normalized automatically to `"models/{model}"` on each item in `BatchEmbedContentsAsync` |
+| `content` | `Content` | ✅ Supported | `EmbedContentRequest.Content` | Convenience factory `EmbedContentRequest.FromText(...)` |
+| `taskType` | `TaskType` | ✅ Supported | `EmbedContentRequest.TaskType` | `RetrievalQuery`, `RetrievalDocument`, `SemanticSimilarity`, `Classification`, `Clustering`, `QuestionAnswering`, `FactVerification`, `CodeRetrievalQuery` + `Unknown` |
+| `title` | `string` | ✅ Supported | `EmbedContentRequest.Title` | Validated only when `TaskType` is `RetrievalDocument` |
+| `outputDimensionality` | `integer` | ✅ Supported | `EmbedContentRequest.OutputDimensionality` | Positive reduced vector dimension |
+| `embedding.values` | `number[]` | ✅ Supported | `EmbedContentResponse.Embedding.Values` (`IList<float>`) | Dense float embedding vector |
+| `requests` / `embeddings` | `EmbedContentRequest[]` / `ContentEmbedding[]` | ✅ Supported | `BatchEmbedContentsRequest.Requests` / `BatchEmbedContentsResponse.Embeddings` | Batch embedding request and response |
+
+---
+
+## 8. `Microsoft.Extensions.AI` (`IChatClient` & `IEmbeddingGenerator`) Mapping
+
+`GeminiChatClient` (created via `client.AsIChatClient()` or resolved from DI) and `GeminiEmbeddingGenerator` (created via `client.AsIEmbeddingGenerator()` or resolved from DI) map `Microsoft.Extensions.AI` abstractions to Gemini wire models as follows:
 
 | `Microsoft.Extensions.AI` Type | Gemini Wire Mapping |
 |---|---|
@@ -152,6 +171,8 @@ Reference: [`GenerateContentResponse`](https://ai.google.dev/api/generate-conten
 | `ChatRole.User` / `ChatRole.Tool` | `Content` with `Role.User` |
 | `ChatRole.Assistant` | `Content` with `Role.Model` |
 | `TextContent` | `Part.Text` (preserves trailing `ThoughtSignature` via `AdditionalProperties`) |
+| `TextContent.Annotations` (`CitationAnnotation`) | Mapped from `Candidate.CitationMetadata` and `Candidate.GroundingMetadata` (`GroundingChunks` + `GroundingSupports`), converting UTF-8 byte offsets into UTF-16 `char` offsets on `TextSpanAnnotatedRegion` |
+| `ChatResponse.AdditionalProperties["gemini.webSearchQueries"]` | Mapped from `Candidate.GroundingMetadata.WebSearchQueries` |
 | `TextReasoningContent` | `Part` with `Thought = true`, `Text`, and `ThoughtSignature` (`ProtectedData`) |
 | `DataContent` | `Part.InlineData` (`Blob` with `MimeType` and `Data` bytes) |
 | `UriContent` | `Part.FileData` (`FileData` with `FileUri` and `MimeType`) |
@@ -166,16 +187,16 @@ Reference: [`GenerateContentResponse`](https://ai.google.dev/api/generate-conten
 | `ChatResponseFormatJson` | `GenerationConfig.ResponseMimeType = "application/json"` + `ResponseJsonSchema` |
 | `ChatOptions.Reasoning` | Mapped to `ThinkingConfig` (`ThinkingLevel` on Gemini 3+, `ThinkingBudget` on Gemini 2.5, `IncludeThoughts` from `ReasoningOutput`) |
 | `ChatOptions.RawRepresentationFactory` | Accepts a `GenerateContentRequest` template, deep-cloned per call so shared templates are never mutated |
+| `IEmbeddingGenerator<string, Embedding<float>>` | Calls `:embedContent` for single input and `:batchEmbedContents` for multiple inputs; maps `EmbeddingGenerationOptions.ModelId`, `Dimensions` (`outputDimensionality`), and `RawRepresentationFactory` (`EmbedContentRequest` / `BatchEmbedContentsRequest`) |
 
 ---
 
-## 8. Forward Compatibility & Wire Enums
+## 9. Forward Compatibility & Wire Enums
 
 To prevent deserialization crashes when Google adds new fields or enum values to the Gemini API:
 
-1. **`[JsonExtensionData]` on every DTO**: All 27 request and response model classes include `IDictionary<string, JsonElement>? ExtensionData`, ensuring unknown JSON properties survive round-trip serialization.
-2. **`LenientStringEnumConverter<TEnum>` on all 14 wire enums**:
-   - `FinishReason`, `BlockReason`, `HarmCategory`, `HarmProbability`, `HarmSeverity`, `HarmBlockThreshold`, `HarmBlockMethod`, `Role`, `SchemaType`, `ThinkingLevel`, `MediaResolution`, `FunctionCallingMode`, `CodeExecutionLanguage`, and `CodeExecutionOutcome`.
+1. **`[JsonExtensionData]` on every DTO**: All request and response model classes include `IDictionary<string, JsonElement>? ExtensionData`, ensuring unknown JSON properties survive round-trip serialization.
+2. **`LenientStringEnumConverter<TEnum>` on all 16 wire enums**:
+   - `FinishReason`, `BlockReason`, `HarmCategory`, `HarmProbability`, `HarmSeverity`, `HarmBlockThreshold`, `HarmBlockMethod`, `Role`, `SchemaType`, `ThinkingLevel`, `MediaResolution`, `FunctionCallingMode`, `CodeExecutionLanguage`, `CodeExecutionOutcome`, `UrlRetrievalStatus`, and `TaskType`.
    - Unrecognized string or integer tokens deserialize to `Unknown` (`0`) instead of throwing `JsonException`.
-   - Outbound validation (`GenerateContentRequest.Validate()`) rejects `Unknown` on request enums before an HTTP call is made.
-
+   - Outbound validation (`GenerateContentRequest.Validate()`, `EmbedContentRequest.Validate()`) rejects `Unknown` on request enums before an HTTP call is made.

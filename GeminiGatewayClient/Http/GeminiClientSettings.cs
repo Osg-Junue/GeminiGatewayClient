@@ -10,6 +10,7 @@ internal sealed class GeminiClientSettings
 {
     private GeminiClientSettings(
         GeminiEndpoint endpoint,
+        string? defaultEmbeddingModel,
         GeminiRequestHeaders headers,
         TimeSpan timeout,
         TimeSpan? streamIdleTimeout,
@@ -17,6 +18,7 @@ internal sealed class GeminiClientSettings
         JsonSerializerOptions? toolSerializerOptions)
     {
         Endpoint = endpoint;
+        DefaultEmbeddingModel = defaultEmbeddingModel;
         Headers = headers;
         Timeout = timeout;
         StreamIdleTimeout = streamIdleTimeout;
@@ -25,6 +27,8 @@ internal sealed class GeminiClientSettings
     }
 
     public GeminiEndpoint Endpoint { get; }
+
+    public string? DefaultEmbeddingModel { get; }
 
     public GeminiRequestHeaders Headers { get; }
 
@@ -60,8 +64,11 @@ internal sealed class GeminiClientSettings
             throw new ArgumentOutOfRangeException(nameof(options), options.StreamingFormat, "GeminiClientOptions.StreamingFormat is not a defined value.");
         }
 
+        var defaultEmbeddingModel = string.IsNullOrWhiteSpace(options.EmbeddingModel) ? null : options.EmbeddingModel.Trim();
+
         return new GeminiClientSettings(
-            GeminiEndpoint.Create(options.Endpoint, options.Model, options.AllowInsecureHttp),
+            GeminiEndpoint.Create(options.Endpoint, options.Model, options.AllowInsecureHttp, defaultEmbeddingModel),
+            defaultEmbeddingModel,
             GeminiRequestHeaders.Create(options),
             options.Timeout,
             options.StreamIdleTimeout,
@@ -71,4 +78,3 @@ internal sealed class GeminiClientSettings
 
     private static bool IsValidTimeout(TimeSpan value) => value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan;
 }
-

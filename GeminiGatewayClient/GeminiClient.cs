@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using GeminiGatewayClient.Http;
 using GeminiGatewayClient.Models;
 using GeminiGatewayClient.Serialization;
@@ -14,14 +15,19 @@ namespace GeminiGatewayClient;
 /// Headers are applied per <see cref="HttpRequestMessage"/> rather than on <see cref="HttpClient.DefaultRequestHeaders"/>,
 /// so a shared <see cref="HttpClient"/> (for example from <c>IHttpClientFactory</c>) is never mutated.
 /// Use <see cref="GeminiClientExtensions.AsIChatClient(IGeminiClient, string?, JsonSerializerOptions?)"/> to obtain a
-/// <c>Microsoft.Extensions.AI</c> <c>IChatClient</c>.
+/// <c>Microsoft.Extensions.AI</c> <c>IChatClient</c>, or
+/// <see cref="GeminiClientExtensions.AsIEmbeddingGenerator(IGeminiClient, string?, int?)"/> to obtain an
+/// <c>IEmbeddingGenerator&lt;string, Embedding&lt;float&gt;&gt;</c>.
 /// </para>
 /// </summary>
 public sealed class GeminiClient : IGeminiClient, IDisposable
 {
     private const string GenerateContentOperation = "generateContent";
     private const string StreamGenerateContentOperation = "streamGenerateContent";
+    private const string EmbedContentOperation = "embedContent";
+    private const string BatchEmbedContentsOperation = "batchEmbedContents";
     private const int MaxPreallocatedBufferBytes = 10 * 1024 * 1024;
+    internal const int MaxBufferedResponseBytes = 64 * 1024 * 1024;
 
     private static readonly TimeSpan s_pooledConnectionLifetime = TimeSpan.FromMinutes(2);
 
@@ -71,29 +77,128 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
     /// <inheritdoc />
     public string? DefaultModel => _settings.Endpoint.DefaultModel;
 
+    /// <inheritdoc />
+    public string? DefaultEmbeddingModel => _settings.Endpoint.DefaultEmbeddingModel;
+
     internal TimeSpan HttpClientTimeout => _httpClient.Timeout;
 
     internal JsonSerializerOptions? ToolSerializerOptions => _settings.ToolSerializerOptions;
 
     /// <inheritdoc />
-    public async Task<GenerateContentResponse> GenerateContentAsync(
+    public Task<GenerateContentResponse> GenerateContentAsync(
         GenerateContentRequest request,
         string? model = null,
         CancellationToken cancellationToken = default)
     {
         var requestUri = PrepareRequest(request, model, GenerateContentOperation, serverSentEvents: false);
+        return SendBufferedAsync(
+            requestUri,
+            request,
+            GeminiJsonContext.Default.GenerateContentRequest,
+            GeminiJsonContext.Default.GenerateContentResponse,
+            static r => r.ExtensionData,
+            cancellationToken);
+    }
 
-        using var httpRequest = await CreateRequestMessageAsync(requestUri, request, serverSentEvents: false, cancellationToken).ConfigureAwait(false);
+    /// <inheritdoc />
+    public IAsyncEnumerable<GenerateContentResponse> StreamGenerateContentAsync(
+        GenerateContentRequest request,
+        string? model = null,
+        CancellationToken cancellationToken = default)
+    {
+        // Validate eagerly: errors in an `async` iterator would only surface on the first MoveNextAsync.
+        var serverSentEvents = _settings.StreamingFormat == GeminiStreamingFormat.ServerSentEvents;
+        var requestUri = PrepareRequest(request, model, StreamGenerateContentOperation, serverSentEvents);
+        return StreamCoreAsync(requestUri, request, serverSentEvents, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<EmbedContentResponse> EmbedContentAsync(
+        EmbedContentRequest request,
+        string? model = null,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(request);
+        request.Validate(nameof(request));
+
+        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(model, EmbedContentOperation);
+        var wireRequest = NormalizeSingleEmbedRequestModel(request);
+        return SendBufferedAsync(
+            requestUri,
+            wireRequest,
+            GeminiJsonContext.Default.EmbedContentRequest,
+            GeminiJsonContext.Default.EmbedContentResponse,
+            static r => r.ExtensionData,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<BatchEmbedContentsResponse> BatchEmbedContentsAsync(
+        BatchEmbedContentsRequest request,
+        string? model = null,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(request);
+        request.Validate(nameof(request));
+
+        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(model, BatchEmbedContentsOperation);
+        var defaultResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(model);
+        var wireRequest = NormalizeBatchRequestModels(request, defaultResourcePath);
+
+        return SendBufferedAsync(
+            requestUri,
+            wireRequest,
+            GeminiJsonContext.Default.BatchEmbedContentsRequest,
+            GeminiJsonContext.Default.BatchEmbedContentsResponse,
+            static r => r.ExtensionData,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Disposes the internal <see cref="HttpClient"/> when it was created by this instance.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        if (_disposeHttpClient)
+        {
+            _httpClient.Dispose();
+        }
+    }
+
+    private async Task<TResponse> SendBufferedAsync<TRequest, TResponse>(
+        Uri requestUri,
+        TRequest request,
+        JsonTypeInfo<TRequest> requestTypeInfo,
+        JsonTypeInfo<TResponse> responseTypeInfo,
+        Func<TResponse, IDictionary<string, JsonElement>?> extensionDataSelector,
+        CancellationToken cancellationToken)
+        where TResponse : class
+    {
+        using var httpRequest = await CreateRequestMessageAsync(requestUri, request, requestTypeInfo, serverSentEvents: false, cancellationToken).ConfigureAwait(false);
         using var httpResponse = await SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
         using var watchdog = new StreamIdleWatchdog(_settings.StreamIdleTimeout, cancellationToken);
 
         try
         {
+            var contentLength = httpResponse.Content.Headers.ContentLength;
+            if (contentLength > MaxBufferedResponseBytes)
+            {
+                throw new GeminiApiException("The Gemini API response body exceeded the maximum allowed length.", httpResponse.StatusCode);
+            }
+
             var stream = await httpResponse.Content.ReadAsStreamAsync(watchdog.Token).ConfigureAwait(false);
             await using (stream.ConfigureAwait(false))
             {
-                var initialCapacity = httpResponse.Content.Headers.ContentLength is > 0 and <= MaxPreallocatedBufferBytes and var contentLength
-                    ? (int)contentLength
+                var initialCapacity = contentLength is > 0 and <= MaxPreallocatedBufferBytes and var length
+                    ? (int)length
                     : 1024;
                 using var buffer = new PooledByteBufferWriter(initialCapacity);
                 while (true)
@@ -116,11 +221,18 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                         break;
                     }
 
+                    if (read > MaxBufferedResponseBytes - buffer.WrittenCount)
+                    {
+                        throw new GeminiApiException("The Gemini API response body exceeded the maximum allowed length.", httpResponse.StatusCode);
+                    }
+
                     buffer.Advance(read);
                 }
 
                 return GeminiStreamReader.DeserializeUtf8Response(
                     buffer.WrittenSpan,
+                    responseTypeInfo,
+                    extensionDataSelector,
                     httpResponse.StatusCode,
                     "The Gemini API returned an empty (null) response body.",
                     "Failed to deserialize the Gemini API response.",
@@ -135,42 +247,18 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         }
     }
 
-    /// <inheritdoc />
-    public IAsyncEnumerable<GenerateContentResponse> StreamGenerateContentAsync(
-        GenerateContentRequest request,
-        string? model = null,
-        CancellationToken cancellationToken = default)
-    {
-        // Validate eagerly: errors in an `async` iterator would only surface on the first MoveNextAsync.
-        var serverSentEvents = _settings.StreamingFormat == GeminiStreamingFormat.ServerSentEvents;
-        var requestUri = PrepareRequest(request, model, StreamGenerateContentOperation, serverSentEvents);
-        return StreamCoreAsync(requestUri, request, serverSentEvents, cancellationToken);
-    }
-
-    /// <summary>
-    /// Disposes the internal <see cref="HttpClient"/> when it was created by this instance.
-    /// </summary>
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _disposed = true;
-        if (_disposeHttpClient)
-        {
-            _httpClient.Dispose();
-        }
-    }
-
     private async IAsyncEnumerable<GenerateContentResponse> StreamCoreAsync(
         Uri requestUri,
         GenerateContentRequest request,
         bool serverSentEvents,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        using var httpRequest = await CreateRequestMessageAsync(requestUri, request, serverSentEvents, cancellationToken).ConfigureAwait(false);
+        using var httpRequest = await CreateRequestMessageAsync(
+            requestUri,
+            request,
+            GeminiJsonContext.Default.GenerateContentRequest,
+            serverSentEvents,
+            cancellationToken).ConfigureAwait(false);
         using var httpResponse = await SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
         var stream = await httpResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         await using (stream.ConfigureAwait(false))
@@ -219,13 +307,75 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         return _settings.Endpoint.GetOperationUri(model, operation, serverSentEvents);
     }
 
-    private ValueTask<HttpRequestMessage> CreateRequestMessageAsync(
+    private static EmbedContentRequest NormalizeSingleEmbedRequestModel(EmbedContentRequest request)
+    {
+        if (request.Model is null)
+        {
+            return request;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Model))
+        {
+            return request.Clone(clearModel: true);
+        }
+
+        var resolved = GeminiEndpoint.ToResourcePath(request.Model)!;
+        return string.Equals(request.Model, resolved, StringComparison.Ordinal)
+            ? request
+            : request.Clone(modelOverride: resolved);
+    }
+
+    private static BatchEmbedContentsRequest NormalizeBatchRequestModels(
+        BatchEmbedContentsRequest request,
+        string defaultResourcePath)
+    {
+        var items = request.Requests;
+        var needsCopy = false;
+        for (var i = 0; i < items.Count; i++)
+        {
+            var itemModel = items[i].Model;
+            var resolved = string.IsNullOrWhiteSpace(itemModel)
+                ? defaultResourcePath
+                : GeminiEndpoint.ToResourcePath(itemModel)!;
+            if (!string.Equals(itemModel, resolved, StringComparison.Ordinal))
+            {
+                needsCopy = true;
+                break;
+            }
+        }
+
+        if (!needsCopy)
+        {
+            return request;
+        }
+
+        var normalizedItems = new List<EmbedContentRequest>(items.Count);
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            var resolved = string.IsNullOrWhiteSpace(item.Model)
+                ? defaultResourcePath
+                : GeminiEndpoint.ToResourcePath(item.Model)!;
+            normalizedItems.Add(string.Equals(item.Model, resolved, StringComparison.Ordinal)
+                ? item
+                : item.Clone(modelOverride: resolved));
+        }
+
+        return new BatchEmbedContentsRequest
+        {
+            Requests = normalizedItems,
+            ExtensionData = request.ExtensionData
+        };
+    }
+
+    private ValueTask<HttpRequestMessage> CreateRequestMessageAsync<TRequest>(
         Uri requestUri,
-        GenerateContentRequest request,
+        TRequest request,
+        JsonTypeInfo<TRequest> requestTypeInfo,
         bool serverSentEvents,
         CancellationToken cancellationToken)
     {
-        var content = JsonContent.Create(request, GeminiJsonContext.Default.GenerateContentRequest);
+        var content = JsonContent.Create(request, requestTypeInfo);
 
         var message = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = content };
         try

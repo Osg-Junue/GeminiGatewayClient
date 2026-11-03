@@ -3,11 +3,13 @@ using GeminiGatewayClient.Models;
 namespace GeminiGatewayClient;
 
 /// <summary>
-/// Client for the Gemini content generation endpoints.
+/// Client for the Gemini content generation and embedding endpoints.
 /// <para>
 /// Depend on this interface (rather than <see cref="GeminiClient"/>) to substitute a fake in unit tests.
-/// Convenience overloads such as <see cref="GeminiClientExtensions.GenerateContentAsync(IGeminiClient, string, string?, GenerationConfig?, string?, CancellationToken)"/>
-/// and <see cref="GeminiClientExtensions.AsIChatClient(IGeminiClient, string?, System.Text.Json.JsonSerializerOptions?)"/> are provided as extension methods.
+/// Convenience overloads such as <see cref="GeminiClientExtensions.GenerateContentAsync(IGeminiClient, string, string?, GenerationConfig?, string?, CancellationToken)"/>,
+/// <see cref="GeminiClientExtensions.EmbedContentAsync(IGeminiClient, string, TaskType?, string?, int?, string?, CancellationToken)"/>,
+/// <see cref="GeminiClientExtensions.AsIChatClient(IGeminiClient, string?, System.Text.Json.JsonSerializerOptions?)"/>, and
+/// <see cref="GeminiClientExtensions.AsIEmbeddingGenerator(IGeminiClient, string?, int?)"/> are provided as extension methods.
 /// </para>
 /// </summary>
 public interface IGeminiClient
@@ -18,9 +20,15 @@ public interface IGeminiClient
     Uri Endpoint { get; }
 
     /// <summary>
-    /// The model used when a call does not specify one, or <c>null</c>.
+    /// The model used when a content-generation call does not specify one, or <c>null</c>.
     /// </summary>
     string? DefaultModel { get; }
+
+    /// <summary>
+    /// The model used when an embedding call does not specify one (<see cref="GeminiClientOptions.EmbeddingModel"/>,
+    /// falling back to <see cref="DefaultModel"/>), or <c>null</c>.
+    /// </summary>
+    string? DefaultEmbeddingModel => DefaultModel;
 
     /// <summary>
     /// Calls <c>:generateContent</c> and returns the complete response.
@@ -76,6 +84,60 @@ public interface IGeminiClient
     /// </exception>
     IAsyncEnumerable<GenerateContentResponse> StreamGenerateContentAsync(
         GenerateContentRequest request,
+        string? model = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Calls <c>:embedContent</c> to generate a vector embedding for a single <see cref="Content"/> item.
+    /// </summary>
+    /// <param name="request">The embedding request to send.</param>
+    /// <param name="model">The embedding model to call, or <c>null</c> to use <see cref="DefaultEmbeddingModel"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The parsed embedding response.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="request"/> is invalid.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// No model was specified and <see cref="DefaultEmbeddingModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
+    /// returned an empty or invalid value.
+    /// </exception>
+    /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
+    /// <exception cref="TimeoutException">
+    /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
+    /// </exception>
+    /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred before an HTTP response was received.</exception>
+    /// <exception cref="OperationCanceledException">
+    /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
+    /// </exception>
+    Task<EmbedContentResponse> EmbedContentAsync(
+        EmbedContentRequest request,
+        string? model = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Calls <c>:batchEmbedContents</c> to generate vector embeddings for multiple <see cref="EmbedContentRequest"/> items in a single HTTP request.
+    /// When an item's <see cref="EmbedContentRequest.Model"/> is omitted or specified as a bare model ID, it is normalized automatically to
+    /// <c>models/{model}</c> on the wire without mutating <paramref name="request"/>.
+    /// </summary>
+    /// <param name="request">The batch embedding request to send.</param>
+    /// <param name="model">The embedding model to call, or <c>null</c> to use <see cref="DefaultEmbeddingModel"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The parsed batch embedding response.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="request"/> is invalid.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// No model was specified and <see cref="DefaultEmbeddingModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
+    /// returned an empty or invalid value.
+    /// </exception>
+    /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
+    /// <exception cref="TimeoutException">
+    /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
+    /// </exception>
+    /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred before an HTTP response was received.</exception>
+    /// <exception cref="OperationCanceledException">
+    /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
+    /// </exception>
+    Task<BatchEmbedContentsResponse> BatchEmbedContentsAsync(
+        BatchEmbedContentsRequest request,
         string? model = null,
         CancellationToken cancellationToken = default);
 }

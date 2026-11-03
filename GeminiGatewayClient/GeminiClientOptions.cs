@@ -16,7 +16,7 @@ namespace GeminiGatewayClient;
 /// <see cref="GeminiClient"/> takes an immutable, validated snapshot when it is constructed, so later changes do not affect existing clients.
 /// </para>
 /// </summary>
-[DebuggerDisplay("Endpoint = {Endpoint}, Model = {Model}, ApiKeyHeader = {ApiKeyHeader}")]
+[DebuggerDisplay("Endpoint = {Endpoint}, Model = {Model}, EmbeddingModel = {EmbeddingModel}, ApiKeyHeader = {ApiKeyHeader}")]
 public sealed class GeminiClientOptions
 {
     /// <summary>
@@ -41,7 +41,7 @@ public sealed class GeminiClientOptions
 
     /// <summary>
     /// Base URI that model resources are resolved against. Requests are sent to
-    /// <c>{Endpoint}/models/{model}:generateContent</c> (or <c>:streamGenerateContent</c>); query strings are preserved.
+    /// <c>{Endpoint}/models/{model}:generateContent</c> (or <c>:streamGenerateContent</c>, <c>:embedContent</c>, <c>:batchEmbedContents</c>); query strings are preserved.
     /// Defaults to <see cref="DefaultEndpoint"/>.
     /// <para>
     /// Examples: <c>https://contoso.azure-api.net/gemini/v1beta</c> (Azure API Management),
@@ -60,6 +60,13 @@ public sealed class GeminiClientOptions
     /// Bare IDs are resolved as <c>models/{id}</c>; resource names containing <c>/</c> (such as <c>tunedModels/my-model</c>) are used as-is.
     /// </summary>
     public string? Model { get; set; }
+
+    /// <summary>
+    /// Optional default embedding model used by <see cref="IGeminiClient.EmbedContentAsync"/>, <see cref="IGeminiClient.BatchEmbedContentsAsync"/>,
+    /// and the <c>Microsoft.Extensions.AI</c> <c>IEmbeddingGenerator&lt;string, Embedding&lt;float&gt;&gt;</c> adapter when a call does not specify
+    /// a model (for example <c>gemini-embedding-001</c>). When <c>null</c>, falls back to <see cref="Model"/>.
+    /// </summary>
+    public string? EmbeddingModel { get; set; }
 
     /// <summary>
     /// The credential sent in <see cref="ApiKeyHeader"/>: a Gemini API key, or a gateway/proxy credential.
@@ -166,6 +173,11 @@ public sealed class GeminiClientOptions
         var builder = new StringBuilder("GeminiClientOptions { ");
         builder.Append("Endpoint = ").Append(Endpoint);
         builder.Append(", Model = ").Append(Model);
+        if (!string.IsNullOrWhiteSpace(EmbeddingModel))
+        {
+            builder.Append(", EmbeddingModel = ").Append(EmbeddingModel);
+        }
+
         builder.Append(", ApiKeyHeader = ").Append(ApiKeyHeader);
         builder.Append(", ApiKey = ").Append(
             !string.IsNullOrWhiteSpace(ApiKey) ? "***" : ApiKeyProvider is not null ? "<provider>" : "<none>");

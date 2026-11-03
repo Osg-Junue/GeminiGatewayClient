@@ -17,12 +17,15 @@ public abstract class ExploratoryTestBase(ExploratoryTestFixture fixture, ITestO
 
     protected string DefaultModel => Fixture.SelectedModel;
 
+    protected string DefaultEmbeddingModel => "gemini-embedding-001";
+
     protected GeminiClient CreateGeminiClient(Action<GeminiClientOptions>? configure = null)
     {
         var options = new GeminiClientOptions
         {
             ApiKey = ExploratoryTestSettings.GetRequiredApiKey(),
             Model = DefaultModel,
+            EmbeddingModel = DefaultEmbeddingModel,
             Timeout = TimeSpan.FromSeconds(60),
             StreamIdleTimeout = TimeSpan.FromSeconds(30)
         };
@@ -62,26 +65,59 @@ public abstract class ExploratoryTestBase(ExploratoryTestFixture fixture, ITestO
                 $"Thoughts={usage.ThoughtsTokenCount ?? 0}, ToolUsePrompt={usage.ToolUsePromptTokenCount ?? 0}, Total={usage.TotalTokenCount}");
         }
 
-        if (response.Candidates is { Count: > 0 } candidates && candidates[0]?.Content?.Parts is { } parts)
+        if (response.Candidates is { Count: > 0 } candidates && candidates[0] is { } candidate)
         {
-            for (var i = 0; i < parts.Count; i++)
+            if (candidate.Content?.Parts is { } parts)
             {
-                var part = parts[i];
-                if (part.Thought == true)
+                for (var i = 0; i < parts.Count; i++)
                 {
-                    Output.WriteLine($"  Part[{i}] (Thought, sig={!string.IsNullOrEmpty(part.ThoughtSignature)}): {part.Text}");
+                    var part = parts[i];
+                    if (part.Thought == true)
+                    {
+                        Output.WriteLine($"  Part[{i}] (Thought, sig={!string.IsNullOrEmpty(part.ThoughtSignature)}): {part.Text}");
+                    }
+                    else if (part.FunctionCall is { } call)
+                    {
+                        Output.WriteLine($"  Part[{i}] (FunctionCall, id={call.Id ?? "<none>"}, sig={!string.IsNullOrEmpty(part.ThoughtSignature)}): {call.Name}({call.Args})");
+                    }
+                    else if (!string.IsNullOrEmpty(part.Text))
+                    {
+                        Output.WriteLine($"  Part[{i}] (Text, sig={!string.IsNullOrEmpty(part.ThoughtSignature)}): {part.Text}");
+                    }
+                    else if (!string.IsNullOrEmpty(part.ThoughtSignature))
+                    {
+                        Output.WriteLine($"  Part[{i}] (SignatureOnly, sigLen={part.ThoughtSignature.Length})");
+                    }
                 }
-                else if (part.FunctionCall is { } call)
+            }
+
+            if (candidate.GroundingMetadata is { } grounding)
+            {
+                Output.WriteLine(
+                    $"[GroundingMetadata] Queries=[{string.Join(", ", grounding.WebSearchQueries)}], " +
+                    $"Chunks={grounding.GroundingChunks.Count}, Supports={grounding.GroundingSupports.Count}, " +
+                    $"HasSearchEntryPoint={grounding.SearchEntryPoint is not null}");
+                for (var i = 0; i < grounding.GroundingChunks.Count; i++)
                 {
-                    Output.WriteLine($"  Part[{i}] (FunctionCall, id={call.Id ?? "<none>"}, sig={!string.IsNullOrEmpty(part.ThoughtSignature)}): {call.Name}({call.Args})");
+                    var chunk = grounding.GroundingChunks[i];
+                    if (chunk.Web is { } web)
+                    {
+                        Output.WriteLine($"  Chunk[{i}] (Web): title={web.Title ?? "<null>"}, domain={web.Domain ?? "<null>"}, uri={web.Uri ?? "<null>"}");
+                    }
+                    else if (chunk.RetrievedContext is { } rc)
+                    {
+                        Output.WriteLine($"  Chunk[{i}] (RetrievedContext): title={rc.Title ?? "<null>"}, uri={rc.Uri ?? "<null>"}");
+                    }
                 }
-                else if (!string.IsNullOrEmpty(part.Text))
+            }
+
+            if (candidate.UrlContextMetadata is { } urlContext)
+            {
+                Output.WriteLine($"[UrlContextMetadata] UrlCount={urlContext.UrlMetadata.Count}");
+                for (var i = 0; i < urlContext.UrlMetadata.Count; i++)
                 {
-                    Output.WriteLine($"  Part[{i}] (Text, sig={!string.IsNullOrEmpty(part.ThoughtSignature)}): {part.Text}");
-                }
-                else if (!string.IsNullOrEmpty(part.ThoughtSignature))
-                {
-                    Output.WriteLine($"  Part[{i}] (SignatureOnly, sigLen={part.ThoughtSignature.Length})");
+                    var meta = urlContext.UrlMetadata[i];
+                    Output.WriteLine($"  Url[{i}]: status={meta.UrlRetrievalStatus}, url={meta.RetrievedUrl}");
                 }
             }
         }
@@ -97,6 +133,12 @@ public abstract class ExploratoryTestBase(ExploratoryTestFixture fixture, ITestO
             Output.WriteLine(
                 $"[ChatUsage] Input={usage.InputTokenCount}, Output={usage.OutputTokenCount}, " +
                 $"Reasoning={usage.ReasoningTokenCount ?? 0}, CachedInput={usage.CachedInputTokenCount ?? 0}, Total={usage.TotalTokenCount}");
+        }
+
+        if (response.AdditionalProperties?.TryGetValue(GeminiChatPropertyNames.WebSearchQueries, out var queriesObj) == true &&
+            queriesObj is IEnumerable<string> queries)
+        {
+            Output.WriteLine($"[ChatAdditionalProperties] WebSearchQueries=[{string.Join(", ", queries)}]");
         }
 
         for (var m = 0; m < response.Messages.Count; m++)
@@ -121,10 +163,22 @@ public abstract class ExploratoryTestBase(ExploratoryTestFixture fixture, ITestO
                         break;
                     case TextContent tc:
                         Output.WriteLine($"    [Text] {tc.Text}");
+                        if (tc.Annotations is { Count: > 0 } annotations)
+                        {
+                            for (var a = 0; a < annotations.Count; a++)
+                            {
+                                if (annotations[a] is CitationAnnotation ca)
+                                {
+                                    var regionsDesc = ca.AnnotatedRegions is { Count: > 0 } regions
+                                        ? string.Join(", ", regions.OfType<TextSpanAnnotatedRegion>().Select(r => $"[{r.StartIndex}..{r.EndIndex}]"))
+                                        : "<none>";
+                                    Output.WriteLine($"      Annotation[{a}] (Citation): title={ca.Title}, tool={ca.ToolName}, regions={regionsDesc}, url={ca.Url}");
+                                }
+                            }
+                        }
                         break;
                 }
             }
         }
     }
 }
-

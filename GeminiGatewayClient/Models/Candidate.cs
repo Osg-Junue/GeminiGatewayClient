@@ -74,7 +74,19 @@ public sealed class Candidate
     public LogprobsResult? LogprobsResult { get; set; }
 
     /// <summary>
-    /// Gets or sets additional JSON properties not explicitly modeled by this type (for example <c>groundingMetadata</c> or <c>urlContextMetadata</c>).
+    /// Grounding attribution and search metadata when grounding tools (such as <see cref="Tool.GoogleSearch"/>) are enabled.
+    /// </summary>
+    [JsonPropertyName("groundingMetadata")]
+    public GroundingMetadata? GroundingMetadata { get; set; }
+
+    /// <summary>
+    /// URL retrieval metadata when <see cref="Tool.UrlContext"/> is enabled.
+    /// </summary>
+    [JsonPropertyName("urlContextMetadata")]
+    public UrlContextMetadata? UrlContextMetadata { get; set; }
+
+    /// <summary>
+    /// Gets or sets additional JSON properties not explicitly modeled by this type.
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
