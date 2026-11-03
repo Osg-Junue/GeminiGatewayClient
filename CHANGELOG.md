@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.3] - 2026-11-04
+
+### Changed
+- Pre-sized `List<T>` and `HashSet<T>` capacities across `ChatResponseMapper`, `ChatRequestMapper`, `ChatOptionsMapper`, and `GeminiRequestHeaders` to reduce array reallocations and GC pressure on hot mapping paths (#5).
+- Avoided lazy `List<Part>` allocation when inspecting empty `Candidate.Content` instances in `ChatResponseMapper` (`Content.RawParts`) and lazily allocated `systemParts` in `ChatRequestMapper`.
+
 ## [2.0.2] - 2026-11-03
 
 ### Changed
