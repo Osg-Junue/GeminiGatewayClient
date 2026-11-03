@@ -200,6 +200,70 @@ public sealed class BasicGenerationExploratoryTests(ExploratoryTestFixture fixtu
     }
 
     [ExploratoryFact]
+    public async Task ThinkingConfig_ExhaustedMaxOutputTokens_HandlesEmptyPartsSafelyWithTryGetModelContent()
+    {
+        LogSection("Thinking Model MaxOutputTokens Exhaustion & Safe Multi-Turn Recovery");
+        using var client = CreateGeminiClient();
+
+        var isGemini3OrLater = DefaultModel.StartsWith("gemini-3", StringComparison.OrdinalIgnoreCase);
+        var thinkingConfig = isGemini3OrLater
+            ? new ThinkingConfig { ThinkingLevel = ThinkingLevel.Medium }
+            : new ThinkingConfig { ThinkingBudget = 512 };
+
+        var conversation = new List<Content>
+        {
+            Content.FromText("1から50までの素数をすべて列挙し、それぞれの双子素数のペアを詳しく解説してください。", Role.User)
+        };
+
+        // Intentionally set a tiny MaxOutputTokens so thinking consumes the budget and returns FinishReason.MaxTokens
+        var truncatedResponse = await client.GenerateContentAsync(new GenerateContentRequest
+        {
+            Contents = conversation,
+            GenerationConfig = new GenerationConfig
+            {
+                MaxOutputTokens = 16,
+                ThinkingConfig = thinkingConfig
+            }
+        });
+
+        LogResponseSummary(truncatedResponse);
+        Assert.Equal(FinishReason.MaxTokens, truncatedResponse.FinishReason);
+
+        var hasModelContent = truncatedResponse.TryGetModelContent(out var modelContent);
+        Output.WriteLine($"TryGetModelContent returned {hasModelContent} (Parts.Count={truncatedResponse.Candidates[0].Content?.Parts.Count ?? 0})");
+
+        if (hasModelContent)
+        {
+            conversation.Add(modelContent!);
+            conversation.Add(Content.FromText("では代わりに、最小の素数を1つだけ数字で答えてください。", Role.User));
+        }
+        else
+        {
+            // When Thinking exhausted all MaxOutputTokens and Parts is empty, do not append the empty Content
+            Assert.Empty(truncatedResponse.Candidates[0].Content?.Parts ?? []);
+            conversation[^1] = Content.FromText("最小の素数を1つだけ数字で答えてください。", Role.User);
+        }
+
+        // Follow-up request with sufficient MaxOutputTokens must succeed without ArgumentException or HTTP 400
+        var recoveryResponse = await client.GenerateContentAsync(new GenerateContentRequest
+        {
+            Contents = conversation,
+            GenerationConfig = new GenerationConfig
+            {
+                MaxOutputTokens = 1024,
+                ThinkingConfig = isGemini3OrLater
+                    ? new ThinkingConfig { ThinkingLevel = ThinkingLevel.Low }
+                    : new ThinkingConfig { ThinkingBudget = 256 }
+            }
+        });
+
+        LogResponseSummary(recoveryResponse);
+        Assert.True(recoveryResponse.TryGetModelContent(out _));
+        Assert.NotNull(recoveryResponse.Text);
+        Assert.Contains("2", recoveryResponse.Text, StringComparison.Ordinal);
+    }
+
+    [ExploratoryFact]
     public async Task Multimodal_InlinePngBytes_RecognizesImageColorAndShape()
     {
         LogSection("Multimodal Inline PNG Image Input");
@@ -323,4 +387,3 @@ public sealed class BasicGenerationExploratoryTests(ExploratoryTestFixture fixtu
         [property: JsonPropertyName("paradigm")] string Paradigm,
         [property: JsonPropertyName("isStaticallyTyped")] bool IsStaticallyTyped);
 }
-

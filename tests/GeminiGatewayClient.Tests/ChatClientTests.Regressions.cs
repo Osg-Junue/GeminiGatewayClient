@@ -725,4 +725,279 @@ public partial class ChatClientTests
 
         Assert.Contains("JsonSerializerContext", ex.Message);
     }
+
+    [Fact]
+    public async Task IChatClient_StreamingPureEmptyTextPart_IsOmittedAndNotSentOnWire()
+    {
+        const string sse = """
+            data: {"responseId":"r-empty","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Checking weather...","thought":true}]}}]}
+
+            data: {"responseId":"r-empty","candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"get_weather","args":{"city":"Tokyo"}},"thoughtSignature":"sig-fc-1"}]}}]}
+
+            data: {"responseId":"r-empty","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}
+
+            """;
+
+        using var handler = new RecordingHandler(sse, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in chatClient.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Tokyo weather?")]))
+        {
+            updates.Add(update);
+        }
+
+        // Pure empty {"text": ""} part without thoughtSignature must not produce an empty TextContent("")
+        Assert.Empty(updates.SelectMany(u => u.Contents).OfType<TextContent>());
+
+        var aggregated = updates.ToChatResponse();
+        using var nextHandler = new RecordingHandler(OkResponseJson);
+        using var nextHttpClient = new HttpClient(nextHandler);
+        using var nextGeminiClient = CreateClient(nextHttpClient);
+        IChatClient nextChatClient = nextGeminiClient.AsIChatClient();
+
+        await nextChatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Tokyo weather?"),
+            .. aggregated.Messages,
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call_1", new Dictionary<string, object?> { ["tempC"] = 20 })])
+        ]);
+
+        Assert.NotNull(nextHandler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(nextHandler.LastRequestBody);
+        var assistantParts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
+        Assert.Equal(2, assistantParts.GetArrayLength());
+        Assert.True(assistantParts[0].GetProperty("thought").GetBoolean());
+        Assert.Equal("get_weather", assistantParts[1].GetProperty("functionCall").GetProperty("name").GetString());
+        Assert.Equal("sig-fc-1", assistantParts[1].GetProperty("thoughtSignature").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_MultiChunkTextStreaming_PreservesTrailingThoughtSignatureAfterToChatResponse()
+    {
+        const string multiChunkSse = """
+            data: {"responseId":"r-multi","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello "}]}}]}
+
+            data: {"responseId":"r-multi","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"world!","thoughtSignature":"sig-multi-chunk"}]},"finishReason":"STOP"}]}
+
+            """;
+
+        using var handler = new RecordingHandler(multiChunkSse, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in chatClient.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Greet")]))
+        {
+            updates.Add(update);
+        }
+
+        var aggregated = updates.ToChatResponse();
+        Assert.Equal("Hello world!", aggregated.Text);
+
+        using var nextHandler = new RecordingHandler(OkResponseJson);
+        using var nextHttpClient = new HttpClient(nextHandler);
+        using var nextGeminiClient = CreateClient(nextHttpClient);
+        IChatClient nextChatClient = nextGeminiClient.AsIChatClient();
+
+        await nextChatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Greet"),
+            .. aggregated.Messages,
+            new ChatMessage(ChatRole.User, "Follow-up")
+        ]);
+
+        Assert.NotNull(nextHandler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(nextHandler.LastRequestBody);
+        var assistantParts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
+        Assert.Equal(2, assistantParts.GetArrayLength());
+        Assert.Equal("Hello world!", assistantParts[0].GetProperty("text").GetString());
+        Assert.Equal("sig-multi-chunk", assistantParts[1].GetProperty("thoughtSignature").GetString());
+        Assert.False(assistantParts[1].TryGetProperty("text", out _));
+
+        // Single-chunk streaming with text + thoughtSignature must deduplicate the companion and send only 1 wire part
+        const string singleChunkSse = """
+            data: {"responseId":"r-single","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Single chunk","thoughtSignature":"sig-single-chunk"}]},"finishReason":"STOP"}]}
+
+            """;
+
+        using var singleHandler = new RecordingHandler(singleChunkSse, contentType: "text/event-stream");
+        using var singleHttpClient = new HttpClient(singleHandler);
+        using var singleGeminiClient = CreateClient(singleHttpClient);
+        IChatClient singleChatClient = singleGeminiClient.AsIChatClient();
+
+        var singleUpdates = new List<ChatResponseUpdate>();
+        await foreach (var update in singleChatClient.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Greet")]))
+        {
+            singleUpdates.Add(update);
+        }
+
+        var singleAggregated = singleUpdates.ToChatResponse();
+        await nextChatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Greet"),
+            .. singleAggregated.Messages,
+            new ChatMessage(ChatRole.User, "Follow-up")
+        ]);
+
+        Assert.NotNull(nextHandler.LastRequestBody);
+        using var singleSentDoc = JsonDocument.Parse(nextHandler.LastRequestBody);
+        var singleAssistantParts = singleSentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
+        Assert.Equal(1, singleAssistantParts.GetArrayLength());
+        Assert.Equal("Single chunk", singleAssistantParts[0].GetProperty("text").GetString());
+        Assert.Equal("sig-single-chunk", singleAssistantParts[0].GetProperty("thoughtSignature").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_ReusedCallIdAcrossTurns_ResolvesChronologicallyToCorrectFunctionName()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        await chatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Weather in Tokyo?"),
+            new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("call_1", "get_weather", new Dictionary<string, object?> { ["city"] = "Tokyo" })]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call_1", new Dictionary<string, object?> { ["tempC"] = 22 })]),
+            new ChatMessage(ChatRole.Assistant, "It is 22C in Tokyo."),
+            new ChatMessage(ChatRole.User, "Now check stock price for GOOG."),
+            new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("call_1", "get_stock_price", new Dictionary<string, object?> { ["ticker"] = "GOOG" })]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call_1", new Dictionary<string, object?> { ["price"] = 185.5 })])
+        ]);
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var contents = sentDoc.RootElement.GetProperty("contents");
+
+        // Turn 1 tool response (contents[2]) must resolve to get_weather, not be overwritten by Turn 2's get_stock_price
+        var turn1Response = contents[2].GetProperty("parts")[0].GetProperty("functionResponse");
+        Assert.Equal("get_weather", turn1Response.GetProperty("name").GetString());
+        Assert.Equal("call_1", turn1Response.GetProperty("id").GetString());
+
+        // Turn 2 tool response (contents[6]) must resolve to get_stock_price
+        var turn2Response = contents[6].GetProperty("parts")[0].GetProperty("functionResponse");
+        Assert.Equal("get_stock_price", turn2Response.GetProperty("name").GetString());
+        Assert.Equal("call_1", turn2Response.GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_MutatedFunctionCallDataAndUriContentsWithRawRepresentation_ReflectUpdatedValues()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var rawCallPart = new Part
+        {
+            ThoughtSignature = "sig-fc-raw",
+            FunctionCall = new FunctionCall
+            {
+                Id = "call_orig",
+                Name = "lookup_user",
+                Args = JsonDocument.Parse("""{"secret":"raw-secret"}""").RootElement.Clone()
+            }
+        };
+
+        var mutatedCall = new FunctionCallContent(
+            "call_updated",
+            "lookup_user",
+            new Dictionary<string, object?> { ["secret"] = "[REDACTED]" })
+        {
+            RawRepresentation = rawCallPart
+        };
+
+        var rawDataPart = new Part
+        {
+            ThoughtSignature = "sig-data-raw",
+            InlineData = new Blob { MimeType = "image/png", Data = [1, 2, 3] }
+        };
+
+        var mutatedData = new DataContent(new byte[] { 9, 8, 7 }, "image/jpeg")
+        {
+            RawRepresentation = rawDataPart
+        };
+
+        var rawUriPart = new Part
+        {
+            ThoughtSignature = "sig-uri-raw",
+            FileData = new FileData { FileUri = "https://example.com/doc", MimeType = "text/plain" }
+        };
+
+        var mutatedUri = new UriContent(new Uri("https://example.com/doc"), "application/pdf")
+        {
+            RawRepresentation = rawUriPart
+        };
+
+        await chatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, [mutatedData, mutatedUri]),
+            new ChatMessage(ChatRole.Assistant, [mutatedCall]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call_updated", new Dictionary<string, object?> { ["ok"] = true })])
+        ]);
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var contents = sentDoc.RootElement.GetProperty("contents");
+
+        var userParts = contents[0].GetProperty("parts");
+        Assert.Equal("image/jpeg", userParts[0].GetProperty("inlineData").GetProperty("mimeType").GetString());
+        Assert.Equal(Convert.ToBase64String(new byte[] { 9, 8, 7 }), userParts[0].GetProperty("inlineData").GetProperty("data").GetString());
+        Assert.Equal("sig-data-raw", userParts[0].GetProperty("thoughtSignature").GetString());
+
+        Assert.Equal("application/pdf", userParts[1].GetProperty("fileData").GetProperty("mimeType").GetString());
+        Assert.Equal("sig-uri-raw", userParts[1].GetProperty("thoughtSignature").GetString());
+
+        var assistantPart = contents[1].GetProperty("parts")[0];
+        Assert.Equal("sig-fc-raw", assistantPart.GetProperty("thoughtSignature").GetString());
+        Assert.Equal("call_updated", assistantPart.GetProperty("functionCall").GetProperty("id").GetString());
+        Assert.Equal("[REDACTED]", assistantPart.GetProperty("functionCall").GetProperty("args").GetProperty("secret").GetString());
+    }
+
+    [Fact]
+    public async Task IChatClient_AIFunctionDeclaration_MapsReturnJsonSchemaToResponseJsonSchema()
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var typedReturnTool = AIFunctionFactory.Create(
+            (string city) => new WeatherReport(city, 20.0, DateTime.UtcNow),
+            "get_weather_report",
+            "Returns a typed weather report");
+        var untypedObjectTool = AIFunctionFactory.Create(
+            (string query) => (object)new { query },
+            "untyped_tool",
+            "Returns an untyped object");
+        var voidTool = AIFunctionFactory.Create(
+            (string message) => { },
+            "log_message",
+            "Logs a message");
+
+        await chatClient.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Check")],
+            new ChatOptions
+            {
+                Tools = [typedReturnTool, untypedObjectTool, voidTool]
+            });
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
+        var declarations = sentDoc.RootElement.GetProperty("tools")[0].GetProperty("functionDeclarations");
+        Assert.Equal(3, declarations.GetArrayLength());
+
+        Assert.True(declarations[0].TryGetProperty("responseJsonSchema", out var responseSchema));
+        Assert.Equal("object", responseSchema.GetProperty("type").GetString());
+        Assert.True(responseSchema.GetProperty("properties").TryGetProperty("city", out _));
+
+        // object return (empty schema {}) and void return (null schema) must omit responseJsonSchema
+        Assert.False(declarations[1].TryGetProperty("responseJsonSchema", out _));
+        Assert.False(declarations[2].TryGetProperty("responseJsonSchema", out _));
+    }
 }

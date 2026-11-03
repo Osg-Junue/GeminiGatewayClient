@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json.Serialization;
 using GeminiGatewayClient.ExploratoryTests.Infrastructure;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -190,6 +191,105 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
     }
 
     [ExploratoryFact]
+    public async Task IChatClient_MultiTurnTools_WithStronglyTypedReturnSchema_CollidingCallIds_AndRedactedArguments_Succeeds()
+    {
+        LogSection("IChatClient Multi-Turn Tools (ReturnJsonSchema + Reused CallId + Redacted Arguments)");
+        using var geminiClient = CreateGeminiClient();
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        [Description("アカウントコードから法人アカウント情報を取得します。")]
+        AccountLookupResult LookupAccount([Description("アカウントコード")] string accountCode) =>
+            new(accountCode, "Contoso Japan K.K.", "Enterprise");
+
+        [Description("請求書番号から請求金額と支払期日を取得します。")]
+        InvoiceLookupResult LookupInvoice([Description("請求書番号")] string invoiceNumber) =>
+            new(invoiceNumber, 128000, "2026-11-30");
+
+        var options = new ChatOptions
+        {
+            Temperature = 0.0f,
+            Tools =
+            [
+                AIFunctionFactory.Create(LookupAccount, "lookup_account"),
+                AIFunctionFactory.Create(LookupInvoice, "lookup_invoice")
+            ]
+        };
+
+        var history = new List<ChatMessage>
+        {
+            new(ChatRole.System, "ユーザーの指示に従ってツールを呼び出し、結果を簡潔に回答してください。"),
+            new(ChatRole.User, "アカウントコード `ACC-7700` の法人アカウント情報を `lookup_account` で照会してください。")
+        };
+
+        // Turn 1: Model invokes lookup_account
+        var turn1Response = await chatClient.GetResponseAsync(history, options);
+        LogChatResponseSummary(turn1Response);
+
+        var turn1Call = Assert.Single(turn1Response.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>());
+        Assert.Equal("lookup_account", turn1Call.Name);
+
+        // Mutate arguments (simulating PII/secret redaction in history) and normalize CallId to "call_shared_1"
+        // while preserving RawRepresentation and AdditionalProperties (thoughtSignature).
+        var turn1NormalizedAssistant = new ChatMessage(ChatRole.Assistant,
+        [
+            .. turn1Response.Messages[0].Contents.Where(c => c is not FunctionCallContent),
+            new FunctionCallContent(
+                "call_shared_1",
+                turn1Call.Name,
+                new Dictionary<string, object?> { ["accountCode"] = "ACC-REDACTED" })
+            {
+                RawRepresentation = turn1Call.RawRepresentation,
+                AdditionalProperties = turn1Call.AdditionalProperties
+            }
+        ]);
+
+        history.Add(turn1NormalizedAssistant);
+        history.Add(new ChatMessage(ChatRole.Tool,
+        [
+            new FunctionResultContent("call_shared_1", LookupAccount("ACC-7700"))
+        ]));
+
+        var turn1Final = await chatClient.GetResponseAsync(history, options);
+        LogChatResponseSummary(turn1Final);
+        Assert.Contains("Contoso", turn1Final.Text ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        history.AddRange(turn1Final.Messages);
+
+        // Turn 2: Ask for invoice lookup and reuse the exact same CallId ("call_shared_1") for a different tool ("lookup_invoice")
+        history.Add(new ChatMessage(ChatRole.User, "次に、請求書番号 `INV-2026-99` の請求情報を `lookup_invoice` で照会してください。"));
+        var turn2Response = await chatClient.GetResponseAsync(history, options);
+        LogChatResponseSummary(turn2Response);
+
+        var turn2Call = Assert.Single(turn2Response.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>());
+        Assert.Equal("lookup_invoice", turn2Call.Name);
+
+        var turn2NormalizedAssistant = new ChatMessage(ChatRole.Assistant,
+        [
+            .. turn2Response.Messages[0].Contents.Where(c => c is not FunctionCallContent),
+            new FunctionCallContent("call_shared_1", turn2Call.Name, turn2Call.Arguments)
+            {
+                RawRepresentation = turn2Call.RawRepresentation,
+                AdditionalProperties = turn2Call.AdditionalProperties
+            }
+        ]);
+
+        history.Add(turn2NormalizedAssistant);
+        history.Add(new ChatMessage(ChatRole.Tool,
+        [
+            new FunctionResultContent("call_shared_1", LookupInvoice("INV-2026-99"))
+        ]));
+
+        // Sending the full history with two colliding "call_shared_1" tool turns must resolve each turn chronologically
+        var turn2Final = await chatClient.GetResponseAsync(history, options);
+        LogChatResponseSummary(turn2Final);
+
+        Assert.NotNull(turn2Final.Text);
+        Assert.True(
+            turn2Final.Text.Contains("128,000", StringComparison.Ordinal) ||
+            turn2Final.Text.Contains("128000", StringComparison.Ordinal),
+            $"Expected invoice amount 128,000 in final response, but got: {turn2Final.Text}");
+    }
+
+    [ExploratoryFact]
     public async Task IChatClient_ReasoningOptions_MapsEffortAndReturnsReasoningContent()
     {
         LogSection("IChatClient ReasoningOptions (Effort + Summary Output)");
@@ -259,5 +359,14 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
         Assert.NotNull(chatResponse.Text);
         Assert.Equal(2, providerInvocations);
     }
-}
 
+    private sealed record AccountLookupResult(
+        [property: JsonPropertyName("accountCode")] string AccountCode,
+        [property: JsonPropertyName("companyName")] string CompanyName,
+        [property: JsonPropertyName("plan")] string Plan);
+
+    private sealed record InvoiceLookupResult(
+        [property: JsonPropertyName("invoiceNumber")] string InvoiceNumber,
+        [property: JsonPropertyName("amountJpy")] int AmountJpy,
+        [property: JsonPropertyName("dueDate")] string DueDate);
+}

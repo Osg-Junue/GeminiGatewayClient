@@ -44,7 +44,7 @@ internal static class ChatRequestMapper
             systemParts = new List<Part>(2) { Part.FromText(options.Instructions) };
         }
 
-        var calls = FunctionCallRegistry.Create(messageList);
+        var calls = new FunctionCallRegistry();
 
         foreach (var message in messageList)
         {
@@ -73,7 +73,7 @@ internal static class ChatRequestMapper
             var parts = new List<Part>(message.Contents.Count);
             foreach (var item in message.Contents)
             {
-                AppendPart(parts, item, calls, toolSerializerOptions);
+                AppendPart(parts, item, ref calls, toolSerializerOptions);
             }
 
             if (parts.Count == 0)
@@ -123,19 +123,19 @@ internal static class ChatRequestMapper
         return request;
     }
 
-    private static void AppendPart(List<Part> parts, AIContent item, FunctionCallRegistry calls, JsonSerializerOptions toolSerializerOptions)
+    private static void AppendPart(List<Part> parts, AIContent item, ref FunctionCallRegistry calls, JsonSerializerOptions toolSerializerOptions)
     {
+        var rawPart = item.RawRepresentation as Part;
+        var signature = GetStringProperty(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature)
+            ?? rawPart?.ThoughtSignature;
+
         // Content produced by GeminiChatClient carries the exact wire part; replay it verbatim (keeps ids and signatures)
         // unless the caller mutated the high-level AIContent payload after creation.
-        var rawPart = item.RawRepresentation as Part;
-        if (rawPart is not null && IsUnmodifiedRawPart(item, rawPart))
+        if (rawPart is not null && IsUnmodifiedRawPart(item, rawPart, signature))
         {
             parts.Add(rawPart);
             return;
         }
-
-        var signature = GetStringProperty(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature)
-            ?? rawPart?.ThoughtSignature;
 
         switch (item)
         {
@@ -146,8 +146,8 @@ internal static class ChatRequestMapper
                 parts.Add(textPart);
                 break;
 
-            case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text) || !string.IsNullOrEmpty(reasoning.ProtectedData):
-                AppendReasoningPart(parts, reasoning);
+            case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text) || !string.IsNullOrEmpty(reasoning.ProtectedData) || !string.IsNullOrEmpty(rawPart?.ThoughtSignature):
+                AppendReasoningPart(parts, reasoning, rawPart);
                 break;
 
             case DataContent data:
@@ -170,12 +170,14 @@ internal static class ChatRequestMapper
                 break;
 
             case FunctionCallContent call:
+                var apiId = calls.Register(call);
                 parts.Add(new Part
                 {
                     ThoughtSignature = signature,
+                    VideoMetadata = rawPart?.VideoMetadata?.Clone(),
                     FunctionCall = new FunctionCall
                     {
-                        Id = calls.GetApiId(call.CallId),
+                        Id = apiId,
                         Name = call.Name,
                         Args = ToolJsonConverter.ToArguments(call.Arguments, toolSerializerOptions)
                     }
@@ -205,20 +207,43 @@ internal static class ChatRequestMapper
         }
     }
 
-    private static bool IsUnmodifiedRawPart(AIContent item, Part rawPart) => item switch
+    private static bool IsUnmodifiedRawPart(AIContent item, Part rawPart, string? signature)
     {
-        TextContent text => string.Equals(rawPart.Text, text.Text, StringComparison.Ordinal),
-        TextReasoningContent reasoning =>
-            string.Equals(rawPart.Text ?? string.Empty, reasoning.Text, StringComparison.Ordinal) &&
-            string.Equals(rawPart.ThoughtSignature, reasoning.ProtectedData, StringComparison.Ordinal),
-        UriContent uri =>
-            rawPart.FileData is not null &&
-            string.Equals(rawPart.FileData.FileUri, uri.Uri.ToString(), StringComparison.Ordinal),
-        FunctionCallContent call =>
-            rawPart.FunctionCall is not null &&
-            string.Equals(rawPart.FunctionCall.Name, call.Name, StringComparison.Ordinal),
-        _ => true
-    };
+        if (item is not TextReasoningContent &&
+            !string.Equals(rawPart.ThoughtSignature, signature, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return item switch
+        {
+            TextContent text =>
+                !string.IsNullOrEmpty(text.Text) &&
+                rawPart.Thought != true &&
+                string.Equals(rawPart.Text, text.Text, StringComparison.Ordinal),
+            TextReasoningContent reasoning =>
+                !string.IsNullOrEmpty(reasoning.Text) &&
+                rawPart.Thought == true &&
+                string.Equals(rawPart.Text, reasoning.Text, StringComparison.Ordinal) &&
+                string.Equals(rawPart.ThoughtSignature, reasoning.ProtectedData, StringComparison.Ordinal),
+            DataContent data =>
+                rawPart.InlineData?.Data is { } rawBytes &&
+                string.Equals(
+                     string.IsNullOrWhiteSpace(rawPart.InlineData.MimeType) ? MimeTypes.ApplicationOctetStream : rawPart.InlineData.MimeType,
+                     string.IsNullOrWhiteSpace(data.MediaType) ? MimeTypes.ApplicationOctetStream : data.MediaType,
+                     StringComparison.Ordinal) &&
+                data.Data.Span.SequenceEqual(rawBytes),
+            UriContent uri =>
+                rawPart.FileData is not null &&
+                string.Equals(rawPart.FileData.FileUri, uri.Uri.ToString(), StringComparison.Ordinal) &&
+                string.Equals(
+                    string.IsNullOrWhiteSpace(rawPart.FileData.MimeType) ? MimeTypes.ApplicationOctetStream : rawPart.FileData.MimeType,
+                    string.IsNullOrWhiteSpace(uri.MediaType) ? MimeTypes.ApplicationOctetStream : uri.MediaType,
+                    StringComparison.Ordinal),
+            FunctionCallContent => false,
+            _ => true
+        };
+    }
 
     private static Part? TryCreateCodeExecutionPart(AdditionalPropertiesDictionary? properties, string? signature)
     {
@@ -279,13 +304,16 @@ internal static class ChatRequestMapper
         return false;
     }
 
-    private static void AppendReasoningPart(List<Part> parts, TextReasoningContent reasoning)
+    private static void AppendReasoningPart(List<Part> parts, TextReasoningContent reasoning, Part? rawPart)
     {
         var hasText = !string.IsNullOrEmpty(reasoning.Text);
+        var signature = !string.IsNullOrEmpty(reasoning.ProtectedData)
+            ? reasoning.ProtectedData
+            : rawPart?.ThoughtSignature;
 
         // A signature-only companion of the preceding part (text + signature split on receive) must not be sent twice.
-        if (!hasText && parts.Count > 0 &&
-            string.Equals(parts[^1].ThoughtSignature, reasoning.ProtectedData, StringComparison.Ordinal))
+        if (!hasText && !string.IsNullOrEmpty(signature) && parts.Count > 0 &&
+            string.Equals(parts[^1].ThoughtSignature, signature, StringComparison.Ordinal))
         {
             return;
         }
@@ -294,7 +322,8 @@ internal static class ChatRequestMapper
         {
             Text = hasText ? reasoning.Text : null,
             Thought = hasText ? true : null,
-            ThoughtSignature = string.IsNullOrEmpty(reasoning.ProtectedData) ? null : reasoning.ProtectedData
+            ThoughtSignature = string.IsNullOrEmpty(signature) ? null : signature,
+            VideoMetadata = rawPart?.VideoMetadata?.Clone()
         });
     }
 
@@ -317,54 +346,48 @@ internal static class ChatRequestMapper
         };
 
     /// <summary>
-    /// Correlates <see cref="FunctionResultContent"/> <c>CallId</c> values with the function name and the server-assigned call ID
-    /// (if any) of the originating <see cref="FunctionCallContent"/>.
+    /// Correlates <see cref="FunctionResultContent"/> <c>CallId</c> values chronologically with the function name and
+    /// the server-assigned call ID (if any) of the most recent <see cref="FunctionCallContent"/> sharing that <c>CallId</c>.
     /// </summary>
-    private sealed class FunctionCallRegistry
+    private struct FunctionCallRegistry
     {
         private Dictionary<string, (string Name, string? ApiId)>? _calls;
 
-        public static FunctionCallRegistry Create(IReadOnlyCollection<ChatMessage> messages)
+        /// <summary>
+        /// Registers a <see cref="FunctionCallContent"/> encountered in the conversation history and returns
+        /// the ID to send in <see cref="FunctionCall.Id"/> (or <c>null</c> when the ID was generated locally).
+        /// </summary>
+        public string? Register(FunctionCallContent call)
         {
-            var registry = new FunctionCallRegistry();
-            foreach (var message in messages)
+            var apiId = GetApiId(call);
+            if (!string.IsNullOrEmpty(call.CallId) && !string.IsNullOrEmpty(call.Name))
             {
-                foreach (var item in message.Contents)
-                {
-                    if (item is FunctionCallContent call &&
-                        !string.IsNullOrEmpty(call.CallId) &&
-                        !string.IsNullOrEmpty(call.Name))
-                    {
-                        (registry._calls ??= new Dictionary<string, (string Name, string? ApiId)>(StringComparer.Ordinal))[call.CallId] =
-                            (call.Name, GetApiId(call));
-                    }
-                }
+                (_calls ??= new Dictionary<string, (string Name, string? ApiId)>(StringComparer.Ordinal))[call.CallId] =
+                    (call.Name, apiId);
             }
 
-            return registry;
+            return apiId;
         }
-
-        /// <summary>
-        /// Returns the ID to send in <see cref="FunctionCall.Id"/>, or <c>null</c> when the ID was generated locally.
-        /// </summary>
-        public string? GetApiId(string callId) =>
-            !string.IsNullOrEmpty(callId) && _calls is not null && _calls.TryGetValue(callId, out var call) ? call.ApiId : null;
 
         /// <summary>
         /// Returns the function name and API call ID for a result. Unknown call IDs fall back to using the ID as the name.
         /// </summary>
-        public (string Name, string? ApiId) Resolve(string callId) =>
-            _calls is not null && _calls.TryGetValue(callId, out var call) ? call : (callId, null);
+        public readonly (string Name, string? ApiId) Resolve(string callId) =>
+            !string.IsNullOrEmpty(callId) && _calls is not null && _calls.TryGetValue(callId, out var call) ? call : (callId, null);
 
         private static string? GetApiId(FunctionCallContent call)
         {
-            if (call.RawRepresentation is Part rawPart)
+            if (GetBooleanProperty(call.AdditionalProperties, GeminiChatPropertyNames.SynthesizedCallId))
             {
-                return rawPart.FunctionCall?.Id;
+                return null;
             }
 
-            var synthesized = GetBooleanProperty(call.AdditionalProperties, GeminiChatPropertyNames.SynthesizedCallId);
-            return synthesized ? null : call.CallId;
+            if (call.RawRepresentation is Part { FunctionCall: { } rawCall } && string.IsNullOrEmpty(rawCall.Id))
+            {
+                return null;
+            }
+
+            return string.IsNullOrEmpty(call.CallId) ? null : call.CallId;
         }
     }
 }

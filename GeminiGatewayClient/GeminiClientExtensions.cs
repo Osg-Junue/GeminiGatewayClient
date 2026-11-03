@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
@@ -5,7 +6,7 @@ using Microsoft.Extensions.AI;
 namespace GeminiGatewayClient;
 
 /// <summary>
-/// Convenience extension methods for <see cref="IGeminiClient"/>.
+/// Convenience extension methods for <see cref="IGeminiClient"/> and <see cref="GenerateContentResponse"/>.
 /// </summary>
 public static class GeminiClientExtensions
 {
@@ -102,5 +103,219 @@ public static class GeminiClientExtensions
             JsonSerializerOptions? toolSerializerOptions = null) =>
             new GeminiChatClient(client, defaultModelId, toolSerializerOptions);
     }
-}
 
+    /// <summary>
+    /// Extracts the primary candidate's <see cref="Content"/> when it contains at least one non-empty <see cref="Part"/>
+    /// suitable for appending to a multi-turn <see cref="GenerateContentRequest.Contents"/> history.
+    /// Returns <c>false</c> when the candidate has no parts (for example when a thinking model exhausts <c>MaxOutputTokens</c>
+    /// before emitting output tokens).
+    /// </summary>
+    /// <param name="response">The response to inspect.</param>
+    /// <param name="content">When this method returns <c>true</c>, contains the non-empty model <see cref="Content"/>.</param>
+    /// <returns><c>true</c> if a valid model <see cref="Content"/> with at least one non-empty part is present; otherwise <c>false</c>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="response"/> is <c>null</c>.</exception>
+    public static bool TryGetModelContent(this GenerateContentResponse response, [NotNullWhen(true)] out Content? content)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        if (response.Candidates is [{ Content: { RawParts: { Count: > 0 } parts } candidateContent }, ..])
+        {
+            for (var i = 0; i < parts.Count; i++)
+            {
+                if (parts[i] is { } part && !IsPureEmptyTextPart(part))
+                {
+                    content = candidateContent;
+                    return true;
+                }
+            }
+        }
+
+        content = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Aggregates a sequence of streamed <see cref="GenerateContentResponse"/> chunks into a single model <see cref="Content"/>
+    /// suitable for multi-turn conversation history, coalescing consecutive thought parts, consecutive text parts, and
+    /// trailing <c>thoughtSignature</c> parts while omitting empty placeholder chunks.
+    /// </summary>
+    /// <param name="chunks">The streamed response chunks.</param>
+    /// <returns>
+    /// A single <see cref="Content"/> with <see cref="Content.Role"/> set to <see cref="Role.Model"/>, or <c>null</c>
+    /// if the chunks contained no meaningful parts.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="chunks"/> is <c>null</c>.</exception>
+    public static Content? ToModelContent(this IEnumerable<GenerateContentResponse> chunks)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+
+        var aggregatedParts = new List<Part>();
+        var role = Role.Model;
+
+        foreach (var chunk in chunks)
+        {
+            if (chunk?.Candidates is not [{ Content: { } content }, ..])
+            {
+                continue;
+            }
+
+            if (content.Role is { } contentRole)
+            {
+                role = contentRole;
+            }
+
+            if (content.RawParts is not { Count: > 0 } parts)
+            {
+                continue;
+            }
+
+            for (var i = 0; i < parts.Count; i++)
+            {
+                if (parts[i] is { } part)
+                {
+                    AppendAggregatedPart(aggregatedParts, part);
+                }
+            }
+        }
+
+        return aggregatedParts.Count > 0
+            ? new Content { Role = role, Parts = aggregatedParts }
+            : null;
+    }
+
+    /// <summary>
+    /// Asynchronously consumes a stream of <see cref="GenerateContentResponse"/> chunks and aggregates them into a single
+    /// model <see cref="Content"/> suitable for multi-turn conversation history.
+    /// </summary>
+    /// <param name="chunks">The async stream of response chunks.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// A single <see cref="Content"/> with <see cref="Content.Role"/> set to <see cref="Role.Model"/>, or <c>null</c>
+    /// if the stream contained no meaningful parts.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="chunks"/> is <c>null</c>.</exception>
+    public static async ValueTask<Content?> ToModelContentAsync(
+        this IAsyncEnumerable<GenerateContentResponse> chunks,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+
+        var aggregatedParts = new List<Part>();
+        var role = Role.Model;
+
+        await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            if (chunk?.Candidates is not [{ Content: { } content }, ..])
+            {
+                continue;
+            }
+
+            if (content.Role is { } contentRole)
+            {
+                role = contentRole;
+            }
+
+            if (content.RawParts is not { Count: > 0 } parts)
+            {
+                continue;
+            }
+
+            for (var i = 0; i < parts.Count; i++)
+            {
+                if (parts[i] is { } part)
+                {
+                    AppendAggregatedPart(aggregatedParts, part);
+                }
+            }
+        }
+
+        return aggregatedParts.Count > 0
+            ? new Content { Role = role, Parts = aggregatedParts }
+            : null;
+    }
+
+    private static void AppendAggregatedPart(List<Part> aggregatedParts, Part part)
+    {
+        if (IsPureEmptyTextPart(part))
+        {
+            return;
+        }
+
+        var isTextOnly = part.InlineData is null &&
+                         part.FileData is null &&
+                         part.FunctionCall is null &&
+                         part.FunctionResponse is null &&
+                         part.ExecutableCode is null &&
+                         part.CodeExecutionResult is null &&
+                         part.VideoMetadata is null &&
+                         (part.ExtensionData is null || part.ExtensionData.Count == 0);
+
+        if (isTextOnly)
+        {
+            // Signature-only carrier chunk (e.g., {"text": "", "thoughtSignature": "..."} or {"thoughtSignature": "..."})
+            if (string.IsNullOrEmpty(part.Text) && !string.IsNullOrEmpty(part.ThoughtSignature))
+            {
+                if (aggregatedParts.Count > 0)
+                {
+                    var last = aggregatedParts[^1];
+                    if (string.IsNullOrEmpty(last.ThoughtSignature))
+                    {
+                        last.ThoughtSignature = part.ThoughtSignature;
+                        return;
+                    }
+
+                    if (string.Equals(last.ThoughtSignature, part.ThoughtSignature, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+                }
+
+                aggregatedParts.Add(new Part { ThoughtSignature = part.ThoughtSignature });
+                return;
+            }
+
+            // Thought text chunk or normal text chunk: coalesce consecutive chunks of the same kind
+            if (!string.IsNullOrEmpty(part.Text) && aggregatedParts.Count > 0)
+            {
+                var last = aggregatedParts[^1];
+                var lastIsSameTextKind =
+                    last.Text is not null &&
+                    (last.Thought == true) == (part.Thought == true) &&
+                    last.InlineData is null &&
+                    last.FileData is null &&
+                    last.FunctionCall is null &&
+                    last.FunctionResponse is null &&
+                    last.ExecutableCode is null &&
+                    last.CodeExecutionResult is null &&
+                    last.VideoMetadata is null &&
+                    (last.ExtensionData is null || last.ExtensionData.Count == 0) &&
+                    (string.IsNullOrEmpty(last.ThoughtSignature) || string.IsNullOrEmpty(part.ThoughtSignature));
+
+                if (lastIsSameTextKind)
+                {
+                    last.Text += part.Text;
+                    if (!string.IsNullOrEmpty(part.ThoughtSignature))
+                    {
+                        last.ThoughtSignature = part.ThoughtSignature;
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        aggregatedParts.Add(part.Clone());
+    }
+
+    private static bool IsPureEmptyTextPart(Part part) =>
+        string.IsNullOrEmpty(part.Text) &&
+        string.IsNullOrEmpty(part.ThoughtSignature) &&
+        part.InlineData is null &&
+        part.FileData is null &&
+        part.FunctionCall is null &&
+        part.FunctionResponse is null &&
+        part.ExecutableCode is null &&
+        part.CodeExecutionResult is null &&
+        part.VideoMetadata is null &&
+        (part.ExtensionData is null || part.ExtensionData.Count == 0);
+}

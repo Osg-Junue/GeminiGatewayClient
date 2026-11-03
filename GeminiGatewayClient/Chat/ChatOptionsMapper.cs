@@ -166,7 +166,8 @@ internal static class ChatOptionsMapper
                     {
                         Name = function.Name,
                         Description = string.IsNullOrEmpty(function.Description) ? null : function.Description,
-                        ParametersJsonSchema = ExtractParametersJsonSchema(function.JsonSchema)
+                        ParametersJsonSchema = ExtractParametersJsonSchema(function.JsonSchema),
+                        ResponseJsonSchema = ExtractResponseJsonSchema(function.ReturnJsonSchema)
                     });
                     break;
 
@@ -251,4 +252,12 @@ internal static class ChatOptionsMapper
             ? schema.Clone()
             : null;
     }
+
+    /// <summary>
+    /// Returns the JSON schema of a function's return value, or <c>null</c> when no non-empty object schema is defined.
+    /// </summary>
+    private static JsonElement? ExtractResponseJsonSchema(JsonElement? returnSchema) =>
+        returnSchema is { ValueKind: JsonValueKind.Object } schema && schema.EnumerateObject().MoveNext()
+            ? schema.Clone()
+            : null;
 }

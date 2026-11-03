@@ -144,11 +144,21 @@ Console.WriteLine($"Tokens: prompt={response.UsageMetadata?.PromptTokenCount}, t
 By default, `StreamGenerateContentAsync` uses Server-Sent Events (`?alt=sse`), which flushes chunks immediately through proxies. If your gateway requires the legacy JSON array stream format, set `options.StreamingFormat = GeminiStreamingFormat.JsonArray`.
 
 ```csharp
+var chunks = new List<GenerateContentResponse>();
+
 await foreach (var chunk in client.StreamGenerateContentAsync(
     prompt: "List three key features of C# in one line each.",
     systemInstruction: "Be concise."))
 {
+    chunks.Add(chunk);
     Console.Write(chunk.Text);
+}
+
+// Aggregate streamed chunks (coalescing thought parts, text parts, and trailing thoughtSignature)
+// into a single Content item for multi-turn conversation history:
+if (chunks.ToModelContent() is { } assistantContent)
+{
+    history.Add(assistantContent);
 }
 ```
 
@@ -213,6 +223,7 @@ public sealed record LanguageEntry(
 - **Gemini 3+ models** use `ThinkingConfig.ThinkingLevel` (`Minimal`, `Low`, `Medium`, `High`).
 - **Gemini 2.5 models** use `ThinkingConfig.ThinkingBudget` (`-1` for dynamic, `0` to disable where supported, or a positive token count).
 - `ThinkingLevel` and `ThinkingBudget` are mutually exclusive.
+- When a thinking model exhausts `MaxOutputTokens` during internal reasoning (`FinishReason.MaxTokens`), `Candidates[0].Content` may be returned with an empty `Parts` collection. Use `response.TryGetModelContent(out var modelContent)` before appending to multi-turn history.
 
 ### Direct `GeminiClient` (`ThinkingConfig`)
 
@@ -230,11 +241,14 @@ var request = GenerateContentRequest.FromPrompt(
 
 var response = await client.GenerateContentAsync(request);
 
-foreach (var part in response.Candidates[0].Content!.Parts)
+if (response.TryGetModelContent(out var modelContent))
 {
-    if (part.Thought == true)
+    foreach (var part in modelContent.Parts)
     {
-        Console.WriteLine($"[Thought Summary] {part.Text}");
+        if (part.Thought == true)
+        {
+            Console.WriteLine($"[Thought Summary] {part.Text}");
+        }
     }
 }
 
@@ -262,7 +276,11 @@ var response = await chatClient.GetResponseAsync(
         }
     });
 
-foreach (var reasoning in response.Messages.SelectMany(m => m.Contents).OfType<TextReasoningContent>())
+// Filter out empty signature-carrier TextReasoningContent items when displaying thought summaries:
+foreach (var reasoning in response.Messages
+    .SelectMany(m => m.Contents)
+    .OfType<TextReasoningContent>()
+    .Where(r => !string.IsNullOrEmpty(r.Text)))
 {
     Console.WriteLine($"[Reasoning] {reasoning.Text}");
 }
@@ -354,10 +372,11 @@ Console.WriteLine(response.Text);
 
 ## 8. Manual Multi-Step & Parallel Function Calling (`GeminiClient`)
 
-When managing the tool-execution loop directly with `GeminiClient`, always append `response.Candidates[0].Content!` to `Contents` before appending `Part.FromFunctionResponse(...)`. This preserves the `ThoughtSignature` on `functionCall` parts required by Gemini 3 models:
+When managing the tool-execution loop directly with `GeminiClient`, use `response.TryGetModelContent(out var modelContent)` to append the model's `Content` to `Contents` before appending `Part.FromFunctionResponse(...)`. This preserves the `ThoughtSignature` on `functionCall` parts required by Gemini 3 models while guarding against empty `Parts` when `MaxOutputTokens` is exhausted:
 
 ```csharp
 using System.Text.Json;
+using GeminiGatewayClient;
 using GeminiGatewayClient.Models;
 
 var contents = new List<Content>
@@ -404,8 +423,11 @@ while (true)
         // }
     });
 
-    // 1. Always preserve the exact model Content (including ThoughtSignature)
-    contents.Add(response.Candidates[0].Content!);
+    // 1. Preserve the exact model Content (including ThoughtSignature) when non-empty
+    if (response.TryGetModelContent(out var modelContent))
+    {
+        contents.Add(modelContent);
+    }
 
     if (response.FunctionCalls.Count == 0)
     {
@@ -431,7 +453,7 @@ while (true)
 
 When persisting `Microsoft.Extensions.AI` `ChatMessage` history to a database or JSON cache, `AIContent.RawRepresentation` is not serialized. `GeminiChatClient` automatically stores critical Gemini metadata in `AdditionalProperties` and `ProtectedData` so rehydrated messages continue to work on Gemini 3+ models:
 
-- `TextReasoningContent.ProtectedData`: Stores the reasoning `thoughtSignature`.
+- `TextReasoningContent.ProtectedData`: Stores the reasoning `thoughtSignature` (including trailing signature-only companion items with empty `Text`).
 - `TextContent.AdditionalProperties[GeminiChatPropertyNames.ThoughtSignature]`: Stores any trailing text `thoughtSignature`.
 - `FunctionCallContent.AdditionalProperties[GeminiChatPropertyNames.ThoughtSignature]`: Stores the function-call `thoughtSignature`.
 - `FunctionCallContent.AdditionalProperties[GeminiChatPropertyNames.SynthesizedCallId]`: Marks locally generated call IDs so they are not echoed back to the wire if Gemini did not issue an `id`.
@@ -521,4 +543,3 @@ When you pass your own `HttpClient` to `new GeminiClient(options, httpClient)`, 
 | `AllowInsecureHttp` | `bool` | `false` | Allows plain `http://` for non-loopback hosts when `true` (`http://localhost` is always allowed). |
 | `StreamingFormat` | `GeminiStreamingFormat` | `ServerSentEvents` | Streaming wire format: `ServerSentEvents` (`?alt=sse`) or `JsonArray`. |
 | `ToolSerializerOptions` | `JsonSerializerOptions?` | `null` | Optional `JsonSerializerOptions` (e.g., custom `JsonSerializerContext`) for serializing custom POCO tool results in `IChatClient`. |
-

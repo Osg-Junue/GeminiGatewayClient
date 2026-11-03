@@ -979,6 +979,160 @@ public class GeminiClientTests
             handler.LastRequest?.RequestUri?.ToString());
     }
 
+    [Fact]
+    public void TryGetModelContent_ReturnsFalseWhenCandidateContentHasEmptyPartsOnMaxTokens_AndTrueWhenNonEmpty()
+    {
+        var maxTokensEmptyPartsResponse = JsonSerializer.Deserialize<GenerateContentResponse>(
+            """
+            {
+              "candidates": [
+                {
+                  "content": { "role": "model" },
+                  "finishReason": "MAX_TOKENS",
+                  "index": 0
+                }
+              ],
+              "usageMetadata": {
+                "promptTokenCount": 14,
+                "thoughtsTokenCount": 19,
+                "totalTokenCount": 33
+              }
+            }
+            """,
+            GeminiGatewayClient.Serialization.GeminiJsonContext.Default.GenerateContentResponse)!;
+
+        Assert.False(maxTokensEmptyPartsResponse.TryGetModelContent(out var emptyContent));
+        Assert.Null(emptyContent);
+
+        var pureEmptyTextPartResponse = new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts = [new Part { Text = string.Empty }]
+                    }
+                }
+            ]
+        };
+
+        Assert.False(pureEmptyTextPartResponse.TryGetModelContent(out _));
+
+        var validResponse = new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts = [Part.FromText("Valid output")]
+                    }
+                }
+            ]
+        };
+
+        Assert.True(validResponse.TryGetModelContent(out var modelContent));
+        Assert.NotNull(modelContent);
+        Assert.Single(modelContent.Parts);
+        Assert.Equal("Valid output", modelContent.Parts[0].Text);
+    }
+
+    [Fact]
+    public async Task ToModelContent_And_ToModelContentAsync_CoalesceThoughtsTextSignaturesAndToolCalls()
+    {
+        const string sse = """
+            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Step 1... ","thought":true}]}}]}
+
+            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Step 2.","thought":true,"thoughtSignature":"sig-thought"}]}}]}
+
+            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello "}]}}]}
+
+            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"world!"}]}}]}
+
+            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"","thoughtSignature":"sig-text"}]}}]}
+
+            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"get_weather","args":{"city":"Tokyo"}},"thoughtSignature":"sig-fc"}]}}]}
+
+            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}
+
+            """;
+
+        using var handler = new RecordingHandler(sse, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var aggregatedAsync = await client.StreamGenerateContentAsync("Hi").ToModelContentAsync();
+        Assert.NotNull(aggregatedAsync);
+        Assert.Equal(Role.Model, aggregatedAsync.Role);
+        Assert.Equal(3, aggregatedAsync.Parts.Count);
+
+        Assert.True(aggregatedAsync.Parts[0].Thought);
+        Assert.Equal("Step 1... Step 2.", aggregatedAsync.Parts[0].Text);
+        Assert.Equal("sig-thought", aggregatedAsync.Parts[0].ThoughtSignature);
+
+        Assert.Null(aggregatedAsync.Parts[1].Thought);
+        Assert.Equal("Hello world!", aggregatedAsync.Parts[1].Text);
+        Assert.Equal("sig-text", aggregatedAsync.Parts[1].ThoughtSignature);
+
+        Assert.NotNull(aggregatedAsync.Parts[2].FunctionCall);
+        Assert.Equal("get_weather", aggregatedAsync.Parts[2].FunctionCall!.Name);
+        Assert.Equal("sig-fc", aggregatedAsync.Parts[2].ThoughtSignature);
+
+        // Synchronous ToModelContent on empty chunks returns null
+        GenerateContentResponse[] emptyChunks =
+        [
+            new GenerateContentResponse
+            {
+                Candidates = [new Candidate { Content = new Content { Role = Role.Model } }]
+            }
+        ];
+        Assert.Null(emptyChunks.ToModelContent());
+    }
+
+    [Fact]
+    public async Task Stream_LargeSingleSseLineAcrossManySmallReads_ParsesCleanlyWithIncrementalSearch()
+    {
+        var largeText = new string('A', 12_000);
+        var sse = $"data: {{\"candidates\":[{{\"index\":0,\"content\":{{\"role\":\"model\",\"parts\":[{{\"text\":\"{largeText}\"}}]}}}}]}}\r\n\r\n" +
+                  "data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"_tail\"}]},\"finishReason\":\"STOP\"}]}\r\n\r\n";
+        var rawBytes = Encoding.UTF8.GetBytes(sse);
+
+        // Split into 128-byte chunks to force dozens of incremental ReadAsync calls and buffer growth within a single SSE line
+        var chunks = rawBytes.Chunk(128).ToArray();
+
+        using var handler = new RecordingHandler((_, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new DelayedMultiChunkStreamContent(chunks, TimeSpan.Zero)
+            };
+            return Task.FromResult(response);
+        });
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key"
+        }, httpClient);
+
+        var received = new StringBuilder();
+        await foreach (var chunk in client.StreamGenerateContentAsync("Hi"))
+        {
+            received.Append(chunk.Text);
+        }
+
+        Assert.Equal(largeText + "_tail", received.ToString());
+    }
+
     private sealed class DelayedMultiChunkStreamContent(byte[][] chunks, TimeSpan delayPerRead) : HttpContent
     {
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>

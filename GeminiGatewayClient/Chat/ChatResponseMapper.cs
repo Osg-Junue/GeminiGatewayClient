@@ -11,7 +11,7 @@ internal static class ChatResponseMapper
     public static ChatResponse ToChatResponse(GenerateContentResponse response, string? modelId)
     {
         var candidate = response.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
-        var contents = MapContents(candidate, out var hasFunctionCall);
+        var contents = MapContents(candidate, isStreaming: false, out var hasFunctionCall);
 
         var message = new ChatMessage(ChatRole.Assistant, contents)
         {
@@ -37,7 +37,7 @@ internal static class ChatResponseMapper
     public static ChatResponseUpdate ToChatResponseUpdate(GenerateContentResponse chunk, string? modelId)
     {
         var candidate = chunk.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
-        var contents = MapContents(candidate, out var hasFunctionCall);
+        var contents = MapContents(candidate, isStreaming: true, out var hasFunctionCall);
 
         return new ChatResponseUpdate(ChatRole.Assistant, contents)
         {
@@ -69,7 +69,7 @@ internal static class ChatResponseMapper
         };
     }
 
-    private static List<AIContent> MapContents(Candidate? candidate, out bool hasFunctionCall)
+    private static List<AIContent> MapContents(Candidate? candidate, bool isStreaming, out bool hasFunctionCall)
     {
         hasFunctionCall = false;
         if (candidate?.Content?.RawParts is not { Count: > 0 } parts)
@@ -89,18 +89,35 @@ internal static class ChatResponseMapper
                     break;
 
                 case { Thought: true }:
+                    if (!string.IsNullOrEmpty(part.Text) || !string.IsNullOrEmpty(part.ThoughtSignature))
+                    {
+                        contents.Add(new TextReasoningContent(part.Text ?? string.Empty)
+                        {
+                            ProtectedData = part.ThoughtSignature,
+                            RawRepresentation = part
+                        });
+                    }
+                    break;
+
                 case { ThoughtSignature: { Length: > 0 }, Text: null or "", InlineData: null, FileData: null, ExecutableCode: null, CodeExecutionResult: null, FunctionResponse: null }:
-                    contents.Add(new TextReasoningContent(part.Text ?? string.Empty)
+                    contents.Add(new TextReasoningContent(string.Empty)
                     {
                         ProtectedData = part.ThoughtSignature,
                         RawRepresentation = part
                     });
                     break;
 
-                case { Text: { } text }:
+                case { Text: { Length: > 0 } text }:
                     var textContent = new TextContent(text) { RawRepresentation = part };
                     AttachThoughtSignature(textContent, part.ThoughtSignature);
                     contents.Add(textContent);
+                    if (isStreaming && !string.IsNullOrEmpty(part.ThoughtSignature))
+                    {
+                        contents.Add(new TextReasoningContent(string.Empty)
+                        {
+                            ProtectedData = part.ThoughtSignature
+                        });
+                    }
                     break;
 
                 case { InlineData: { Data.Length: > 0 } blob }:
@@ -237,4 +254,3 @@ internal static class ChatResponseMapper
             ? new AdditionalPropertiesDictionary { [GeminiChatPropertyNames.BlockReason] = reason.ToString() }
             : null;
 }
-
