@@ -206,7 +206,8 @@ public class SerializationTests
                   },
                   "finishReason": "FUTURE_REASON",
                   "finishMessage": "Stopped due to future reason",
-                  "groundingMetadata": { "webSearchQueries": ["gemini"] }
+                  "groundingMetadata": { "webSearchQueries": ["gemini"] },
+                  "futureCandidateField": true
                 }
               ],
               "usageMetadata": {
@@ -224,7 +225,8 @@ public class SerializationTests
         Assert.Equal(Role.Function, candidate.Content?.Role);
         Assert.Equal(FinishReason.Unknown, candidate.FinishReason);
         Assert.Equal("Stopped due to future reason", candidate.FinishMessage);
-        Assert.True(candidate.ExtensionData?.ContainsKey("groundingMetadata"));
+        Assert.Equal(["gemini"], candidate.GroundingMetadata?.WebSearchQueries);
+        Assert.True(candidate.ExtensionData?.ContainsKey("futureCandidateField"));
         Assert.True(response.UsageMetadata?.ExtensionData?.ContainsKey("futureModalityCount"));
 
         var part = Assert.Single(candidate.Content!.Parts);
@@ -641,5 +643,146 @@ public class SerializationTests
         Assert.Equal(0.125f, ratings[0].ProbabilityScore);
         Assert.Equal(0.25f, ratings[0].SeverityScore);
         Assert.Equal(HarmSeverity.Unknown, ratings[1].Severity);
+    }
+
+    [Fact]
+    public void GroundingMetadata_AndUrlContextMetadata_DeserializeAndRoundTrip()
+    {
+        const string json = """
+            {
+              "candidates": [
+                {
+                  "index": 0,
+                  "content": {
+                    "role": "model",
+                    "parts": [{ "text": "Tokyo weather is sunny." }]
+                  },
+                  "groundingMetadata": {
+                    "webSearchQueries": ["tokyo weather today"],
+                    "searchEntryPoint": {
+                      "renderedContent": "<div>search</div>",
+                      "sdkBlob": "dGVzdA=="
+                    },
+                    "groundingChunks": [
+                      {
+                        "web": {
+                          "uri": "https://weather.example.com/tokyo",
+                          "title": "Tokyo Weather",
+                          "domain": "weather.example.com"
+                        }
+                      },
+                      {
+                        "retrievedContext": {
+                          "uri": "gs://bucket/doc.pdf",
+                          "title": "Internal Weather Doc",
+                          "text": "Sunny forecast"
+                        }
+                      }
+                    ],
+                    "groundingSupports": [
+                      {
+                        "segment": {
+                          "partIndex": 0,
+                          "startIndex": 0,
+                          "endIndex": 23,
+                          "text": "Tokyo weather is sunny."
+                        },
+                        "groundingChunkIndices": [0, 1],
+                        "confidenceScores": [0.95, 0.88]
+                      }
+                    ]
+                  },
+                  "urlContextMetadata": {
+                    "urlMetadata": [
+                      {
+                        "retrievedUrl": "https://weather.example.com/tokyo",
+                        "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS"
+                      },
+                      {
+                        "retrievedUrl": "https://paywall.example.com/article",
+                        "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_PAYWALL"
+                      },
+                      {
+                        "retrievedUrl": "https://future.example.com/item",
+                        "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_FUTURE_2030"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+            """;
+
+        var response = JsonSerializer.Deserialize(json, GeminiJsonContext.Default.GenerateContentResponse);
+        Assert.NotNull(response);
+        var candidate = Assert.Single(response.Candidates);
+
+        var grounding = candidate.GroundingMetadata;
+        Assert.NotNull(grounding);
+        Assert.Equal(["tokyo weather today"], grounding.WebSearchQueries);
+        Assert.Equal("<div>search</div>", grounding.SearchEntryPoint?.RenderedContent);
+        Assert.Equal("dGVzdA==", grounding.SearchEntryPoint?.SdkBlob);
+        Assert.Equal(2, grounding.GroundingChunks.Count);
+        Assert.Equal("https://weather.example.com/tokyo", grounding.GroundingChunks[0].Web?.Uri);
+        Assert.Equal("Tokyo Weather", grounding.GroundingChunks[0].Web?.Title);
+        Assert.Equal("weather.example.com", grounding.GroundingChunks[0].Web?.Domain);
+        Assert.Equal("gs://bucket/doc.pdf", grounding.GroundingChunks[1].RetrievedContext?.Uri);
+        Assert.Equal("Internal Weather Doc", grounding.GroundingChunks[1].RetrievedContext?.Title);
+        Assert.Equal("Sunny forecast", grounding.GroundingChunks[1].RetrievedContext?.Text);
+
+        var support = Assert.Single(grounding.GroundingSupports);
+        Assert.Equal(0, support.Segment?.PartIndex);
+        Assert.Equal(0, support.Segment?.StartIndex);
+        Assert.Equal(23, support.Segment?.EndIndex);
+        Assert.Equal("Tokyo weather is sunny.", support.Segment?.Text);
+        Assert.Equal([0, 1], support.GroundingChunkIndices);
+        Assert.Equal([0.95, 0.88], support.ConfidenceScores);
+
+        var urlContext = candidate.UrlContextMetadata;
+        Assert.NotNull(urlContext);
+        Assert.Equal(3, urlContext.UrlMetadata.Count);
+        Assert.Equal(UrlRetrievalStatus.Success, urlContext.UrlMetadata[0].UrlRetrievalStatus);
+        Assert.Equal(UrlRetrievalStatus.Paywall, urlContext.UrlMetadata[1].UrlRetrievalStatus);
+        Assert.Equal(UrlRetrievalStatus.Unknown, urlContext.UrlMetadata[2].UrlRetrievalStatus);
+    }
+
+    [Fact]
+    public void EmbedContent_AndBatchEmbedContents_SerializeDeserializeAndValidate()
+    {
+        var single = EmbedContentRequest.FromText(
+            "What is the meaning of life?",
+            TaskType.RetrievalDocument,
+            title: "Philosophy FAQ",
+            outputDimensionality: 256);
+
+        var singleJson = JsonSerializer.Serialize(single, GeminiJsonContext.Default.EmbedContentRequest);
+        using var singleDoc = JsonDocument.Parse(singleJson);
+        Assert.Equal("RETRIEVAL_DOCUMENT", singleDoc.RootElement.GetProperty("taskType").GetString());
+        Assert.Equal("Philosophy FAQ", singleDoc.RootElement.GetProperty("title").GetString());
+        Assert.Equal(256, singleDoc.RootElement.GetProperty("outputDimensionality").GetInt32());
+
+        const string embedResponseJson = """
+            {
+              "embedding": {
+                "values": [0.125, -0.5, 0.875]
+              }
+            }
+            """;
+        var embedResponse = JsonSerializer.Deserialize(embedResponseJson, GeminiJsonContext.Default.EmbedContentResponse);
+        Assert.NotNull(embedResponse?.Embedding);
+        Assert.Equal([0.125f, -0.5f, 0.875f], embedResponse.Embedding.Values);
+
+        // Validation checks
+        var invalidTaskType = EmbedContentRequest.FromText("hi", TaskType.Unknown);
+        Assert.Throws<ArgumentException>(() => invalidTaskType.Validate());
+
+        var invalidTitleWithQuery = EmbedContentRequest.FromText("hi", TaskType.RetrievalQuery, title: "Not a document");
+        Assert.Throws<ArgumentException>(() => invalidTitleWithQuery.Validate());
+
+        var invalidDimensions = EmbedContentRequest.FromText("hi", outputDimensionality: 0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => invalidDimensions.Validate());
+
+        var emptyBatch = new BatchEmbedContentsRequest();
+        Assert.Throws<ArgumentException>(() => emptyBatch.Validate());
     }
 }

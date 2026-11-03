@@ -8,7 +8,7 @@
 
 **Call the Google Gemini API safely through Azure APIM, Cloudflare AI Gateway, Kong, Envoy, or internal BFFs in .NET.**
 
-Custom auth headers · Per-request rotating tokens · Zero `DefaultRequestHeaders` pollution · `Microsoft.Extensions.AI` (`IChatClient`) & DI · NativeAOT/Trim-aware design
+Custom auth headers · Per-request rotating tokens · Zero `DefaultRequestHeaders` pollution · `Microsoft.Extensions.AI` (`IChatClient` & `IEmbeddingGenerator`) & DI · NativeAOT/Trim-aware design
 
 📖 **[Usage Guide & Recipes](docs/USAGE.md)** · 📊 **[Gemini API Compatibility Matrix](docs/API_COMPATIBILITY.md)** · 📝 **[Changelog](CHANGELOG.md)**
 
@@ -17,7 +17,7 @@ Custom auth headers · Per-request rotating tokens · Zero `DefaultRequestHeader
 ## Why This Exists
 
 - **The Problem:** Google's official `Google.GenAI` SDK assumes your app talks directly to `googleapis.com` with a static `x-goog-api-key` header. In production, you rarely distribute raw Gemini API keys to application nodes—traffic goes through an **API gateway, reverse proxy, or BFF** where clients authenticate using `Ocp-Apim-Subscription-Key`, `cf-aig-authorization`, or short-lived `Authorization: Bearer <jwt>` tokens.
-- **The Solution:** `GeminiGatewayClient` is designed for gateway-mediated architectures, clean `IHttpClientFactory` lifecycle management, `Microsoft.Extensions.AI` (`IChatClient`), and NativeAOT-friendly publishing.
+- **The Solution:** `GeminiGatewayClient` is designed for gateway-mediated architectures, clean `IHttpClientFactory` lifecycle management, `Microsoft.Extensions.AI` (`IChatClient` and `IEmbeddingGenerator<string, Embedding<float>>`), and NativeAOT-friendly publishing.
 
 ```mermaid
 flowchart LR
@@ -39,7 +39,7 @@ flowchart LR
 | **Zero `HttpClient.DefaultRequestHeaders` mutation** (per-request header isolation) | ✅ Guaranteed | ⚠️ Mutates shared client defaults |
 | **Cross-host redirect credential leak protection** (`AllowAutoRedirect = false`) | ✅ Built-in | ❌ Manual handler required |
 | **`IHttpClientFactory` + `IOptions<T>` DI** (`services.AddGeminiClient()`) | ✅ Built-in (`IHttpClientBuilder`) | ❌ Manual registration |
-| **`Microsoft.Extensions.AI` (`IChatClient`) + persisted `thoughtSignature` recovery** | ✅ Built-in (`AsIChatClient()` / DI) | ⚠️ Requires raw part retention |
+| **`Microsoft.Extensions.AI` (`IChatClient` & `IEmbeddingGenerator`) + `thoughtSignature` recovery** | ✅ Built-in (`AsIChatClient()`, `AsIEmbeddingGenerator()` / DI) | ⚠️ Requires raw part retention |
 | **NativeAOT & Trim-aware design** (`<IsAotCompatible>true</IsAotCompatible>`) | ✅ Source-generated wire DTO serialization (`GeminiJsonContext`) and reflection-free hot paths | ⚠️ Requires manual validation for gateway/AOT-specific behavior |
 | **Per-chunk stream idle watchdog** (`StreamIdleTimeout`) | ✅ Built-in (default 2 min) | ❌ Manual cancellation |
 
@@ -58,11 +58,12 @@ using Microsoft.Extensions.DependencyInjection;
 
 var services = new ServiceCollection();
 
-// Register IGeminiClient, GeminiClient, and Microsoft.Extensions.AI.IChatClient:
+// Register IGeminiClient, GeminiClient, IChatClient, and IEmbeddingGenerator<string, Embedding<float>>:
 services.AddGeminiClient(options =>
 {
     options.Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta");
     options.Model = "gemini-3-flash-preview";
+    options.EmbeddingModel = "gemini-embedding-001";
     options.ApiKey = builder.Configuration["Gemini:SubscriptionKey"];
     options.ApiKeyHeader = "Ocp-Apim-Subscription-Key"; // Sends only this header; x-goog-api-key is omitted
 });
@@ -142,10 +143,12 @@ Core behavior is covered by deterministic unit tests ([`tests/GeminiGatewayClien
 
 - **Real-Time Streaming**: SSE (`?alt=sse`) and JSON-array streaming with `ArrayPool<byte>` buffering, split `\r\n` handling, in-stream HTTP 200 `{"error": ...}` detection, and `StreamIdleTimeout` watchdog.
 - **Automatic & Parallel Tool Calling**: Multi-step `IChatClient` tool chains via `.UseFunctionInvocation()`, plus native parallel function calling and forced tool execution (`FunctionCallingMode.Any`).
+- **Google Search & URL Context Grounding**: Full typed response models (`GroundingMetadata`, `GroundingChunk`, `GroundingSupport`, `UrlContextMetadata`, `UrlRetrievalStatus`) and automatic `IChatClient` mapping to `CitationAnnotation` (converting Gemini UTF-8 byte offsets into UTF-16 `char` spans on `TextSpanAnnotatedRegion`) and `AdditionalProperties[GeminiChatPropertyNames.WebSearchQueries]`.
+- **Embeddings & `IEmbeddingGenerator<string, Embedding<float>>`**: Stateless `:embedContent` and `:batchEmbedContents` support (`EmbedContentAsync`, `BatchEmbedContentsAsync`, `AsIEmbeddingGenerator()`, and `GeminiClientOptions.EmbeddingModel`).
 - **Gemini 3 & 2.5 Thinking / Reasoning**: Supports `ThinkingLevel` (`Minimal`, `Low`, `Medium`, `High`), `ThinkingBudget`, `IncludeThoughts`, and model-aware `ChatOptions.Reasoning.Effort` mapping.
 - **Lossless Chat History Persistence**: Round-trips Gemini 3 `thoughtSignature` and synthesized tool call IDs through `AdditionalProperties` (`GeminiChatPropertyNames`) even when `RawRepresentation` is stripped by database/JSON serialization.
 - **Structured Output & Multimodal**: `ResponseJsonSchema` (`JsonElement`), OpenAPI `Schema`, inline binary `Blob` (`Part.FromBytes`), and `FileData` (`Part.FromUri`).
-- **Spec-Change Resilience**: All 27 DTOs include `[JsonExtensionData]` and all 14 wire enums use a zero-allocation `LenientStringEnumConverter<T>` with `Unknown` fallback.
+- **Spec-Change Resilience**: All DTOs include `[JsonExtensionData]` and all 16 wire enums use a zero-allocation `LenientStringEnumConverter<T>` with `Unknown` fallback.
 
 ---
 
@@ -165,15 +168,15 @@ Core behavior is covered by deterministic unit tests ([`tests/GeminiGatewayClien
 - **Resilience Handler Timeouts**: `Microsoft.Extensions.Http.Resilience`'s `AddStandardResilienceHandler()` defaults to a **10-second** per-attempt timeout, which will prematurely cancel Gemini 2.5 / 3 thinking requests. Explicitly increase `AttemptTimeout`, `TotalRequestTimeout`, and `CircuitBreaker.SamplingDuration` (see [`docs/USAGE.md`](docs/USAGE.md#2-dependency-injection-ihttpclientfactory--resilience)).
 - **Caller-Supplied `HttpClient`**: Passing a custom `HttpClient` to `new GeminiClient(options, httpClient)` does not overwrite `httpClient.Timeout` or handler redirect settings. Ensure `SocketsHttpHandler.AllowAutoRedirect = false` is set on custom handlers to prevent credential headers from leaking on redirects (`services.AddGeminiClient()` configures this automatically).
 - **API Scope & Vertex AI Compatibility**:
-  - **In Scope**: Stateless generation and streaming (`:generateContent`, `:streamGenerateContent` via SSE or JSON array, `tunedModels/{id}`, consuming `fileData.fileUri` and `cachedContent`).
-  - **Out of Scope**: Stateful/management endpoints (`files` upload, `cachedContents` CRUD, `batches`, `embedContent`, `countTokens`, and WebSocket `BidiGenerateContent` Live API).
+  - **In Scope**: Stateless generation, streaming, and embeddings (`:generateContent`, `:streamGenerateContent` via SSE or JSON array, `:embedContent`, `:batchEmbedContents`, `tunedModels/{id}`, consuming `fileData.fileUri` and `cachedContent`).
+  - **Out of Scope**: Stateful/management endpoints (`files` upload, `cachedContents` CRUD, `batches`, `countTokens`, and WebSocket `BidiGenerateContent` Live API).
   - **Vertex AI-Only Fields**: `GenerateContentRequest.Labels` and `GenerationConfig.AudioTimestamp` are supported for Vertex AI gateways (`aiplatform.googleapis.com`) and are rejected with HTTP 400 by Google AI Studio (`generativelanguage.googleapis.com`). See [`docs/API_COMPATIBILITY.md`](docs/API_COMPATIBILITY.md) for the full field matrix.
 
 ---
 
 ## Documentation
 
-- 📘 **[Usage Guide & Recipes (`docs/USAGE.md`)](docs/USAGE.md)** — Full code examples for DI & resilience handlers, streaming, structured JSON output, thinking/reasoning, multimodal inputs, `IChatClient` tool chains, database chat persistence, and `GeminiClientOptions`.
+- 📘 **[Usage Guide & Recipes (`docs/USAGE.md`)](docs/USAGE.md)** — Full code examples for DI & resilience handlers, streaming, structured JSON output, thinking/reasoning, multimodal inputs, `IChatClient` tool chains, grounding citations, embeddings (`IEmbeddingGenerator`), database chat persistence, and `GeminiClientOptions`.
 - 📊 **[Gemini API Compatibility Matrix (`docs/API_COMPATIBILITY.md`)](docs/API_COMPATIBILITY.md)** — Complete field-by-field mapping against the official Google Gemini REST API specification and `Microsoft.Extensions.AI`.
 - 📝 **[Changelog (`CHANGELOG.md`)](CHANGELOG.md)** — Release history and v2 migration notes.
 

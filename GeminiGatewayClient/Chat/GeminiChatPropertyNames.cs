@@ -47,5 +47,12 @@ public static class GeminiChatPropertyNames
     /// survive chat history serialization when <c>RawRepresentation</c> is dropped.
     /// </summary>
     public const string CodeExecutionOutput = "gemini.codeExecutionResult.output";
+
+    /// <summary>
+    /// <c>ChatResponse.AdditionalProperties</c> / <c>ChatResponseUpdate.AdditionalProperties</c> key holding
+    /// <see cref="Models.GroundingMetadata.WebSearchQueries"/> (<see cref="IList{T}"/> of <see cref="string"/>) when Google Search grounding
+    /// executed search queries for the candidate.
+    /// </summary>
+    public const string WebSearchQueries = "gemini.webSearchQueries";
 }
 

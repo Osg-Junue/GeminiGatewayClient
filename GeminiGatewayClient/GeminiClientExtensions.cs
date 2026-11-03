@@ -87,6 +87,45 @@ public static class GeminiClientExtensions
         }
 
         /// <summary>
+        /// Sends a single text string to <c>:embedContent</c> and returns the embedding response.
+        /// </summary>
+        /// <param name="text">The text to embed.</param>
+        /// <param name="taskType">Optional downstream task type hint.</param>
+        /// <param name="title">Optional document title (only valid when <paramref name="taskType"/> is <see cref="TaskType.RetrievalDocument"/>).</param>
+        /// <param name="outputDimensionality">Optional reduced output dimension.</param>
+        /// <param name="model">The embedding model to call, or <c>null</c> to use <see cref="IGeminiClient.DefaultEmbeddingModel"/>.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The parsed embedding response.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="client"/> or <paramref name="text"/> is <c>null</c>.</exception>
+        /// <exception cref="ArgumentException">The request parameters are invalid.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// No model was specified and <see cref="IGeminiClient.DefaultEmbeddingModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
+        /// returned an empty or invalid value.
+        /// </exception>
+        /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
+        /// <exception cref="TimeoutException">
+        /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
+        /// </exception>
+        /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred before an HTTP response was received.</exception>
+        /// <exception cref="OperationCanceledException">
+        /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
+        /// </exception>
+        public Task<EmbedContentResponse> EmbedContentAsync(
+            string text,
+            TaskType? taskType = null,
+            string? title = null,
+            int? outputDimensionality = null,
+            string? model = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(client);
+            return client.EmbedContentAsync(
+                EmbedContentRequest.FromText(text, taskType, title, outputDimensionality),
+                model,
+                cancellationToken);
+        }
+
+        /// <summary>
         /// Wraps <paramref name="client"/> in a <c>Microsoft.Extensions.AI</c> <see cref="IChatClient"/>.
         /// The returned chat client does not own <paramref name="client"/>; dispose the <see cref="GeminiClient"/> separately.
         /// </summary>
@@ -102,6 +141,24 @@ public static class GeminiClientExtensions
             string? defaultModelId = null,
             JsonSerializerOptions? toolSerializerOptions = null) =>
             new GeminiChatClient(client, defaultModelId, toolSerializerOptions);
+
+        /// <summary>
+        /// Wraps <paramref name="client"/> in a <c>Microsoft.Extensions.AI</c> <see cref="IEmbeddingGenerator{TInput, TEmbedding}"/>.
+        /// The returned generator does not own <paramref name="client"/>; dispose the <see cref="GeminiClient"/> separately.
+        /// </summary>
+        /// <param name="defaultModelId">
+        /// The model used when <see cref="EmbeddingGenerationOptions.ModelId"/> is not set; defaults to <see cref="IGeminiClient.DefaultEmbeddingModel"/>.
+        /// </param>
+        /// <param name="defaultModelDimensions">
+        /// Optional default output dimensionality used when <see cref="EmbeddingGenerationOptions.Dimensions"/> is not set.
+        /// </param>
+        /// <returns>An <see cref="IEmbeddingGenerator{TInput, TEmbedding}"/> backed by <paramref name="client"/>.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="defaultModelDimensions"/> is less than or equal to zero.</exception>
+        public IEmbeddingGenerator<string, Embedding<float>> AsIEmbeddingGenerator(
+            string? defaultModelId = null,
+            int? defaultModelDimensions = null) =>
+            new GeminiEmbeddingGenerator(client, defaultModelId, defaultModelDimensions);
     }
 
     /// <summary>

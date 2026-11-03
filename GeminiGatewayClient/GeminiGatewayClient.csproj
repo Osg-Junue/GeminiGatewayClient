@@ -17,11 +17,11 @@
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
-    <Description>Lightweight, AOT-friendly .NET client for the Gemini API with Microsoft.Extensions.AI (IChatClient) support, built to run behind API gateways and proxies (Azure API Management, Cloudflare AI Gateway, custom reverse proxies). Configurable API key header, key prefix, and extra headers.</Description>
+    <Description>Lightweight, AOT-friendly .NET client for the Gemini API with Microsoft.Extensions.AI (IChatClient and IEmbeddingGenerator) support, Google Search &amp; URL Context grounding, and embeddings, built to run behind API gateways and proxies (Azure API Management, Cloudflare AI Gateway, custom reverse proxies). Configurable API key header, key prefix, and extra headers.</Description>
     <PackageProjectUrl>https://github.com/Osg-Junue/GeminiGatewayClient</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Osg-Junue/GeminiGatewayClient</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>gemini;google;generative-ai;llm;ai;ichatclient;microsoft-extensions-ai;api-gateway;proxy;apim;cloudflare;aot</PackageTags>
+    <PackageTags>gemini;google;generative-ai;llm;ai;ichatclient;iembeddinggenerator;embeddings;grounding;microsoft-extensions-ai;api-gateway;proxy;apim;cloudflare;aot</PackageTags>
     <Version>2.0.3</Version>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>

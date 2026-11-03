@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using GeminiGatewayClient.Models;
 using GeminiGatewayClient.Serialization;
 
@@ -281,7 +282,25 @@ internal static class GeminiStreamReader
         HttpStatusCode statusCode,
         string emptyMessage,
         string parseFailureMessage,
+        string? errorStreamMessage = null) =>
+        DeserializeUtf8Response(
+            utf8Json,
+            GeminiJsonContext.Default.GenerateContentResponse,
+            static r => r.ExtensionData,
+            statusCode,
+            emptyMessage,
+            parseFailureMessage,
+            errorStreamMessage);
+
+    internal static TResponse DeserializeUtf8Response<TResponse>(
+        ReadOnlySpan<byte> utf8Json,
+        JsonTypeInfo<TResponse> typeInfo,
+        Func<TResponse, IDictionary<string, JsonElement>?> extensionDataSelector,
+        HttpStatusCode statusCode,
+        string emptyMessage,
+        string parseFailureMessage,
         string? errorStreamMessage = null)
+        where TResponse : class
     {
         try
         {
@@ -304,10 +323,10 @@ internal static class GeminiStreamReader
                 }
             }
 
-            var response = JsonSerializer.Deserialize(utf8Json, GeminiJsonContext.Default.GenerateContentResponse)
+            var response = JsonSerializer.Deserialize(utf8Json, typeInfo)
                            ?? throw new GeminiApiException(emptyMessage, statusCode);
 
-            if (response.ExtensionData is { } extensionData &&
+            if (extensionDataSelector(response) is { } extensionData &&
                 extensionData.TryGetValue("error", out var errorElement) &&
                 errorElement.ValueKind == JsonValueKind.Object)
             {

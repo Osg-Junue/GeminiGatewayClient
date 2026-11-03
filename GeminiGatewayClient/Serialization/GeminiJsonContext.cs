@@ -10,6 +10,10 @@ namespace GeminiGatewayClient.Serialization;
 [JsonSourceGenerationOptions(WriteIndented = false, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(GenerateContentRequest))]
 [JsonSerializable(typeof(GenerateContentResponse))]
+[JsonSerializable(typeof(EmbedContentRequest))]
+[JsonSerializable(typeof(EmbedContentResponse))]
+[JsonSerializable(typeof(BatchEmbedContentsRequest))]
+[JsonSerializable(typeof(BatchEmbedContentsResponse))]
 [JsonSerializable(typeof(JsonElement))]
 internal sealed partial class GeminiJsonContext : JsonSerializerContext
 {

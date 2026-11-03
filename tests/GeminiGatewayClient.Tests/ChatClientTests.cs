@@ -551,6 +551,442 @@ public partial class ChatClientTests
         Assert.Equal(2.0, sentPart.GetProperty("videoMetadata").GetProperty("fps").GetDouble());
     }
 
+    [Fact]
+    public async Task IChatClient_MapsGroundingMetadataAndCitationMetadata_WithMultibyteUtf8OffsetsToCharSpans()
+    {
+        // "東京の天気は晴れです" -> 10 Japanese chars, 3 UTF-8 bytes each = 30 UTF-8 bytes.
+        // "天気" is char indices [3..5], which is UTF-8 byte offsets [9..15].
+        // "晴れ" is char indices [6..8], which is UTF-8 byte offsets [18..24].
+        const string groundedJson = """
+            {
+              "responseId": "resp-grounding-1",
+              "modelVersion": "gemini-2.5-flash",
+              "candidates": [
+                {
+                  "index": 0,
+                  "content": {
+                    "role": "model",
+                    "parts": [
+                      { "text": "東京の天気は晴れです" }
+                    ]
+                  },
+                  "finishReason": "STOP",
+                  "citationMetadata": {
+                    "citations": [
+                      {
+                        "startIndex": 18,
+                        "endIndex": 24,
+                        "uri": "https://jma.go.jp/forecast",
+                        "title": "Japan Meteorological Agency"
+                      }
+                    ]
+                  },
+                  "groundingMetadata": {
+                    "webSearchQueries": ["東京 天気 今日"],
+                    "groundingChunks": [
+                      {
+                        "web": {
+                          "uri": "https://weather.example.jp/tokyo",
+                          "title": "東京の天気予報"
+                        }
+                      }
+                    ],
+                    "groundingSupports": [
+                      {
+                        "segment": {
+                          "partIndex": 0,
+                          "startIndex": 9,
+                          "endIndex": 15,
+                          "text": "天気"
+                        },
+                        "groundingChunkIndices": [0],
+                        "confidenceScores": [0.99]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+            """;
+
+        using var handler = new RecordingHandler(groundedJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var response = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "東京の天気は？")]);
+
+        Assert.NotNull(response.AdditionalProperties);
+        var queries = Assert.IsAssignableFrom<IList<string>>(response.AdditionalProperties[GeminiChatPropertyNames.WebSearchQueries]);
+        Assert.Equal(["東京 天気 今日"], queries);
+
+        var textContent = Assert.Single(response.Messages[0].Contents.OfType<TextContent>());
+        Assert.Equal("東京の天気は晴れです", textContent.Text);
+        Assert.NotNull(textContent.Annotations);
+        Assert.Equal(2, textContent.Annotations.Count);
+
+        var directCitation = Assert.IsType<CitationAnnotation>(textContent.Annotations[0]);
+        Assert.Equal("Japan Meteorological Agency", directCitation.Title);
+        Assert.Equal(new Uri("https://jma.go.jp/forecast"), directCitation.Url);
+        var directRegion = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(directCitation.AnnotatedRegions!));
+        Assert.Equal(6, directRegion.StartIndex);
+        Assert.Equal(8, directRegion.EndIndex);
+        Assert.Equal("晴れ", textContent.Text[directRegion.StartIndex!.Value..directRegion.EndIndex!.Value]);
+
+        var groundingCitation = Assert.IsType<CitationAnnotation>(textContent.Annotations[1]);
+        Assert.Equal("東京の天気予報", groundingCitation.Title);
+        Assert.Equal(new Uri("https://weather.example.jp/tokyo"), groundingCitation.Url);
+        Assert.Equal("google_search", groundingCitation.ToolName);
+        Assert.Equal("天気", groundingCitation.Snippet);
+        var groundingRegion = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(groundingCitation.AnnotatedRegions!));
+        Assert.Equal(3, groundingRegion.StartIndex);
+        Assert.Equal(5, groundingRegion.EndIndex);
+        Assert.Equal("天気", textContent.Text[groundingRegion.StartIndex!.Value..groundingRegion.EndIndex!.Value]);
+    }
+
+    [Fact]
+    public async Task IEmbeddingGenerator_SingleAndBatch_RouteToEmbedContentAndBatchEmbedContents()
+    {
+        const string singleResponseJson = """
+            {
+              "embedding": {
+                "values": [0.1, 0.2, 0.3]
+              }
+            }
+            """;
+
+        using var singleHandler = new RecordingHandler(singleResponseJson);
+        using var singleHttpClient = new HttpClient(singleHandler);
+        using var singleGeminiClient = new GeminiClient(new GeminiClientOptions
+        {
+            Model = "gemini-2.5-flash",
+            EmbeddingModel = "gemini-embedding-001",
+            ApiKey = "test-key"
+        }, singleHttpClient);
+
+        IEmbeddingGenerator<string, Embedding<float>> generator = singleGeminiClient.AsIEmbeddingGenerator(defaultModelDimensions: 3);
+        var metadata = generator.GetService<EmbeddingGeneratorMetadata>();
+        Assert.NotNull(metadata);
+        Assert.Equal("gemini-embedding-001", metadata.DefaultModelId);
+        Assert.Equal(3, metadata.DefaultModelDimensions);
+        Assert.Same(singleGeminiClient, generator.GetService<IGeminiClient>());
+
+        var singleResult = await generator.GenerateAsync(
+            ["Hello embedding"],
+            new EmbeddingGenerationOptions
+            {
+                RawRepresentationFactory = _ => new GeminiGatewayClient.Models.EmbedContentRequest
+                {
+                    TaskType = GeminiGatewayClient.Models.TaskType.RetrievalDocument,
+                    Title = "Doc Title"
+                }
+            });
+
+        var singleEmbedding = Assert.Single(singleResult);
+        Assert.Equal([0.1f, 0.2f, 0.3f], singleEmbedding.Vector.ToArray());
+        Assert.Equal("gemini-embedding-001", singleEmbedding.ModelId);
+        Assert.Equal(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
+            singleHandler.LastRequest?.RequestUri?.ToString());
+
+        Assert.NotNull(singleHandler.LastRequestBody);
+        using (var sentDoc = JsonDocument.Parse(singleHandler.LastRequestBody))
+        {
+            Assert.Equal("RETRIEVAL_DOCUMENT", sentDoc.RootElement.GetProperty("taskType").GetString());
+            Assert.Equal("Doc Title", sentDoc.RootElement.GetProperty("title").GetString());
+            Assert.Equal(3, sentDoc.RootElement.GetProperty("outputDimensionality").GetInt32());
+        }
+
+        const string batchResponseJson = """
+            {
+              "embeddings": [
+                { "values": [1.0, 2.0] },
+                { "values": [3.0, 4.0] }
+              ]
+            }
+            """;
+
+        using var batchHandler = new RecordingHandler(batchResponseJson);
+        using var batchHttpClient = new HttpClient(batchHandler);
+        using var batchGeminiClient = new GeminiClient(new GeminiClientOptions
+        {
+            Model = "gemini-2.5-flash",
+            EmbeddingModel = "gemini-embedding-001",
+            ApiKey = "test-key"
+        }, batchHttpClient);
+
+        var batchGenerator = batchGeminiClient.AsIEmbeddingGenerator();
+        var batchResult = await batchGenerator.GenerateAsync(
+            ["First chunk", "Second chunk"],
+            new EmbeddingGenerationOptions
+            {
+                ModelId = "text-embedding-004",
+                Dimensions = 2
+            });
+
+        Assert.Equal(2, batchResult.Count);
+        Assert.Equal([1.0f, 2.0f], batchResult[0].Vector.ToArray());
+        Assert.Equal([3.0f, 4.0f], batchResult[1].Vector.ToArray());
+        Assert.Equal(
+            "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents",
+            batchHandler.LastRequest?.RequestUri?.ToString());
+
+        Assert.NotNull(batchHandler.LastRequestBody);
+        using (var batchSentDoc = JsonDocument.Parse(batchHandler.LastRequestBody))
+        {
+            var reqs = batchSentDoc.RootElement.GetProperty("requests");
+            Assert.Equal(2, reqs.GetArrayLength());
+            Assert.Equal("models/text-embedding-004", reqs[0].GetProperty("model").GetString());
+            Assert.Equal(2, reqs[0].GetProperty("outputDimensionality").GetInt32());
+            Assert.Equal("models/text-embedding-004", reqs[1].GetProperty("model").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task EmbedContent_AndBatchEmbedContents_NormalizeBatchModelsWithoutMutatingCallerItems_AndRegisterViaDI()
+    {
+        const string batchJson = """
+            {
+              "embeddings": [
+                { "values": [0.25, 0.5] },
+                { "values": [0.75, 1.0] }
+              ]
+            }
+            """;
+
+        using var handler = new RecordingHandler(batchJson);
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta"),
+            Model = DefaultModel,
+            EmbeddingModel = "gemini-embedding-001",
+            ApiKey = "apim-key",
+            ApiKeyHeader = "Ocp-Apim-Subscription-Key"
+        }, httpClient);
+
+        var item0 = GeminiGatewayClient.Models.EmbedContentRequest.FromText(
+            "First document",
+            GeminiGatewayClient.Models.TaskType.RetrievalDocument,
+            title: "Doc 1",
+            outputDimensionality: 2);
+        var item1 = GeminiGatewayClient.Models.EmbedContentRequest.FromText(
+            "Second query",
+            GeminiGatewayClient.Models.TaskType.RetrievalQuery,
+            outputDimensionality: 2);
+        item1.Model = "gemini-embedding-001";
+
+        var batchRequest = new GeminiGatewayClient.Models.BatchEmbedContentsRequest
+        {
+            Requests = [item0, item1]
+        };
+
+        var response = await client.BatchEmbedContentsAsync(batchRequest);
+
+        Assert.Null(item0.Model);
+        Assert.Equal("gemini-embedding-001", item1.Model);
+        Assert.Equal(2, response.Embeddings.Count);
+        Assert.Equal([0.25f, 0.5f], response.Embeddings[0].Values);
+        Assert.Equal([0.75f, 1.0f], response.Embeddings[1].Values);
+
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        Microsoft.Extensions.DependencyInjection.GeminiServiceCollectionExtensions.AddGeminiClient(services, options =>
+        {
+            options.Model = "gemini-2.5-flash";
+            options.EmbeddingModel = "gemini-embedding-001";
+            options.ApiKey = "di-key";
+        });
+
+        await using var sp = Microsoft.Extensions.DependencyInjection.ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(services);
+        var diGenerator = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+            .GetRequiredService<IEmbeddingGenerator<string, Embedding<float>>>(sp);
+        var diMetadata = diGenerator.GetService<EmbeddingGeneratorMetadata>();
+        Assert.NotNull(diMetadata);
+        Assert.Equal("gemini-embedding-001", diMetadata.DefaultModelId);
+    }
+
+    [Fact]
+    public async Task GroundingCitations_SurrogatePairsAndMultiPartSegment_MapUtf16SpansAndTargetCorrectTextContent()
+    {
+        // Part[0]: "Intro: "
+        // Part[1]: "😀晴れ"
+        //   "😀" (U+1F600): 4 UTF-8 bytes (0..4), 2 UTF-16 chars (0..2)
+        //   "晴れ": 6 UTF-8 bytes (4..10), 2 UTF-16 chars (2..4)
+        const string multiPartJson = """
+            {
+              "candidates": [
+                {
+                  "index": 0,
+                  "content": {
+                    "role": "model",
+                    "parts": [
+                      { "text": "Intro: " },
+                      { "text": "😀晴れ" }
+                    ]
+                  },
+                  "finishReason": "STOP",
+                  "groundingMetadata": {
+                    "groundingChunks": [
+                      {
+                        "web": {
+                          "uri": "https://weather.example.jp/emoji",
+                          "title": "Emoji Forecast"
+                        }
+                      }
+                    ],
+                    "groundingSupports": [
+                      {
+                        "segment": {
+                          "partIndex": 1,
+                          "startIndex": 4,
+                          "endIndex": 10,
+                          "text": "晴れ"
+                        },
+                        "groundingChunkIndices": [0]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+            """;
+
+        using var handler = new RecordingHandler(multiPartJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var response = await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "天気は？")]);
+
+        var textContents = response.Messages[0].Contents.OfType<TextContent>().ToList();
+        Assert.Equal(2, textContents.Count);
+        Assert.Null(textContents[0].Annotations);
+
+        Assert.NotNull(textContents[1].Annotations);
+        var citation = Assert.IsType<CitationAnnotation>(Assert.Single(textContents[1].Annotations!));
+        Assert.Equal("Emoji Forecast", citation.Title);
+        var region = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(citation.AnnotatedRegions!));
+        Assert.Equal(2, region.StartIndex);
+        Assert.Equal(4, region.EndIndex);
+        Assert.Equal("晴れ", textContents[1].Text[region.StartIndex!.Value..region.EndIndex!.Value]);
+    }
+
+    [Fact]
+    public async Task GeminiEmbeddingGenerator_Validation_BatchTemplateOverride_AndEmptyResponseErrors()
+    {
+        using var handler = new RecordingHandler("{}");
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = new GeminiClient(new GeminiClientOptions
+        {
+            EmbeddingModel = "gemini-embedding-001",
+            ApiKey = "test-key"
+        }, httpClient);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => geminiClient.AsIEmbeddingGenerator(defaultModelDimensions: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => geminiClient.AsIEmbeddingGenerator(defaultModelDimensions: -5));
+
+        var generator = geminiClient.AsIEmbeddingGenerator();
+
+        // Empty and null element checks across both IReadOnlyList<string> and lazy IEnumerable<string>
+        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(Array.Empty<string>()));
+        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(YieldItems()));
+        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(["valid", null!]));
+        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(YieldItems("valid", null!)));
+
+        // Empty response object {} on single input must throw GeminiApiException instead of returning a 0-dim vector
+        await Assert.ThrowsAsync<GeminiApiException>(() => generator.GenerateAsync(["single input"]));
+
+        // Mismatched count on batch response must throw GeminiApiException
+        using var mismatchHandler = new RecordingHandler("""{ "embeddings": [ { "values": [0.1, 0.2] } ] }""");
+        using var mismatchHttp = new HttpClient(mismatchHandler);
+        using var mismatchClient = new GeminiClient(new GeminiClientOptions
+        {
+            EmbeddingModel = "gemini-embedding-001",
+            ApiKey = "test-key"
+        }, mismatchHttp);
+        var mismatchGen = mismatchClient.AsIEmbeddingGenerator();
+        await Assert.ThrowsAsync<GeminiApiException>(() => mismatchGen.GenerateAsync(["one", "two"]));
+
+        // Single input with a BatchEmbedContentsRequest template from RawRepresentationFactory routes to :batchEmbedContents
+        var singleAsBatchResult = await mismatchGen.GenerateAsync(
+            ["only-one"],
+            new EmbeddingGenerationOptions
+            {
+                RawRepresentationFactory = _ => new GeminiGatewayClient.Models.BatchEmbedContentsRequest()
+            });
+        Assert.Single(singleAsBatchResult);
+        Assert.Equal(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents",
+            mismatchHandler.LastRequest?.RequestUri?.ToString());
+
+        static IEnumerable<string> YieldItems(params string[] items)
+        {
+            foreach (var item in items)
+            {
+                yield return item;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EmbedContent_NormalizesSingleRequestBareModel_AndCachesDefaultEmbeddingEndpointUris()
+    {
+        var endpoint = GeminiGatewayClient.Http.GeminiEndpoint.Create(
+            GeminiClientOptions.DefaultEndpoint,
+            defaultModel: "gemini-2.5-flash",
+            allowInsecureHttp: false,
+            defaultEmbeddingModel: "gemini-embedding-001");
+
+        var uri1 = endpoint.GetEmbeddingOperationUri(null, "embedContent");
+        var uri2 = endpoint.GetEmbeddingOperationUri("gemini-embedding-001", "embedContent");
+        Assert.Same(uri1, uri2);
+        Assert.Equal("https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent", uri1.ToString());
+
+        var batchUri1 = endpoint.GetEmbeddingOperationUri(null, "batchEmbedContents");
+        var batchUri2 = endpoint.GetEmbeddingOperationUri("gemini-embedding-001", "batchEmbedContents");
+        Assert.Same(batchUri1, batchUri2);
+
+        const string embedJson = """{ "embedding": { "values": [0.5, 0.25] } }""";
+        using var handler = new RecordingHandler(embedJson);
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            EmbeddingModel = "gemini-embedding-001",
+            ApiKey = "test-key"
+        }, httpClient);
+
+        var request = GeminiGatewayClient.Models.EmbedContentRequest.FromText("hello");
+        request.Model = "gemini-embedding-001";
+
+        var response = await client.EmbedContentAsync(request);
+        Assert.Equal("gemini-embedding-001", request.Model);
+        Assert.Equal([0.5f, 0.25f], response.Embedding!.Values);
+
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal("models/gemini-embedding-001", sentDoc.RootElement.GetProperty("model").GetString());
+
+        // Oversized Content-Length (> MaxBufferedResponseBytes) must fail fast with GeminiApiException
+        using var oversizedHandler = new OversizedContentLengthHandler((long)GeminiClient.MaxBufferedResponseBytes + 1);
+        using var oversizedHttp = new HttpClient(oversizedHandler);
+        using var oversizedClient = new GeminiClient(new GeminiClientOptions
+        {
+            EmbeddingModel = "gemini-embedding-001",
+            ApiKey = "test-key"
+        }, oversizedHttp);
+
+        await Assert.ThrowsAsync<GeminiApiException>(() => oversizedClient.EmbedContentAsync(request));
+    }
+
+    private sealed class OversizedContentLengthHandler(long declaredContentLength) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var content = new ByteArrayContent("{}"u8.ToArray());
+            content.Headers.ContentLength = declaredContentLength;
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content });
+        }
+    }
+
     public sealed record WeatherReport(
         [property: JsonPropertyName("city")] string City,
         [property: JsonPropertyName("tempC")] double TempC,

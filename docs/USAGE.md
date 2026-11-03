@@ -12,9 +12,10 @@ This guide provides practical usage patterns for `GeminiGatewayClient`, modeled 
 6. [Multimodal Inputs (Inline Bytes & File URIs)](#6-multimodal-inputs-inline-bytes--file-uris)
 7. [`Microsoft.Extensions.AI` (`IChatClient`) & Automatic Tool Chains](#7-microsoftextensionsai-ichatclient--automatic-tool-chains)
 8. [Manual Multi-Step & Parallel Function Calling (`GeminiClient`)](#8-manual-multi-step--parallel-function-calling-geminiclient)
-9. [Multi-Turn Conversations & Database Persistence](#9-multi-turn-conversations--database-persistence)
-10. [Safety Blocks, Timeouts & Error Handling](#10-safety-blocks-timeouts--error-handling)
-11. [`GeminiClientOptions` Reference](#11-geminiclientoptions-reference)
+9. [Google Search Grounding, URL Context & Embeddings (`IEmbeddingGenerator`)](#9-google-search-grounding-url-context--embeddings-iembeddinggenerator)
+10. [Multi-Turn Conversations & Database Persistence](#10-multi-turn-conversations--database-persistence)
+11. [Safety Blocks, Timeouts & Error Handling](#11-safety-blocks-timeouts--error-handling)
+12. [`GeminiClientOptions` Reference](#12-geminiclientoptions-reference)
 
 ---
 
@@ -74,7 +75,7 @@ var options = new GeminiClientOptions
 
 ## 2. Dependency Injection, `IHttpClientFactory` & Resilience
 
-`services.AddGeminiClient(...)` registers `GeminiClient`, `IGeminiClient`, `IChatClient`, and `IValidateOptions<GeminiClientOptions>`, returning an `IHttpClientBuilder`:
+`services.AddGeminiClient(...)` registers `GeminiClient`, `IGeminiClient`, `IChatClient`, `IEmbeddingGenerator<string, Embedding<float>>`, and `IValidateOptions<GeminiClientOptions>`, returning an `IHttpClientBuilder`:
 
 ```csharp
 using GeminiGatewayClient;
@@ -449,7 +450,106 @@ while (true)
 
 ---
 
-## 9. Multi-Turn Conversations & Database Persistence
+## 9. Google Search Grounding, URL Context & Embeddings (`IEmbeddingGenerator`)
+
+### Google Search Grounding & Citation Spans via `IChatClient`
+
+Pass `new HostedWebSearchTool()` in `ChatOptions.Tools` to enable Google Search grounding. `GeminiChatClient` maps `Candidate.GroundingMetadata` and `CitationMetadata` onto `TextContent.Annotations` (`CitationAnnotation` with UTF-16 `TextSpanAnnotatedRegion` offsets) and exposes executed search queries under `response.AdditionalProperties[GeminiChatPropertyNames.WebSearchQueries]`:
+
+```csharp
+using GeminiGatewayClient;
+using Microsoft.Extensions.AI;
+
+IChatClient chatClient = client.AsIChatClient();
+
+ChatResponse response = await chatClient.GetResponseAsync(
+    "When was .NET 10 released and is it an LTS or STS release?",
+    new ChatOptions
+    {
+        Temperature = 0.0f,
+        Tools = [new HostedWebSearchTool()]
+    });
+
+Console.WriteLine(response.Text);
+
+if (response.AdditionalProperties?.TryGetValue(GeminiChatPropertyNames.WebSearchQueries, out var queriesObj) == true &&
+    queriesObj is IEnumerable<string> queries)
+{
+    Console.WriteLine($"Search queries: {string.Join(", ", queries)}");
+}
+
+foreach (var textContent in response.Messages.SelectMany(m => m.Contents).OfType<TextContent>())
+{
+    foreach (var citation in (textContent.Annotations ?? []).OfType<CitationAnnotation>())
+    {
+        Console.WriteLine($"Source: {citation.Title} ({citation.Url})");
+        foreach (var region in (citation.AnnotatedRegions ?? []).OfType<TextSpanAnnotatedRegion>())
+        {
+            var spanText = textContent.Text[region.StartIndex!.Value..region.EndIndex!.Value];
+            Console.WriteLine($"  [{region.StartIndex}..{region.EndIndex}] \"{spanText}\"");
+        }
+    }
+}
+```
+
+### URL Context & Grounding via `GeminiClient`
+
+With `GeminiClient`, enable `GoogleSearchTool` or `UrlContextTool` on `GenerateContentRequest.Tools` and inspect `Candidate.GroundingMetadata` or `Candidate.UrlContextMetadata`:
+
+```csharp
+using GeminiGatewayClient.Models;
+
+var response = await client.GenerateContentAsync(new GenerateContentRequest
+{
+    Contents = [Content.FromText("Summarize https://ai.google.dev/gemini-api/docs/url-context in two sentences.")],
+    Tools = [new Tool { UrlContext = new UrlContextTool() }]
+});
+
+var candidate = response.Candidates[0];
+if (candidate.UrlContextMetadata is { } urlContext)
+{
+    foreach (var item in urlContext.UrlMetadata)
+    {
+        Console.WriteLine($"{item.RetrievedUrl}: {item.UrlRetrievalStatus}");
+    }
+}
+```
+
+### Embeddings (`IEmbeddingGenerator<string, Embedding<float>>` & `GeminiClient`)
+
+Use `client.AsIEmbeddingGenerator()` (or inject `IEmbeddingGenerator<string, Embedding<float>>` from DI). Single-item calls use `:embedContent`; multi-item calls use `:batchEmbedContents`:
+
+```csharp
+using GeminiGatewayClient;
+using GeminiGatewayClient.Models;
+using Microsoft.Extensions.AI;
+
+IEmbeddingGenerator<string, Embedding<float>> generator =
+    client.AsIEmbeddingGenerator(defaultModelId: "gemini-embedding-001", defaultModelDimensions: 256);
+
+// Single input -> :embedContent (with optional TaskType/Title via RawRepresentationFactory)
+var queryEmbeddings = await generator.GenerateAsync(
+    ["How to stream SSE responses in C#"],
+    new EmbeddingGenerationOptions
+    {
+        RawRepresentationFactory = _ => new EmbedContentRequest
+        {
+            TaskType = TaskType.RetrievalQuery
+        }
+    });
+ReadOnlyMemory<float> queryVector = queryEmbeddings[0].Vector;
+
+// Multiple inputs -> :batchEmbedContents
+var docEmbeddings = await generator.GenerateAsync(
+    [
+        "Use IAsyncEnumerable<T> and yield return for streaming.",
+        "Configure SocketsHttpHandler with AllowAutoRedirect = false."
+    ]);
+```
+
+---
+
+## 10. Multi-Turn Conversations & Database Persistence
 
 When persisting `Microsoft.Extensions.AI` `ChatMessage` history to a database or JSON cache, `AIContent.RawRepresentation` is not serialized. `GeminiChatClient` automatically stores critical Gemini metadata in `AdditionalProperties` and `ProtectedData` so rehydrated messages continue to work on Gemini 3+ models:
 
@@ -462,7 +562,7 @@ Simply serialize and deserialize `ChatMessage.Contents` (including `AdditionalPr
 
 ---
 
-## 10. Safety Blocks, Timeouts & Error Handling
+## 11. Safety Blocks, Timeouts & Error Handling
 
 ### Exception & Failure Modes Matrix
 
@@ -525,7 +625,7 @@ When you pass your own `HttpClient` to `new GeminiClient(options, httpClient)`, 
 
 ---
 
-## 11. `GeminiClientOptions` Reference
+## 12. `GeminiClientOptions` Reference
 
 `GeminiClientOptions.ToString()` automatically redacts `ApiKey`, `ApiKeyProvider`, and `AdditionalHeaders` values so options can be logged safely.
 
@@ -533,6 +633,7 @@ When you pass your own `HttpClient` to `new GeminiClient(options, httpClient)`, 
 |---|---|---|---|
 | `Endpoint` | `Uri` | `https://generativelanguage.googleapis.com/v1beta` | Base URI of the Gemini API or gateway (without `:generateContent`). Query strings are preserved. |
 | `Model` | `string?` | `null` | Default model ID (`"gemini-3-flash-preview"`) or resource path (`"models/..."`, `"tunedModels/..."`). |
+| `EmbeddingModel` | `string?` | `null` | Default embedding model ID (`"gemini-embedding-001"`) used by `EmbedContentAsync`, `BatchEmbedContentsAsync`, and `IEmbeddingGenerator`. Falls back to `Model` when `null`. |
 | `ApiKey` | `string?` | `null` | Static API key or gateway credential. Mutually exclusive with `ApiKeyProvider`. |
 | `ApiKeyProvider` | `Func<CancellationToken, ValueTask<string>>?` | `null` | Async callback invoked per request to obtain a fresh API key or bearer token. |
 | `ApiKeyHeader` | `string` | `"x-goog-api-key"` | Header name used to send `ApiKey` or the value returned by `ApiKeyProvider`. |

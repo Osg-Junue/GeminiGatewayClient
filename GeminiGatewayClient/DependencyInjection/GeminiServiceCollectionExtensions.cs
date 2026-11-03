@@ -7,8 +7,8 @@ using Microsoft.Extensions.Options;
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// <see cref="IServiceCollection"/> extension methods for registering <see cref="GeminiClient"/> (as <see cref="IGeminiClient"/>)
-/// and <see cref="IChatClient"/> backed by <see cref="IHttpClientFactory"/>.
+/// <see cref="IServiceCollection"/> extension methods for registering <see cref="GeminiClient"/> (as <see cref="IGeminiClient"/>),
+/// <see cref="IChatClient"/>, and <see cref="IEmbeddingGenerator{TInput, TEmbedding}"/> backed by <see cref="IHttpClientFactory"/>.
 /// </summary>
 public static class GeminiServiceCollectionExtensions
 {
@@ -20,7 +20,8 @@ public static class GeminiServiceCollectionExtensions
     extension(IServiceCollection services)
     {
         /// <summary>
-        /// Registers <see cref="GeminiClient"/>, <see cref="IGeminiClient"/>, and <see cref="IChatClient"/> backed by <see cref="IHttpClientFactory"/>.
+        /// Registers <see cref="GeminiClient"/>, <see cref="IGeminiClient"/>, <see cref="IChatClient"/>, and
+        /// <see cref="IEmbeddingGenerator{TInput, TEmbedding}"/> backed by <see cref="IHttpClientFactory"/>.
         /// <para>
         /// Options come from the options pattern, so <paramref name="configure"/> can be combined with
         /// <c>services.AddOptions&lt;GeminiClientOptions&gt;().BindConfiguration("Gemini")</c>. Options are validated when the client is first resolved.
@@ -49,7 +50,8 @@ public static class GeminiServiceCollectionExtensions
         }
 
         /// <summary>
-        /// Registers <see cref="GeminiClient"/>, <see cref="IGeminiClient"/>, and <see cref="IChatClient"/> backed by <see cref="IHttpClientFactory"/>,
+        /// Registers <see cref="GeminiClient"/>, <see cref="IGeminiClient"/>, <see cref="IChatClient"/>, and
+        /// <see cref="IEmbeddingGenerator{TInput, TEmbedding}"/> backed by <see cref="IHttpClientFactory"/>,
         /// configuring <see cref="GeminiClientOptions"/> using the <see cref="IServiceProvider"/>.
         /// </summary>
         /// <param name="configure">Delegate that configures <see cref="GeminiClientOptions"/> with access to <see cref="IServiceProvider"/>.</param>
@@ -93,6 +95,8 @@ public static class GeminiServiceCollectionExtensions
         services.TryAddTransient<IChatClient>(static sp =>
             sp.GetRequiredService<IGeminiClient>().AsIChatClient(
                 toolSerializerOptions: sp.GetRequiredService<GeminiClientSettings>().ToolSerializerOptions));
+        services.TryAddTransient<IEmbeddingGenerator<string, Embedding<float>>>(static sp =>
+            sp.GetRequiredService<IGeminiClient>().AsIEmbeddingGenerator());
 
         return httpClientBuilder;
     }
