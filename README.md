@@ -8,7 +8,7 @@
 
 **Call the Google Gemini API safely through Azure APIM, Cloudflare AI Gateway, Kong, Envoy, or internal BFFs in .NET.**
 
-Custom auth headers · Per-request rotating tokens · Zero `DefaultRequestHeaders` pollution · `Microsoft.Extensions.AI` (`IChatClient`) & DI · 100% NativeAOT
+Custom auth headers · Per-request rotating tokens · Zero `DefaultRequestHeaders` pollution · `Microsoft.Extensions.AI` (`IChatClient`) & DI · NativeAOT/Trim-aware design
 
 📖 **[Usage Guide & Recipes](docs/USAGE.md)** · 📊 **[Gemini API Compatibility Matrix](docs/API_COMPATIBILITY.md)** · 📝 **[Changelog](CHANGELOG.md)**
 
@@ -17,7 +17,7 @@ Custom auth headers · Per-request rotating tokens · Zero `DefaultRequestHeader
 ## Why This Exists
 
 - **The Problem:** Google's official `Google.GenAI` SDK assumes your app talks directly to `googleapis.com` with a static `x-goog-api-key` header. In production, you rarely distribute raw Gemini API keys to application nodes—traffic goes through an **API gateway, reverse proxy, or BFF** where clients authenticate using `Ocp-Apim-Subscription-Key`, `cf-aig-authorization`, or short-lived `Authorization: Bearer <jwt>` tokens.
-- **The Solution:** `GeminiGatewayClient` is designed from the ground up for gateway-mediated architectures, clean `IHttpClientFactory` lifecycle management, `Microsoft.Extensions.AI` (`IChatClient`), and NativeAOT.
+- **The Solution:** `GeminiGatewayClient` is designed for gateway-mediated architectures, clean `IHttpClientFactory` lifecycle management, `Microsoft.Extensions.AI` (`IChatClient`), and NativeAOT-friendly publishing.
 
 ```mermaid
 flowchart LR
@@ -40,7 +40,7 @@ flowchart LR
 | **Cross-host redirect credential leak protection** (`AllowAutoRedirect = false`) | ✅ Built-in | ❌ Manual handler required |
 | **`IHttpClientFactory` + `IOptions<T>` DI** (`services.AddGeminiClient()`) | ✅ Built-in (`IHttpClientBuilder`) | ❌ Manual registration |
 | **`Microsoft.Extensions.AI` (`IChatClient`) + persisted `thoughtSignature` recovery** | ✅ Built-in (`AsIChatClient()` / DI) | ⚠️ Requires raw part retention |
-| **100% NativeAOT & Trim-Safe** (`<IsAotCompatible>true</IsAotCompatible>`) | ✅ Zero reflection (`GeminiJsonContext`) | ⚠️ Partial reflection paths |
+| **NativeAOT & Trim-aware design** (`<IsAotCompatible>true</IsAotCompatible>`) | ✅ Source-generated wire DTO serialization (`GeminiJsonContext`) and reflection-free hot paths | ⚠️ Requires manual validation for gateway/AOT-specific behavior |
 | **Per-chunk stream idle watchdog** (`StreamIdleTimeout`) | ✅ Built-in (default 2 min) | ❌ Manual cancellation |
 
 ---
@@ -136,9 +136,9 @@ var options = new GeminiClientOptions
 
 ---
 
-## Production-Verified Capabilities
+## Implemented Capabilities
 
-Every feature is verified against both deterministic unit tests ([`tests/GeminiGatewayClient.Tests`](tests/GeminiGatewayClient.Tests)) and live end-to-end Gemini API scenarios ([`tests/GeminiGatewayClient.ExploratoryTests`](tests/GeminiGatewayClient.ExploratoryTests)):
+Core behavior is covered by deterministic unit tests ([`tests/GeminiGatewayClient.Tests`](tests/GeminiGatewayClient.Tests)); live end-to-end scenarios are additionally covered by exploratory tests when API credentials are configured ([`tests/GeminiGatewayClient.ExploratoryTests`](tests/GeminiGatewayClient.ExploratoryTests)):
 
 - **Real-Time Streaming**: SSE (`?alt=sse`) and JSON-array streaming with `ArrayPool<byte>` buffering, split `\r\n` handling, in-stream HTTP 200 `{"error": ...}` detection, and `StreamIdleTimeout` watchdog.
 - **Automatic & Parallel Tool Calling**: Multi-step `IChatClient` tool chains via `.UseFunctionInvocation()`, plus native parallel function calling and forced tool execution (`FunctionCallingMode.Any`).
