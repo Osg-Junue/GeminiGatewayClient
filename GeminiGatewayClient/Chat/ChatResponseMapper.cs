@@ -72,12 +72,12 @@ internal static class ChatResponseMapper
     private static List<AIContent> MapContents(Candidate? candidate, out bool hasFunctionCall)
     {
         hasFunctionCall = false;
-        var contents = new List<AIContent>();
-        if (candidate?.Content?.Parts is not { } parts)
+        if (candidate?.Content?.RawParts is not { Count: > 0 } parts)
         {
-            return contents;
+            return [];
         }
 
+        var contents = new List<AIContent>(parts.Count);
         var callOrdinal = 0;
         foreach (var part in parts)
         {

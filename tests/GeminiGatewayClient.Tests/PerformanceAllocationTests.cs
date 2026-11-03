@@ -1,0 +1,212 @@
+using GeminiGatewayClient.Chat;
+using GeminiGatewayClient.Http;
+using GeminiGatewayClient.Models;
+using Microsoft.Extensions.AI;
+
+namespace GeminiGatewayClient.Tests;
+
+public class PerformanceAllocationTests
+{
+    [Fact]
+    public void ChatResponseMapper_EmptyOrSinglePart_SizesContentsListWithoutExcessCapacity()
+    {
+        var uninitializedContent = new Content { Role = Role.Model };
+        var uninitializedResponse = new GenerateContentResponse
+        {
+            Candidates = [new Candidate { Content = uninitializedContent }]
+        };
+
+        var mappedUninitialized = ChatResponseMapper.ToChatResponse(uninitializedResponse, "gemini-2.5-flash");
+        var uninitializedContents = Assert.IsType<List<AIContent>>(mappedUninitialized.Messages[0].Contents);
+        Assert.Empty(uninitializedContents);
+        Assert.Equal(0, uninitializedContents.Capacity);
+        Assert.Null(uninitializedContent.RawParts);
+
+        var singlePartResponse = new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts = [Part.FromText("hello")]
+                    }
+                }
+            ]
+        };
+
+        var mappedSingle = ChatResponseMapper.ToChatResponse(singlePartResponse, "gemini-2.5-flash");
+        var singleContents = Assert.IsType<List<AIContent>>(mappedSingle.Messages[0].Contents);
+        Assert.Single(singleContents);
+        Assert.Equal(1, singleContents.Capacity);
+    }
+
+    [Fact]
+    public void ChatOptionsMapper_ApplyTools_SizesDeclarationsAndToolsWithoutOverAllocation()
+    {
+        var functionsOnlyOptions = new ChatOptions
+        {
+            Tools =
+            [
+                AIFunctionFactory.Create((string a) => a, "fn1"),
+                AIFunctionFactory.Create((string a) => a, "fn2"),
+                AIFunctionFactory.Create((string a) => a, "fn3"),
+                AIFunctionFactory.Create((string a) => a, "fn4"),
+                AIFunctionFactory.Create((string a) => a, "fn5"),
+                AIFunctionFactory.Create((string a) => a, "fn6")
+            ]
+        };
+
+        var request = new GenerateContentRequest();
+        ChatOptionsMapper.Apply(request, functionsOnlyOptions, "gemini-2.5-flash");
+
+        var tools = Assert.IsType<List<Tool>>(request.Tools);
+        Assert.Single(tools);
+        Assert.Equal(1, tools.Capacity);
+
+        var declarations = Assert.IsType<List<FunctionDeclaration>>(tools[0].FunctionDeclarations);
+        Assert.Equal(6, declarations.Count);
+        Assert.Equal(6, declarations.Capacity);
+
+        // Mixed function declarations + HostedWebSearchTool should not resize mappedTools beyond 2
+        var mixedOptions = new ChatOptions
+        {
+            Tools =
+            [
+                AIFunctionFactory.Create((string a) => a, "fn1"),
+                AIFunctionFactory.Create((string a) => a, "fn2"),
+                new HostedWebSearchTool()
+            ]
+        };
+
+        var mixedRequest = new GenerateContentRequest();
+        ChatOptionsMapper.Apply(mixedRequest, mixedOptions, "gemini-2.5-flash");
+
+        var mixedTools = Assert.IsType<List<Tool>>(mixedRequest.Tools);
+        Assert.Equal(2, mixedTools.Count);
+        Assert.Equal(2, mixedTools.Capacity);
+        Assert.NotNull(mixedTools[0].FunctionDeclarations);
+        Assert.NotNull(mixedTools[1].GoogleSearch);
+    }
+
+    [Fact]
+    public void ChatRequestMapper_ToRequest_PreSizesContentsAndParts_AndOmitsUnusedSystemParts()
+    {
+        using var geminiClient = new GeminiClient("test-key", "gemini-2.5-flash");
+        var chatClient = geminiClient.AsIChatClient();
+
+        ChatMessage[] messages =
+        [
+            new(ChatRole.User, "Turn 1"),
+            new(ChatRole.Assistant, "Turn 2"),
+            new(ChatRole.User, "Turn 3"),
+            new(ChatRole.Assistant, "Turn 4"),
+            new(ChatRole.User, "Turn 5")
+        ];
+
+        var request = ChatRequestMapper.ToRequest(messages, options: null, chatClient, "gemini-2.5-flash", AIJsonUtilities.DefaultOptions);
+
+        Assert.Null(request.SystemInstruction);
+        var contents = Assert.IsType<List<Content>>(request.Contents);
+        Assert.Equal(5, contents.Count);
+        Assert.Equal(5, contents.Capacity);
+
+        foreach (var content in contents)
+        {
+            var parts = Assert.IsType<List<Part>>(content.Parts);
+            Assert.Single(parts);
+            Assert.Equal(1, parts.Capacity);
+        }
+    }
+
+    [Fact]
+    public void ChatRequestMapper_ToRequest_CombinedInstructionsAndSystemMessage_AndMergedTurns_WorkCleanly()
+    {
+        using var geminiClient = new GeminiClient("test-key", "gemini-2.5-flash");
+        var chatClient = geminiClient.AsIChatClient();
+
+        ChatMessage[] messages =
+        [
+            new(ChatRole.System, "System message 2"),
+            new(ChatRole.User, "Question"),
+            new(ChatRole.Assistant, [new FunctionCallContent("c1", "fn"), new FunctionCallContent("c2", "fn")]),
+            new(ChatRole.Tool, [new FunctionResultContent("c1", "r1")]),
+            new(ChatRole.Tool, [new FunctionResultContent("c2", "r2")])
+        ];
+
+        var options = new ChatOptions { Instructions = "System message 1" };
+        var request = ChatRequestMapper.ToRequest(messages, options, chatClient, "gemini-2.5-flash", AIJsonUtilities.DefaultOptions);
+
+        Assert.NotNull(request.SystemInstruction);
+        var systemParts = Assert.IsType<List<Part>>(request.SystemInstruction!.Parts);
+        Assert.Equal(2, systemParts.Count);
+        Assert.Equal(2, systemParts.Capacity);
+
+        // Two consecutive Tool messages are merged into a single User turn with 2 FunctionResponse parts
+        Assert.Equal(3, request.Contents.Count);
+        Assert.Equal(2, request.Contents[2].Parts.Count);
+    }
+
+    [Fact]
+    public void GeminiRequestHeaders_Create_AppliesConfiguredStaticAndAdditionalHeaders()
+    {
+        var options = new GeminiClientOptions
+        {
+            ApiKey = "secret-key",
+            AdditionalHeaders =
+            {
+                ["X-Custom-1"] = "v1",
+                ["X-Custom-2"] = "v2"
+            }
+        };
+
+        var headers = GeminiRequestHeaders.Create(options);
+        using var message = new HttpRequestMessage(HttpMethod.Post, "https://example.com");
+        var task = headers.ApplyAsync(message, CancellationToken.None);
+        Assert.True(task.IsCompletedSuccessfully);
+
+        Assert.Equal("secret-key", Assert.Single(message.Headers.GetValues(GeminiClientOptions.DefaultApiKeyHeader)));
+        Assert.Equal("v1", Assert.Single(message.Headers.GetValues("X-Custom-1")));
+        Assert.Equal("v2", Assert.Single(message.Headers.GetValues("X-Custom-2")));
+    }
+
+    [Fact]
+    public void ChatResponseMapper_WarmPath_AllocatesWithinExpectedBudget()
+    {
+        var chunk = new GenerateContentResponse
+        {
+            ResponseId = "r1",
+            ModelVersion = "gemini-2.5-flash",
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts = [Part.FromText("chunk")]
+                    }
+                }
+            ]
+        };
+
+        // Warmup JIT
+        for (var i = 0; i < 50; i++)
+        {
+            _ = ChatResponseMapper.ToChatResponseUpdate(chunk, "gemini-2.5-flash");
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 100; i++)
+        {
+            _ = ChatResponseMapper.ToChatResponseUpdate(chunk, "gemini-2.5-flash");
+        }
+
+        var allocatedPerCall = (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
+
+        // ~296 B in 64-bit Release; allow up to 400 B for Debug/coverage/PGO instrumentation headroom.
+        Assert.InRange(allocatedPerCall, 1, 400);
+    }
+}
