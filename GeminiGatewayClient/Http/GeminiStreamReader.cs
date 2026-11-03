@@ -15,7 +15,7 @@ namespace GeminiGatewayClient.Http;
 internal static class GeminiStreamReader
 {
     private const int InitialReadBufferBytes = 4096;
-    private const int MaxSseLineBytes = 64 * 1024 * 1024;
+    internal const int MaxSseLineBytes = 64 * 1024 * 1024;
     private const int MaxNonSseBytes = GeminiErrorParser.MaxErrorBodyChars * 4;
 
     /// <summary>
@@ -25,15 +25,17 @@ internal static class GeminiStreamReader
         Stream stream,
         GeminiStreamingFormat format,
         HttpStatusCode statusCode,
-        StreamIdleWatchdog watchdog) =>
+        StreamIdleWatchdog watchdog,
+        int maxSseEventBytes = MaxSseLineBytes) =>
         format == GeminiStreamingFormat.ServerSentEvents
-            ? ReadServerSentEventsAsync(stream, statusCode, watchdog)
+            ? ReadServerSentEventsAsync(stream, statusCode, watchdog, maxSseEventBytes)
             : ReadJsonArrayAsync(stream, statusCode, watchdog);
 
     private static async IAsyncEnumerable<GenerateContentResponse> ReadServerSentEventsAsync(
         Stream stream,
         HttpStatusCode statusCode,
-        StreamIdleWatchdog watchdog)
+        StreamIdleWatchdog watchdog,
+        int maxSseEventBytes)
     {
         using var dataBuffer = new PooledByteBufferWriter(1024);
         PooledByteBufferWriter? nonSseBuffer = null;
@@ -102,7 +104,7 @@ internal static class GeminiStreamReader
 
                         if (!tailLine.IsEmpty)
                         {
-                            ProcessSseLine(tailLine, ref isFirstLine, ref sawSseEvent, dataBuffer, ref nonSseBuffer);
+                            ProcessSseLine(tailLine, statusCode, maxSseEventBytes, ref isFirstLine, ref sawSseEvent, dataBuffer, ref nonSseBuffer);
                         }
                     }
 
@@ -116,6 +118,10 @@ internal static class GeminiStreamReader
                     else if (!sawSseEvent && nonSseBuffer is { WrittenCount: > 0 })
                     {
                         yield return DeserializeUtf8Chunk(nonSseBuffer.WrittenSpan, statusCode);
+                    }
+                    else if (isFirstLine)
+                    {
+                        throw new GeminiApiException("Received an empty Gemini streaming response body.", statusCode);
                     }
 
                     yield break;
@@ -169,7 +175,7 @@ internal static class GeminiStreamReader
 
                     searchStart = start;
 
-                    if (ProcessSseLine(line, ref isFirstLine, ref sawSseEvent, dataBuffer, ref nonSseBuffer))
+                    if (ProcessSseLine(line, statusCode, maxSseEventBytes, ref isFirstLine, ref sawSseEvent, dataBuffer, ref nonSseBuffer))
                     {
                         var response = DeserializeUtf8Chunk(dataBuffer.WrittenSpan, statusCode);
                         dataBuffer.Clear();
@@ -190,6 +196,8 @@ internal static class GeminiStreamReader
     /// </summary>
     private static bool ProcessSseLine(
         ReadOnlySpan<byte> line,
+        HttpStatusCode statusCode,
+        int maxSseEventBytes,
         ref bool isFirstLine,
         ref bool sawSseEvent,
         PooledByteBufferWriter dataBuffer,
@@ -266,7 +274,13 @@ internal static class GeminiStreamReader
             return false;
         }
 
-        if (dataBuffer.WrittenCount > 0)
+        var separatorBytes = dataBuffer.WrittenCount > 0 ? 1 : 0;
+        if ((long)dataBuffer.WrittenCount + separatorBytes + payload.Length > maxSseEventBytes)
+        {
+            throw new GeminiApiException("An SSE event exceeded the maximum allowed length.", statusCode);
+        }
+
+        if (separatorBytes > 0)
         {
             dataBuffer.GetSpan(1)[0] = (byte)'\n';
             dataBuffer.Advance(1);

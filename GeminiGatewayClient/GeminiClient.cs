@@ -123,7 +123,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         request.Validate(nameof(request));
 
         var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(model, EmbedContentOperation);
-        var wireRequest = NormalizeSingleEmbedRequestModel(request);
+        var defaultResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(model);
+        var wireRequest = NormalizeSingleEmbedRequestModel(request, defaultResourcePath);
         return SendBufferedAsync(
             requestUri,
             wireRequest,
@@ -307,19 +308,13 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         return _settings.Endpoint.GetOperationUri(model, operation, serverSentEvents);
     }
 
-    private static EmbedContentRequest NormalizeSingleEmbedRequestModel(EmbedContentRequest request)
+    private static EmbedContentRequest NormalizeSingleEmbedRequestModel(
+        EmbedContentRequest request,
+        string defaultResourcePath)
     {
-        if (request.Model is null)
-        {
-            return request;
-        }
-
-        if (string.IsNullOrWhiteSpace(request.Model))
-        {
-            return request.Clone(clearModel: true);
-        }
-
-        var resolved = GeminiEndpoint.ToResourcePath(request.Model)!;
+        var resolved = string.IsNullOrWhiteSpace(request.Model)
+            ? defaultResourcePath
+            : GeminiEndpoint.ToResourcePath(request.Model)!;
         return string.Equals(request.Model, resolved, StringComparison.Ordinal)
             ? request
             : request.Clone(modelOverride: resolved);

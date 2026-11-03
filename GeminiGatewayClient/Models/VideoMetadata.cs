@@ -212,17 +212,30 @@ public sealed class VideoOffsetJsonConverter : JsonConverter<VideoOffset>
             }
         }
 
-        var totalSeconds = seconds + (nanos / 1_000_000_000.0);
-        if (seconds >= 0 && nanos > 0 && nanos < 1_000_000_000)
+        const long NanosPerSecond = 1_000_000_000L;
+        var totalNanos = ((long)seconds * NanosPerSecond) + nanos;
+        if (totalNanos == 0)
         {
-            Span<char> fracBuffer = stackalloc char[9];
-            nanos.TryFormat(fracBuffer, out _, "D9", CultureInfo.InvariantCulture);
-            var fracSpan = fracBuffer.TrimEnd('0');
-            writer.WriteStringValue(string.Create(CultureInfo.InvariantCulture, $"{seconds}.{fracSpan}s"));
+            writer.WriteStringValue("0s"u8);
             return;
         }
 
-        writer.WriteStringValue(string.Create(CultureInfo.InvariantCulture, $"{totalSeconds:0.#########}s"));
+        var isNegative = totalNanos < 0;
+        var absNanos = isNegative ? -totalNanos : totalNanos;
+        var wholeSeconds = absNanos / NanosPerSecond;
+        var remNanos = (int)(absNanos % NanosPerSecond);
+        var signPrefix = isNegative ? "-" : "";
+
+        if (remNanos == 0)
+        {
+            writer.WriteStringValue(string.Create(CultureInfo.InvariantCulture, $"{signPrefix}{wholeSeconds}s"));
+            return;
+        }
+
+        Span<char> fracBuffer = stackalloc char[9];
+        remNanos.TryFormat(fracBuffer, out _, "D9", CultureInfo.InvariantCulture);
+        var fracSpan = fracBuffer.TrimEnd('0');
+        writer.WriteStringValue(string.Create(CultureInfo.InvariantCulture, $"{signPrefix}{wholeSeconds}.{fracSpan}s"));
     }
 
     private static bool TryParseDurationString(ReadOnlySpan<char> span, out VideoOffset offset)
@@ -243,7 +256,7 @@ public sealed class VideoOffsetJsonConverter : JsonConverter<VideoOffset>
         var dotIndex = numberSpan.IndexOf('.');
         if (dotIndex < 0)
         {
-            if (!int.TryParse(numberSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out var wholeSeconds))
+            if (!int.TryParse(numberSpan, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var wholeSeconds))
             {
                 return false;
             }
@@ -256,9 +269,15 @@ public sealed class VideoOffsetJsonConverter : JsonConverter<VideoOffset>
         var fracSpan = numberSpan[(dotIndex + 1)..];
         var isNegative = secSpan.StartsWith('-');
 
+        var hasSecDigits = !secSpan.IsEmpty && secSpan is not ['-' or '+'];
+        if (!hasSecDigits && fracSpan.IsEmpty)
+        {
+            return false;
+        }
+
         var whole = 0;
-        if (!secSpan.IsEmpty && secSpan is not ['-'] &&
-            !int.TryParse(secSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out whole))
+        if (hasSecDigits &&
+            !int.TryParse(secSpan, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out whole))
         {
             return false;
         }

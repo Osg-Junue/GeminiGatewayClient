@@ -226,6 +226,14 @@ public sealed class LongConversationExploratoryTests(ExploratoryTestFixture fixt
                     (c.AdditionalProperties?.TryGetValue(GeminiChatPropertyNames.ThoughtSignature, out var sig) == true && sig is not null));
             Assert.True(hasSignature, $"Expected thoughtSignature to be preserved after ToChatResponse() on Turn {t + 1}.");
 
+            // Verify that any companion streaming signature-only TextReasoningContent preserves its source Part as RawRepresentation
+            var companionSignatureItems = aggregated.Messages
+                .SelectMany(m => m.Contents)
+                .OfType<TextReasoningContent>()
+                .Where(rc => string.IsNullOrEmpty(rc.Text) && !string.IsNullOrEmpty(rc.ProtectedData))
+                .ToList();
+            Assert.All(companionSignatureItems, rc => Assert.IsType<Part>(rc.RawRepresentation));
+
             history.AddRange(aggregated.Messages);
             finalResponse = aggregated;
         }

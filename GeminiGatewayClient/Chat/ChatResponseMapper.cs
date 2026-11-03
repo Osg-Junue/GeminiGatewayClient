@@ -133,7 +133,8 @@ internal static class ChatResponseMapper
                     {
                         contents.Add(new TextReasoningContent(string.Empty)
                         {
-                            ProtectedData = part.ThoughtSignature
+                            ProtectedData = part.ThoughtSignature,
+                            RawRepresentation = part
                         });
                     }
                     break;

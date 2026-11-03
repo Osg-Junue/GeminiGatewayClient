@@ -45,6 +45,7 @@ internal static class ChatRequestMapper
         }
 
         var calls = new FunctionCallRegistry();
+        ChatRole? lastMergedChatRole = null;
 
         foreach (var message in messageList)
         {
@@ -81,7 +82,7 @@ internal static class ChatRequestMapper
                 continue;
             }
 
-            if (contents.Count > 0 && contents[^1].Role == targetRole)
+            if (contents.Count > 0 && contents[^1].Role == targetRole && lastMergedChatRole == message.Role)
             {
                 var previousParts = contents[^1].Parts;
                 if (previousParts is List<Part> previousList)
@@ -103,6 +104,7 @@ internal static class ChatRequestMapper
                     Role = targetRole,
                     Parts = parts
                 });
+                lastMergedChatRole = message.Role;
             }
         }
 
@@ -129,11 +131,11 @@ internal static class ChatRequestMapper
         var signature = GetStringProperty(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature)
             ?? rawPart?.ThoughtSignature;
 
-        // Content produced by GeminiChatClient carries the exact wire part; replay it verbatim (keeps ids and signatures)
+        // Content produced by GeminiChatClient carries the exact wire part; replay a clone of it (keeps ids, extension data, and signatures)
         // unless the caller mutated the high-level AIContent payload after creation.
         if (rawPart is not null && IsUnmodifiedRawPart(item, rawPart, signature))
         {
-            parts.Add(rawPart);
+            parts.Add(rawPart.Clone());
             return;
         }
 
@@ -198,11 +200,7 @@ internal static class ChatRequestMapper
                 break;
 
             default:
-                if (TryCreateCodeExecutionPart(item.AdditionalProperties, signature) is { } codePart)
-                {
-                    parts.Add(codePart);
-                }
-
+                AppendCodeExecutionParts(parts, item.AdditionalProperties, signature, rawPart);
                 break;
         }
     }
@@ -241,15 +239,53 @@ internal static class ChatRequestMapper
                     string.IsNullOrWhiteSpace(uri.MediaType) ? MimeTypes.ApplicationOctetStream : uri.MediaType,
                     StringComparison.Ordinal),
             FunctionCallContent => false,
-            _ => true
+            _ => IsUnmodifiedCodeExecutionPart(item.AdditionalProperties, rawPart)
         };
     }
 
-    private static Part? TryCreateCodeExecutionPart(AdditionalPropertiesDictionary? properties, string? signature)
+    private static bool IsUnmodifiedCodeExecutionPart(AdditionalPropertiesDictionary? properties, Part rawPart)
+    {
+        var hasCode = TryGetRawStringProperty(properties, GeminiChatPropertyNames.ExecutableCode, out var code);
+        var hasLang = TryGetRawStringProperty(properties, GeminiChatPropertyNames.ExecutableCodeLanguage, out var langStr);
+        var hasOutput = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutput, out var output);
+        var hasOutcome = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutcome, out var outcomeStr);
+
+        if (rawPart.ExecutableCode is { } rawExec)
+        {
+            if (rawPart.CodeExecutionResult is not null || hasOutput || hasOutcome)
+            {
+                return false;
+            }
+
+            var expectedLang = rawExec.Language?.ToString();
+            return string.Equals(rawExec.Code, hasCode ? code : null, StringComparison.Ordinal) &&
+                   string.Equals(expectedLang, hasLang ? langStr : null, StringComparison.Ordinal);
+        }
+
+        if (rawPart.CodeExecutionResult is { } rawResult)
+        {
+            if (hasCode || hasLang)
+            {
+                return false;
+            }
+
+            var expectedOutcome = rawResult.Outcome?.ToString();
+            return string.Equals(rawResult.Output, hasOutput ? output : null, StringComparison.Ordinal) &&
+                   string.Equals(expectedOutcome, hasOutcome ? outcomeStr : null, StringComparison.Ordinal);
+        }
+
+        return !hasCode && !hasLang && !hasOutput && !hasOutcome;
+    }
+
+    private static void AppendCodeExecutionParts(
+        List<Part> parts,
+        AdditionalPropertiesDictionary? properties,
+        string? signature,
+        Part? rawPart)
     {
         if (properties is null || properties.Count == 0)
         {
-            return null;
+            return;
         }
 
         var hasCode = TryGetRawStringProperty(properties, GeminiChatPropertyNames.ExecutableCode, out var code);
@@ -257,37 +293,38 @@ internal static class ChatRequestMapper
         var hasOutput = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutput, out var output);
         var hasOutcome = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutcome, out var outcomeStr);
 
-        if (!hasCode && !hasLang && !hasOutput && !hasOutcome)
-        {
-            return null;
-        }
-
-        var part = new Part { ThoughtSignature = signature };
-
         if (hasCode || hasLang)
         {
-            part.ExecutableCode = new ExecutableCode
+            parts.Add(new Part
             {
-                Code = code,
-                Language = hasLang && Enum.TryParse<CodeExecutionLanguage>(langStr, ignoreCase: true, out var lang) ? lang : null
-            };
+                ThoughtSignature = (hasOutput || hasOutcome) ? null : signature,
+                VideoMetadata = rawPart?.VideoMetadata?.Clone(),
+                ExecutableCode = new ExecutableCode
+                {
+                    Code = code,
+                    Language = hasLang && Enum.TryParse<CodeExecutionLanguage>(langStr, ignoreCase: true, out var lang) ? lang : null
+                }
+            });
         }
 
         if (hasOutput || hasOutcome)
         {
-            part.CodeExecutionResult = new CodeExecutionResult
+            parts.Add(new Part
             {
-                Output = output,
-                Outcome = hasOutcome && Enum.TryParse<CodeExecutionOutcome>(outcomeStr, ignoreCase: true, out var outcome) ? outcome : null
-            };
+                ThoughtSignature = signature,
+                VideoMetadata = (hasCode || hasLang) ? null : rawPart?.VideoMetadata?.Clone(),
+                CodeExecutionResult = new CodeExecutionResult
+                {
+                    Output = output,
+                    Outcome = hasOutcome && Enum.TryParse<CodeExecutionOutcome>(outcomeStr, ignoreCase: true, out var outcome) ? outcome : null
+                }
+            });
         }
-
-        return part;
     }
 
-    private static bool TryGetRawStringProperty(AdditionalPropertiesDictionary properties, string key, out string? value)
+    private static bool TryGetRawStringProperty(AdditionalPropertiesDictionary? properties, string key, out string? value)
     {
-        if (properties.TryGetValue(key, out var raw))
+        if (properties is not null && properties.TryGetValue(key, out var raw))
         {
             switch (raw)
             {
@@ -311,11 +348,21 @@ internal static class ChatRequestMapper
             ? reasoning.ProtectedData
             : rawPart?.ThoughtSignature;
 
-        // A signature-only companion of the preceding part (text + signature split on receive) must not be sent twice.
-        if (!hasText && !string.IsNullOrEmpty(signature) && parts.Count > 0 &&
-            string.Equals(parts[^1].ThoughtSignature, signature, StringComparison.Ordinal))
+        // A signature-only companion of the preceding part (text + signature split on receive) must not be sent twice,
+        // and when multi-chunk TextContent coalescing dropped the signature from the preceding text part, re-attach it.
+        if (!hasText && !string.IsNullOrEmpty(signature) && parts.Count > 0)
         {
-            return;
+            if (string.Equals(parts[^1].ThoughtSignature, signature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (rawPart is { Text: not null } &&
+                parts[^1] is { Text.Length: > 0, Thought: not true, ThoughtSignature: null or "" })
+            {
+                parts[^1].ThoughtSignature = signature;
+                return;
+            }
         }
 
         parts.Add(new Part

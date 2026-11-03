@@ -194,12 +194,14 @@ public sealed class Part
             (InlineData is not null ? 1 : 0) +
             (FileData is not null ? 1 : 0) +
             (FunctionCall is not null ? 1 : 0) +
-            (FunctionResponse is not null ? 1 : 0);
+            (FunctionResponse is not null ? 1 : 0) +
+            (ExecutableCode is not null ? 1 : 0) +
+            (CodeExecutionResult is not null ? 1 : 0);
 
         if (dataFieldsSet > 1)
         {
             throw new ArgumentException(
-                $"{pathPrefix} cannot set more than one primary data field (Text, InlineData, FileData, FunctionCall, FunctionResponse) on the same Part.",
+                $"{pathPrefix} cannot set more than one primary data field (Text, InlineData, FileData, FunctionCall, FunctionResponse, ExecutableCode, CodeExecutionResult) on the same Part.",
                 paramName);
         }
 

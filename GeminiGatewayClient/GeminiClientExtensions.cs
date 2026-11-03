@@ -332,6 +332,7 @@ public static class GeminiClientExtensions
             }
 
             // Thought text chunk or normal text chunk: coalesce consecutive chunks of the same kind
+            // only while the preceding part has not yet been closed with a thoughtSignature.
             if (!string.IsNullOrEmpty(part.Text) && aggregatedParts.Count > 0)
             {
                 var last = aggregatedParts[^1];
@@ -346,7 +347,7 @@ public static class GeminiClientExtensions
                     last.CodeExecutionResult is null &&
                     last.VideoMetadata is null &&
                     (last.ExtensionData is null || last.ExtensionData.Count == 0) &&
-                    (string.IsNullOrEmpty(last.ThoughtSignature) || string.IsNullOrEmpty(part.ThoughtSignature));
+                    string.IsNullOrEmpty(last.ThoughtSignature);
 
                 if (lastIsSameTextKind)
                 {
