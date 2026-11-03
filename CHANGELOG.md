@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.2] - 2026-11-03
+
+### Changed
+- Toned down marketing-heavy wording in `README.md` while keeping implementation-backed claims and explicit scope.
+
 ## [2.0.1] - 2026-11-03
 
 ### Changed
