@@ -122,9 +122,10 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         ArgumentNullException.ThrowIfNull(request);
         request.Validate(nameof(request));
 
-        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(model, EmbedContentOperation);
-        var defaultResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(model);
-        var wireRequest = NormalizeSingleEmbedRequestModel(request, defaultResourcePath);
+        var effectiveModel = !string.IsNullOrWhiteSpace(model) ? model : request.Model;
+        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, EmbedContentOperation);
+        var targetResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(effectiveModel);
+        var wireRequest = NormalizeSingleEmbedRequestModel(request, targetResourcePath);
         return SendBufferedAsync(
             requestUri,
             wireRequest,
@@ -144,9 +145,10 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         ArgumentNullException.ThrowIfNull(request);
         request.Validate(nameof(request));
 
-        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(model, BatchEmbedContentsOperation);
-        var defaultResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(model);
-        var wireRequest = NormalizeBatchRequestModels(request, defaultResourcePath);
+        var effectiveModel = ResolveEffectiveBatchModel(request, model);
+        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, BatchEmbedContentsOperation);
+        var targetResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(effectiveModel);
+        var wireRequest = NormalizeBatchRequestModels(request, targetResourcePath);
 
         return SendBufferedAsync(
             requestUri,
@@ -310,32 +312,61 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 
     private static EmbedContentRequest NormalizeSingleEmbedRequestModel(
         EmbedContentRequest request,
-        string defaultResourcePath)
+        string targetResourcePath)
     {
-        var resolved = string.IsNullOrWhiteSpace(request.Model)
-            ? defaultResourcePath
-            : GeminiEndpoint.ToResourcePath(request.Model)!;
-        return string.Equals(request.Model, resolved, StringComparison.Ordinal)
+        if (!string.IsNullOrWhiteSpace(request.Model))
+        {
+            // Validate request.Model even when overridden by the per-call model argument.
+            _ = GeminiEndpoint.ToResourcePath(request.Model);
+        }
+
+        return string.Equals(request.Model, targetResourcePath, StringComparison.Ordinal)
             ? request
-            : request.Clone(modelOverride: resolved);
+            : request.Clone(modelOverride: targetResourcePath);
+    }
+
+    private static string? ResolveEffectiveBatchModel(BatchEmbedContentsRequest request, string? model)
+    {
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            return model;
+        }
+
+        var items = request.Requests;
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (!string.IsNullOrWhiteSpace(items[i].Model))
+            {
+                return items[i].Model;
+            }
+        }
+
+        return null;
     }
 
     private static BatchEmbedContentsRequest NormalizeBatchRequestModels(
         BatchEmbedContentsRequest request,
-        string defaultResourcePath)
+        string targetResourcePath)
     {
         var items = request.Requests;
         var needsCopy = false;
         for (var i = 0; i < items.Count; i++)
         {
             var itemModel = items[i].Model;
-            var resolved = string.IsNullOrWhiteSpace(itemModel)
-                ? defaultResourcePath
-                : GeminiEndpoint.ToResourcePath(itemModel)!;
-            if (!string.Equals(itemModel, resolved, StringComparison.Ordinal))
+            if (!string.IsNullOrWhiteSpace(itemModel))
+            {
+                var resolved = GeminiEndpoint.ToResourcePath(itemModel)!;
+                if (!string.Equals(resolved, targetResourcePath, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        $"BatchEmbedContentsRequest.Requests[{i}].Model ('{itemModel}', resolved as '{resolved}') does not match the batch target model '{targetResourcePath}'. All items in a batch embedding request must target the same model.",
+                        nameof(request));
+                }
+            }
+
+            if (!string.Equals(itemModel, targetResourcePath, StringComparison.Ordinal))
             {
                 needsCopy = true;
-                break;
             }
         }
 
@@ -348,12 +379,9 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
-            var resolved = string.IsNullOrWhiteSpace(item.Model)
-                ? defaultResourcePath
-                : GeminiEndpoint.ToResourcePath(item.Model)!;
-            normalizedItems.Add(string.Equals(item.Model, resolved, StringComparison.Ordinal)
+            normalizedItems.Add(string.Equals(item.Model, targetResourcePath, StringComparison.Ordinal)
                 ? item
-                : item.Clone(modelOverride: resolved));
+                : item.Clone(modelOverride: targetResourcePath));
         }
 
         return new BatchEmbedContentsRequest

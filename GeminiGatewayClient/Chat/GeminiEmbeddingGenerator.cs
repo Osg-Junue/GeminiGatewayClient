@@ -57,9 +57,9 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
         ArgumentNullException.ThrowIfNull(values);
 
         var inputList = MaterializeInputs(values);
-        var model = ResolveModel(options);
         var dimensions = options?.Dimensions ?? _metadata.DefaultModelDimensions;
         var rawTemplate = options?.RawRepresentationFactory?.Invoke(this);
+        var model = ResolveModel(options, rawTemplate);
 
         if (inputList.Count == 1 && rawTemplate is not BatchEmbedContentsRequest)
         {
@@ -232,6 +232,29 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
         };
     }
 
-    private string? ResolveModel(EmbeddingGenerationOptions? options) =>
-        string.IsNullOrWhiteSpace(options?.ModelId) ? _metadata.DefaultModelId : options.ModelId.Trim();
+    private string? ResolveModel(EmbeddingGenerationOptions? options, object? rawTemplate)
+    {
+        if (!string.IsNullOrWhiteSpace(options?.ModelId))
+        {
+            return options.ModelId.Trim();
+        }
+
+        if (rawTemplate is EmbedContentRequest { Model: { } singleModel } && !string.IsNullOrWhiteSpace(singleModel))
+        {
+            return singleModel.Trim();
+        }
+
+        if (rawTemplate is BatchEmbedContentsRequest { RawRequests: { Count: > 0 } batchItems })
+        {
+            for (var i = 0; i < batchItems.Count; i++)
+            {
+                if (batchItems[i] is { Model: { } itemModel } && !string.IsNullOrWhiteSpace(itemModel))
+                {
+                    return itemModel.Trim();
+                }
+            }
+        }
+
+        return _metadata.DefaultModelId;
+    }
 }

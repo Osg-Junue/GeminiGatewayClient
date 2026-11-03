@@ -12,10 +12,14 @@ internal static class ChatResponseMapper
 {
     private const string GoogleSearchToolName = "google_search";
 
+    internal readonly record struct StreamedTextSegment(TextContent Content, int StartByte, int EndByte);
+
     public static ChatResponse ToChatResponse(GenerateContentResponse response, string? modelId)
     {
         var candidate = response.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
-        var contents = MapContents(candidate, isStreaming: false, out var hasFunctionCall);
+        List<StreamedTextSegment>? unusedSegments = null;
+        var unusedBytes = 0;
+        var contents = MapContents(candidate, isStreaming: false, trackStreamSegments: false, ref unusedSegments, ref unusedBytes, out var hasFunctionCall);
 
         var message = new ChatMessage(ChatRole.Assistant, contents)
         {
@@ -41,7 +45,33 @@ internal static class ChatResponseMapper
     public static ChatResponseUpdate ToChatResponseUpdate(GenerateContentResponse chunk, string? modelId)
     {
         var candidate = chunk.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
-        var contents = MapContents(candidate, isStreaming: true, out var hasFunctionCall);
+        List<StreamedTextSegment>? unusedSegments = null;
+        var unusedBytes = 0;
+        var contents = MapContents(candidate, isStreaming: true, trackStreamSegments: false, ref unusedSegments, ref unusedBytes, out var hasFunctionCall);
+
+        return new ChatResponseUpdate(ChatRole.Assistant, contents)
+        {
+            RawRepresentation = chunk,
+            ResponseId = chunk.ResponseId,
+            MessageId = chunk.ResponseId,
+            ModelId = chunk.ModelVersion ?? candidate?.ModelVersion ?? modelId,
+            FinishReason = MapFinishReason(candidate?.FinishReason, chunk.BlockReason, hasFunctionCall),
+            AdditionalProperties = CreateResponseProperties(chunk.BlockReason, candidate?.GroundingMetadata)
+        };
+    }
+
+    /// <summary>
+    /// Maps a streamed chunk while tracking streamed <see cref="TextContent"/> segments and their cumulative UTF-8 byte ranges
+    /// so trailing <c>groundingMetadata</c> and <c>citationMetadata</c> attach to the corresponding text segment with valid local UTF-16 spans.
+    /// </summary>
+    internal static ChatResponseUpdate ToChatResponseUpdate(
+        GenerateContentResponse chunk,
+        string? modelId,
+        ref List<StreamedTextSegment>? streamedSegments,
+        ref int cumulativeUtf8Bytes)
+    {
+        var candidate = chunk.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
+        var contents = MapContents(candidate, isStreaming: true, trackStreamSegments: true, ref streamedSegments, ref cumulativeUtf8Bytes, out var hasFunctionCall);
 
         return new ChatResponseUpdate(ChatRole.Assistant, contents)
         {
@@ -73,7 +103,13 @@ internal static class ChatResponseMapper
         };
     }
 
-    private static List<AIContent> MapContents(Candidate? candidate, bool isStreaming, out bool hasFunctionCall)
+    private static List<AIContent> MapContents(
+        Candidate? candidate,
+        bool isStreaming,
+        bool trackStreamSegments,
+        ref List<StreamedTextSegment>? streamedSegments,
+        ref int cumulativeUtf8Bytes,
+        out bool hasFunctionCall)
     {
         hasFunctionCall = false;
         if (candidate is null)
@@ -91,7 +127,7 @@ internal static class ChatResponseMapper
             }
 
             var annotatedOnly = new List<AIContent>(1);
-            AttachCandidateAnnotations(candidate, parts, annotatedOnly);
+            AttachCandidateAnnotations(candidate, parts, annotatedOnly, streamedSegments);
             return annotatedOnly;
         }
 
@@ -129,13 +165,24 @@ internal static class ChatResponseMapper
                     var textContent = new TextContent(text) { RawRepresentation = part };
                     AttachThoughtSignature(textContent, part.ThoughtSignature);
                     contents.Add(textContent);
-                    if (isStreaming && !string.IsNullOrEmpty(part.ThoughtSignature))
+                    if (isStreaming)
                     {
-                        contents.Add(new TextReasoningContent(string.Empty)
+                        if (trackStreamSegments)
                         {
-                            ProtectedData = part.ThoughtSignature,
-                            RawRepresentation = part
-                        });
+                            var startByte = cumulativeUtf8Bytes;
+                            cumulativeUtf8Bytes += Encoding.UTF8.GetByteCount(text);
+                            (streamedSegments ??= new List<StreamedTextSegment>(4)).Add(
+                                new StreamedTextSegment(textContent, startByte, cumulativeUtf8Bytes));
+                        }
+
+                        if (!string.IsNullOrEmpty(part.ThoughtSignature))
+                        {
+                            contents.Add(new TextReasoningContent(string.Empty)
+                            {
+                                ProtectedData = part.ThoughtSignature,
+                                RawRepresentation = part
+                            });
+                        }
                     }
                     break;
 
@@ -168,7 +215,7 @@ internal static class ChatResponseMapper
 
         if (hasAnnotations)
         {
-            AttachCandidateAnnotations(candidate, parts, contents);
+            AttachCandidateAnnotations(candidate, parts, contents, streamedSegments);
         }
 
         return contents;
@@ -179,9 +226,13 @@ internal static class ChatResponseMapper
         candidate.GroundingMetadata?.RawGroundingChunks is { Count: > 0 } ||
         candidate.GroundingMetadata?.RawGroundingSupports is { Count: > 0 };
 
-    private static void AttachCandidateAnnotations(Candidate candidate, IList<Part>? parts, List<AIContent> contents)
+    private static void AttachCandidateAnnotations(
+        Candidate candidate,
+        IList<Part>? parts,
+        List<AIContent> contents,
+        List<StreamedTextSegment>? streamedSegments = null)
     {
-        var primaryText = FindOrCreateTargetTextContent(contents, parts, partIndex: null);
+        var primaryText = FindPrimaryTextContent(contents, parts, streamedSegments);
 
         if (candidate.CitationMetadata?.RawCitations is { Count: > 0 } citations)
         {
@@ -192,6 +243,15 @@ internal static class ChatResponseMapper
                     continue;
                 }
 
+                var (citationTarget, region) = ResolveTargetAndRegion(
+                    contents,
+                    parts,
+                    streamedSegments,
+                    primaryText,
+                    partIndex: null,
+                    citation.StartIndex,
+                    citation.EndIndex);
+
                 var annotation = new CitationAnnotation
                 {
                     Title = citation.Title,
@@ -199,12 +259,12 @@ internal static class ChatResponseMapper
                     RawRepresentation = citation
                 };
 
-                if (TryCreateRegion(primaryText.Text, citation.StartIndex, citation.EndIndex, out var region))
+                if (region is not null)
                 {
                     annotation.AnnotatedRegions = [region];
                 }
 
-                (primaryText.Annotations ??= []).Add(annotation);
+                (citationTarget.Annotations ??= []).Add(annotation);
             }
         }
 
@@ -230,11 +290,16 @@ internal static class ChatResponseMapper
                 }
 
                 var segment = support.Segment;
-                var target = FindOrCreateTargetTextContent(contents, parts, segment?.PartIndex, primaryText);
-                AnnotatedRegion? regionToAdd = segment is not null &&
-                                               TryCreateRegion(target.Text, segment.StartIndex, segment.EndIndex, out var segmentRegion)
-                    ? segmentRegion
-                    : null;
+                var (target, regionToAdd) = segment is not null
+                    ? ResolveTargetAndRegion(
+                        contents,
+                        parts,
+                        streamedSegments,
+                        primaryText,
+                        segment.PartIndex,
+                        segment.StartIndex,
+                        segment.EndIndex)
+                    : (primaryText, null);
 
                 var indices = support.RawGroundingChunkIndices;
                 var attachedToChunk = false;
@@ -332,6 +397,67 @@ internal static class ChatResponseMapper
         }
 
         return new CitationAnnotation { RawRepresentation = chunk };
+    }
+
+    private static TextContent FindPrimaryTextContent(
+        List<AIContent> contents,
+        IList<Part>? parts,
+        List<StreamedTextSegment>? streamedSegments)
+    {
+        for (var i = 0; i < contents.Count; i++)
+        {
+            if (contents[i] is TextContent tc)
+            {
+                return tc;
+            }
+        }
+
+        if (streamedSegments is { Count: > 0 })
+        {
+            return streamedSegments[^1].Content;
+        }
+
+        return FindOrCreateTargetTextContent(contents, parts, partIndex: null);
+    }
+
+    private static (TextContent Target, AnnotatedRegion? Region) ResolveTargetAndRegion(
+        List<AIContent> contents,
+        IList<Part>? parts,
+        List<StreamedTextSegment>? streamedSegments,
+        TextContent primaryText,
+        int? partIndex,
+        int? startByte,
+        int? endByte)
+    {
+        if (streamedSegments is { Count: > 0 })
+        {
+            if (startByte is >= 0 and var sb)
+            {
+                for (var i = 0; i < streamedSegments.Count; i++)
+                {
+                    var seg = streamedSegments[i];
+                    if (sb >= seg.StartByte && (sb < seg.EndByte || (i == streamedSegments.Count - 1 && sb == seg.EndByte)))
+                    {
+                        var localStart = sb - seg.StartByte;
+                        int? localEnd = endByte is { } eb
+                            ? Math.Min(eb, seg.EndByte) - seg.StartByte
+                            : null;
+                        AnnotatedRegion? region = TryCreateRegion(seg.Content.Text, localStart, localEnd, out var r) ? r : null;
+                        return (seg.Content, region);
+                    }
+                }
+            }
+
+            return (primaryText, null);
+        }
+
+        var target = partIndex is not null
+            ? FindOrCreateTargetTextContent(contents, parts, partIndex, primaryText)
+            : primaryText;
+        AnnotatedRegion? nonStreamRegion = TryCreateRegion(target.Text, startByte, endByte, out var regionResult)
+            ? regionResult
+            : null;
+        return (target, nonStreamRegion);
     }
 
     private static TextContent FindOrCreateTargetTextContent(

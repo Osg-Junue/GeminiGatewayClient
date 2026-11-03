@@ -218,13 +218,16 @@ internal static class ChatRequestMapper
             TextContent text =>
                 !string.IsNullOrEmpty(text.Text) &&
                 rawPart.Thought != true &&
+                !HasNonTextPrimaryDataField(rawPart) &&
                 string.Equals(rawPart.Text, text.Text, StringComparison.Ordinal),
             TextReasoningContent reasoning =>
                 !string.IsNullOrEmpty(reasoning.Text) &&
                 rawPart.Thought == true &&
+                !HasNonTextPrimaryDataField(rawPart) &&
                 string.Equals(rawPart.Text, reasoning.Text, StringComparison.Ordinal) &&
                 string.Equals(rawPart.ThoughtSignature, reasoning.ProtectedData, StringComparison.Ordinal),
             DataContent data =>
+                rawPart.Text is null &&
                 rawPart.InlineData?.Data is { } rawBytes &&
                 string.Equals(
                      string.IsNullOrWhiteSpace(rawPart.InlineData.MimeType) ? MimeTypes.ApplicationOctetStream : rawPart.InlineData.MimeType,
@@ -232,6 +235,7 @@ internal static class ChatRequestMapper
                      StringComparison.Ordinal) &&
                 data.Data.Span.SequenceEqual(rawBytes),
             UriContent uri =>
+                rawPart.Text is null &&
                 rawPart.FileData is not null &&
                 string.Equals(rawPart.FileData.FileUri, uri.Uri.ToString(), StringComparison.Ordinal) &&
                 string.Equals(
@@ -239,9 +243,17 @@ internal static class ChatRequestMapper
                     string.IsNullOrWhiteSpace(uri.MediaType) ? MimeTypes.ApplicationOctetStream : uri.MediaType,
                     StringComparison.Ordinal),
             FunctionCallContent => false,
-            _ => IsUnmodifiedCodeExecutionPart(item.AdditionalProperties, rawPart)
+            _ => rawPart.Text is null && IsUnmodifiedCodeExecutionPart(item.AdditionalProperties, rawPart)
         };
     }
+
+    private static bool HasNonTextPrimaryDataField(Part part) =>
+        part.InlineData is not null ||
+        part.FileData is not null ||
+        part.FunctionCall is not null ||
+        part.FunctionResponse is not null ||
+        part.ExecutableCode is not null ||
+        part.CodeExecutionResult is not null;
 
     private static bool IsUnmodifiedCodeExecutionPart(AdditionalPropertiesDictionary? properties, Part rawPart)
     {

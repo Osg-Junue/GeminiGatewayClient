@@ -362,8 +362,22 @@ public static class GeminiClientExtensions
             }
         }
 
-        aggregatedParts.Add(part.Clone());
+        var cloned = part.Clone();
+        if (string.IsNullOrEmpty(cloned.Text) && HasNonTextPrimaryDataField(cloned))
+        {
+            cloned.Text = null;
+        }
+
+        aggregatedParts.Add(cloned);
     }
+
+    private static bool HasNonTextPrimaryDataField(Part part) =>
+        part.InlineData is not null ||
+        part.FileData is not null ||
+        part.FunctionCall is not null ||
+        part.FunctionResponse is not null ||
+        part.ExecutableCode is not null ||
+        part.CodeExecutionResult is not null;
 
     private static bool IsPureEmptyTextPart(Part part) =>
         string.IsNullOrEmpty(part.Text) &&

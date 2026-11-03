@@ -72,6 +72,7 @@ public static class GeminiServiceCollectionExtensions
     private static IHttpClientBuilder RegisterCore(IServiceCollection services)
     {
         var alreadyRegistered = services.Any(static d => d.ServiceType == typeof(GeminiClientSettings));
+        var hasCustomGeminiClient = services.Any(static d => d.ServiceType == typeof(IGeminiClient));
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GeminiClientOptions>, GeminiClientOptionsValidator>());
 
@@ -87,19 +88,21 @@ public static class GeminiServiceCollectionExtensions
                 .ConfigurePrimaryHttpMessageHandler(static () => GeminiClient.CreateDefaultHandler());
         }
 
-        services.TryAddTransient(static sp => new GeminiClient(
-            sp.GetRequiredService<GeminiClientSettings>(),
-            sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName),
-            disposeHttpClient: false));
-        services.TryAddTransient<IGeminiClient>(static sp => sp.GetRequiredService<GeminiClient>());
-        services.TryAddTransient<IChatClient>(static sp =>
-            sp.GetRequiredService<IGeminiClient>().AsIChatClient(
+        services.TryAddTransient(static sp => CreateClient(sp));
+        services.TryAddTransient<IGeminiClient>(static sp => CreateClient(sp));
+        services.TryAddTransient<IChatClient>(sp =>
+            (hasCustomGeminiClient ? sp.GetRequiredService<IGeminiClient>() : CreateClient(sp)).AsIChatClient(
                 toolSerializerOptions: sp.GetRequiredService<GeminiClientSettings>().ToolSerializerOptions));
-        services.TryAddTransient<IEmbeddingGenerator<string, Embedding<float>>>(static sp =>
-            sp.GetRequiredService<IGeminiClient>().AsIEmbeddingGenerator());
+        services.TryAddTransient<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
+            (hasCustomGeminiClient ? sp.GetRequiredService<IGeminiClient>() : CreateClient(sp)).AsIEmbeddingGenerator());
 
         return httpClientBuilder;
     }
+
+    private static GeminiClient CreateClient(IServiceProvider sp) => new(
+        sp.GetRequiredService<GeminiClientSettings>(),
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName),
+        disposeHttpClient: false);
 
     /// <summary>
     /// Surfaces <see cref="GeminiClientOptions"/> validation errors through the options pattern

@@ -356,4 +356,273 @@ public partial class ChatClientTests
         Assert.Equal("Follow-up user instruction after tool results", followUpPart.Text);
         Assert.Null(followUpPart.FunctionResponse);
     }
+
+    [Fact]
+    public async Task EmbedContent_AndBatchEmbedContents_ResolveRequestModelForEndpointUri_AndRejectMismatchedBatchModels()
+    {
+        const string embedJson = """{ "embedding": { "values": [0.5, 0.25] } }""";
+        using var handler = new RecordingHandler(embedJson);
+        using var httpClient = new HttpClient(handler);
+
+        // 1. Client with only options.Model = "gemini-2.5-flash" (EmbeddingModel = null):
+        //    request.Model = "gemini-embedding-001" must route URL to models/gemini-embedding-001:embedContent, not gemini-2.5-flash
+        using var clientWithChatDefault = new GeminiClient(new GeminiClientOptions
+        {
+            Model = "gemini-2.5-flash",
+            ApiKey = "test-key"
+        }, httpClient);
+
+        var singleReq = EmbedContentRequest.FromText("Embed with request.Model");
+        singleReq.Model = "gemini-embedding-001";
+        await clientWithChatDefault.EmbedContentAsync(singleReq);
+
+        Assert.Equal(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
+            handler.LastRequest?.RequestUri?.ToString());
+        using (var doc = JsonDocument.Parse(handler.LastRequestBody!))
+        {
+            Assert.Equal("models/gemini-embedding-001", doc.RootElement.GetProperty("model").GetString());
+        }
+
+        // 2. Explicit model argument overrides request.Model on both URL and body without mutating caller's request
+        await clientWithChatDefault.EmbedContentAsync(singleReq, model: "text-embedding-004");
+        Assert.Equal("gemini-embedding-001", singleReq.Model);
+        Assert.Equal(
+            "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent",
+            handler.LastRequest?.RequestUri?.ToString());
+        using (var doc = JsonDocument.Parse(handler.LastRequestBody!))
+        {
+            Assert.Equal("models/text-embedding-004", doc.RootElement.GetProperty("model").GetString());
+        }
+
+        // 3. Client with neither Model nor EmbeddingModel set succeeds when request.Model or item.Model is set
+        const string batchJson = """{ "embeddings": [ { "values": [0.1] }, { "values": [0.2] } ] }""";
+        using var batchHandler = new RecordingHandler(batchJson);
+        using var batchHttp = new HttpClient(batchHandler);
+        using var modelLessClient = new GeminiClient(new GeminiClientOptions
+        {
+            ApiKey = "test-key"
+        }, batchHttp);
+
+        var item0 = EmbedContentRequest.FromText("Doc 1");
+        item0.Model = "gemini-embedding-001";
+        var item1 = EmbedContentRequest.FromText("Doc 2");
+        item1.Model = "models/gemini-embedding-001";
+
+        await modelLessClient.BatchEmbedContentsAsync(new BatchEmbedContentsRequest
+        {
+            Requests = [item0, item1]
+        });
+
+        Assert.Equal(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents",
+            batchHandler.LastRequest?.RequestUri?.ToString());
+
+        // 4. Conflicting item models within a batch or against the batch model argument throw ArgumentException
+        var conflictingItem = EmbedContentRequest.FromText("Doc 2");
+        conflictingItem.Model = "text-embedding-004";
+        await Assert.ThrowsAsync<ArgumentException>(() => modelLessClient.BatchEmbedContentsAsync(new BatchEmbedContentsRequest
+        {
+            Requests = [item0, conflictingItem]
+        }));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => modelLessClient.BatchEmbedContentsAsync(
+            new BatchEmbedContentsRequest { Requests = [item0] },
+            model: "text-embedding-004"));
+    }
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("models/..")]
+    [InlineData("models/.")]
+    [InlineData("../../admin/internal")]
+    [InlineData("projects/p/locations/../models/gemini-2.5-flash")]
+    public async Task Endpoint_ModelWithRelativeDotSegments_ThrowsArgumentException(string maliciousModel)
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+
+        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions
+        {
+            Model = maliciousModel,
+            ApiKey = "key"
+        }, httpClient));
+
+        using var client = CreateClient(httpClient);
+        await Assert.ThrowsAsync<ArgumentException>(() => client.GenerateContentAsync("Hi", model: maliciousModel));
+
+        IChatClient chatClient = client.AsIChatClient();
+        await Assert.ThrowsAsync<ArgumentException>(() => chatClient.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Hi")],
+            new ChatOptions { ModelId = maliciousModel }));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task IChatClient_StreamingGroundingAndCitations_ResolvesCumulativeUtf8ByteOffsetsAcrossChunks(bool groundingInSeparateEmptyChunk)
+    {
+        // Cumulative text across chunks: "Hello 東京の天気は晴れです"
+        //   Chunk 1: "Hello 東京の" (15 UTF-8 bytes, 9 UTF-16 chars)
+        //     - "Hello " (6 ASCII bytes, chars 0..6)
+        //     - "東京"   (6 UTF-8 bytes, cumulative bytes 6..12 -> segment-local bytes 6..12, chars 6..8)
+        //     - "の"     (3 UTF-8 bytes, cumulative bytes 12..15 -> segment-local bytes 12..15, chars 8..9)
+        //   Chunk 2: "天気は晴れです" (21 UTF-8 bytes, cumulative bytes 15..36, 7 UTF-16 chars)
+        //     - "天気"   (6 UTF-8 bytes, cumulative bytes 15..21 -> segment-local bytes 0..6, chars 0..2)
+        //     - "は"     (3 UTF-8 bytes, cumulative bytes 21..24 -> segment-local bytes 6..9, chars 2..3)
+        //     - "晴れ"   (6 UTF-8 bytes, cumulative bytes 24..30 -> segment-local bytes 9..15, chars 3..5)
+        //     - "です"   (6 UTF-8 bytes, cumulative bytes 30..36 -> segment-local bytes 15..21, chars 5..7)
+        var sse = groundingInSeparateEmptyChunk
+            ? """
+              data: {"responseId":"r-g1","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello 東京の"}]}}]}
+
+              data: {"responseId":"r-g1","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"天気は晴れです"}]}}]}
+
+              data: {"responseId":"r-g1","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP","citationMetadata":{"citations":[{"startIndex":24,"endIndex":30,"uri":"https://jma.go.jp/forecast","title":"JMA"}]},"groundingMetadata":{"webSearchQueries":["東京 天気"],"groundingChunks":[{"web":{"uri":"https://weather.example.jp/tokyo","title":"Tokyo Weather"}}],"groundingSupports":[{"segment":{"partIndex":0,"startIndex":6,"endIndex":12,"text":"東京"},"groundingChunkIndices":[0]},{"segment":{"partIndex":0,"startIndex":15,"endIndex":21,"text":"天気"},"groundingChunkIndices":[0]}]}}]}
+
+              """
+            : """
+              data: {"responseId":"r-g2","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello 東京の"}]}}]}
+
+              data: {"responseId":"r-g2","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"天気は晴れです"}]},"finishReason":"STOP","citationMetadata":{"citations":[{"startIndex":24,"endIndex":30,"uri":"https://jma.go.jp/forecast","title":"JMA"}]},"groundingMetadata":{"webSearchQueries":["東京 天気"],"groundingChunks":[{"web":{"uri":"https://weather.example.jp/tokyo","title":"Tokyo Weather"}}],"groundingSupports":[{"segment":{"partIndex":0,"startIndex":6,"endIndex":12,"text":"東京"},"groundingChunkIndices":[0]},{"segment":{"partIndex":0,"startIndex":15,"endIndex":21,"text":"天気"},"groundingChunkIndices":[0]}]}}]}
+
+              """;
+
+        using var handler = new RecordingHandler(sse, contentType: "text/event-stream");
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in chatClient.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "東京の天気は？")]))
+        {
+            updates.Add(update);
+        }
+
+        // Ensure no empty TextContent("") was emitted in any update
+        Assert.All(updates.SelectMany(u => u.Contents).OfType<TextContent>(), tc => Assert.NotEmpty(tc.Text));
+
+        var response = updates.ToChatResponse();
+        Assert.Equal("Hello 東京の天気は晴れです", response.Text);
+
+        var textContents = response.Messages[0].Contents.OfType<TextContent>().ToList();
+        Assert.Equal(2, textContents.Count);
+        Assert.All(textContents, tc => Assert.NotEmpty(tc.Text));
+
+        var chunk1Text = textContents[0];
+        Assert.Equal("Hello 東京の", chunk1Text.Text);
+        var chunk1Grounding = Assert.IsType<CitationAnnotation>(Assert.Single(chunk1Text.Annotations!));
+        Assert.Equal("Tokyo Weather", chunk1Grounding.Title);
+        var chunk1Region = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(chunk1Grounding.AnnotatedRegions!));
+        Assert.Equal(6, chunk1Region.StartIndex);
+        Assert.Equal(8, chunk1Region.EndIndex);
+        Assert.Equal("東京", chunk1Text.Text[chunk1Region.StartIndex!.Value..chunk1Region.EndIndex!.Value]);
+
+        var chunk2Text = textContents[1];
+        Assert.Equal("天気は晴れです", chunk2Text.Text);
+        Assert.NotNull(chunk2Text.Annotations);
+        Assert.Equal(2, chunk2Text.Annotations.Count);
+
+        var citation = Assert.IsType<CitationAnnotation>(chunk2Text.Annotations[0]);
+        Assert.Equal("JMA", citation.Title);
+        var citationRegion = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(citation.AnnotatedRegions!));
+        Assert.Equal(3, citationRegion.StartIndex);
+        Assert.Equal(5, citationRegion.EndIndex);
+        Assert.Equal("晴れ", chunk2Text.Text[citationRegion.StartIndex!.Value..citationRegion.EndIndex!.Value]);
+
+        var chunk2Grounding = Assert.IsType<CitationAnnotation>(chunk2Text.Annotations[1]);
+        Assert.Equal("Tokyo Weather", chunk2Grounding.Title);
+        var chunk2Region = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(chunk2Grounding.AnnotatedRegions!));
+        Assert.Equal(0, chunk2Region.StartIndex);
+        Assert.Equal(2, chunk2Region.EndIndex);
+        Assert.Equal("天気", chunk2Text.Text[chunk2Region.StartIndex!.Value..chunk2Region.EndIndex!.Value]);
+    }
+
+    [Fact]
+    public async Task RequestHeaders_NullCharOrControlCharInStaticOrDynamicKey_ThrowsException()
+    {
+        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "bad\0key"
+        }));
+
+        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKey = "key",
+            AdditionalHeaders = new Dictionary<string, string>
+            {
+                ["x-custom"] = "val\u0007bell"
+            }
+        }));
+
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions
+        {
+            Model = DefaultModel,
+            ApiKeyProvider = _ => ValueTask.FromResult("token-with-\0-null")
+        }, httpClient);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GenerateContentAsync("Hi"));
+    }
+
+    [Fact]
+    public async Task HybridPartWithEmptyTextAndFunctionCallOrInlineData_NormalizesCleanlyOnReplay()
+    {
+        const string hybridJson = """
+            {
+              "candidates": [
+                {
+                  "index": 0,
+                  "content": {
+                    "role": "model",
+                    "parts": [
+                      {
+                        "text": "",
+                        "functionCall": { "id": "c1", "name": "get_weather", "args": { "city": "Tokyo" } },
+                        "thoughtSignature": "sig-hybrid"
+                      },
+                      {
+                        "text": "",
+                        "inlineData": { "mimeType": "image/png", "data": "AQID" }
+                      }
+                    ]
+                  },
+                  "finishReason": "STOP"
+                }
+              ]
+            }
+            """;
+
+        var chunk = JsonSerializer.Deserialize(hybridJson, GeminiGatewayClient.Serialization.GeminiJsonContext.Default.GenerateContentResponse)!;
+        var modelContent = new[] { chunk }.ToModelContent();
+        Assert.NotNull(modelContent);
+        Assert.Equal(2, modelContent.Parts.Count);
+        Assert.Null(modelContent.Parts[0].Text);
+        Assert.Null(modelContent.Parts[1].Text);
+
+        var replayRequest = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("Hi"), modelContent]
+        };
+        replayRequest.Validate();
+
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+        IChatClient chatClient = geminiClient.AsIChatClient();
+
+        var chatResponse = ChatResponseMapper.ToChatResponse(chunk, DefaultModel);
+        await chatClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Hi"),
+            chatResponse.Messages[0],
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", new Dictionary<string, object?> { ["ok"] = true })])
+        ]);
+
+        Assert.NotNull(handler.LastRequestBody);
+    }
 }

@@ -269,6 +269,11 @@ internal sealed class GeminiEndpoint
 
         if (!span.Contains('/'))
         {
+            if (span is "." or "..")
+            {
+                throw new ArgumentException($"Model resource name '{model}' contains a relative path segment.", nameof(model));
+            }
+
             return string.Concat(ModelsSegment, Uri.EscapeDataString(span));
         }
 
@@ -277,9 +282,9 @@ internal sealed class GeminiEndpoint
         foreach (var range in span.Split('/'))
         {
             var segment = span[range];
-            if (segment.IsEmpty || segment.IsWhiteSpace())
+            if (segment.IsEmpty || segment.IsWhiteSpace() || segment is "." or "..")
             {
-                throw new ArgumentException($"Model resource name '{model}' contains an empty path segment.", nameof(model));
+                throw new ArgumentException($"Model resource name '{model}' contains an empty or relative path segment.", nameof(model));
             }
 
             if (!first)
