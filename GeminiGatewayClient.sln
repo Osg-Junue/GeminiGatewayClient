@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GeminiGatewayClient.Tests",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GeminiGatewayClient.ExploratoryTests", "tests\GeminiGatewayClient.ExploratoryTests\GeminiGatewayClient.ExploratoryTests.csproj", "{C4E8A917-3D2B-4A68-B5E1-7F8D9C0A1B23}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GeminiGatewayClient.Benchmarks", "benchmarks\GeminiGatewayClient.Benchmarks\GeminiGatewayClient.Benchmarks.csproj", "{5A55C149-3A1B-48B3-A0DF-4C96867901C2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -27,6 +29,10 @@ Global
 		{C4E8A917-3D2B-4A68-B5E1-7F8D9C0A1B23}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C4E8A917-3D2B-4A68-B5E1-7F8D9C0A1B23}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C4E8A917-3D2B-4A68-B5E1-7F8D9C0A1B23}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5A55C149-3A1B-48B3-A0DF-4C96867901C2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5A55C149-3A1B-48B3-A0DF-4C96867901C2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5A55C149-3A1B-48B3-A0DF-4C96867901C2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5A55C149-3A1B-48B3-A0DF-4C96867901C2}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

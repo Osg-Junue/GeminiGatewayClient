@@ -148,14 +148,20 @@ internal static class ChatOptionsMapper
         }
 
         List<FunctionDeclaration>? declarations = null;
-        var mappedTools = new List<Tool>();
+        Tool? functionTool = null;
+        List<Tool>? mappedTools = null;
 
         foreach (var tool in tools)
         {
             switch (tool)
             {
                 case AIFunctionDeclaration function:
-                    declarations ??= [];
+                    if (declarations is null)
+                    {
+                        declarations = new List<FunctionDeclaration>(tools.Count);
+                        functionTool = new Tool { FunctionDeclarations = declarations };
+                    }
+
                     declarations.Add(new FunctionDeclaration
                     {
                         Name = function.Name,
@@ -165,11 +171,11 @@ internal static class ChatOptionsMapper
                     break;
 
                 case HostedWebSearchTool:
-                    mappedTools.Add(new Tool { GoogleSearch = new GoogleSearchTool() });
+                    (mappedTools ??= new List<Tool>(2)).Add(new Tool { GoogleSearch = new GoogleSearchTool() });
                     break;
 
                 case HostedCodeInterpreterTool:
-                    mappedTools.Add(new Tool { CodeExecution = new CodeExecutionTool() });
+                    (mappedTools ??= new List<Tool>(2)).Add(new Tool { CodeExecution = new CodeExecutionTool() });
                     break;
 
                 default:
@@ -179,12 +185,19 @@ internal static class ChatOptionsMapper
             }
         }
 
-        if (declarations is { Count: > 0 })
+        if (functionTool is not null)
         {
-            mappedTools.Insert(0, new Tool { FunctionDeclarations = declarations });
+            if (mappedTools is null)
+            {
+                mappedTools = [functionTool];
+            }
+            else
+            {
+                mappedTools.Insert(0, functionTool);
+            }
         }
 
-        if (mappedTools.Count > 0)
+        if (mappedTools is { Count: > 0 })
         {
             request.Tools = mappedTools;
         }
@@ -239,4 +252,3 @@ internal static class ChatOptionsMapper
             : null;
     }
 }
-

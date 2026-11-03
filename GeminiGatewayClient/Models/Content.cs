@@ -9,6 +9,8 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class Content
 {
+    private IList<Part>? _parts;
+
     /// <summary>
     /// Producer of the content (<see cref="Models.Role.User"/> or <see cref="Models.Role.Model"/>).
     /// Leave <c>null</c> for <see cref="GenerateContentRequest.SystemInstruction"/>; for single-turn requests the API treats a missing role as <see cref="Models.Role.User"/>.
@@ -23,9 +25,14 @@ public sealed class Content
     [JsonPropertyName("parts")]
     public IList<Part> Parts
     {
-        get => field ??= [];
-        set => field = value!;
-    } = null!;
+        get => _parts ??= [];
+        set => _parts = value!;
+    }
+
+    /// <summary>
+    /// Backing parts list without lazy initialization, used on internal read-only mapping paths to avoid allocating an empty list.
+    /// </summary>
+    internal IList<Part>? RawParts => _parts;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -65,10 +72,11 @@ public sealed class Content
 
     internal Content Clone()
     {
-        var clonedParts = new List<Part>(Parts.Count);
-        for (var i = 0; i < Parts.Count; i++)
+        var sourceParts = Parts;
+        var clonedParts = new List<Part>(sourceParts.Count);
+        for (var i = 0; i < sourceParts.Count; i++)
         {
-            if (Parts[i] is { } part)
+            if (sourceParts[i] is { } part)
             {
                 clonedParts.Add(part.Clone());
             }

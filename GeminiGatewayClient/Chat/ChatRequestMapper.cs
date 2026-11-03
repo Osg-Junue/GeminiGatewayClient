@@ -23,7 +23,8 @@ internal static class ChatRequestMapper
         JsonSerializerOptions toolSerializerOptions)
     {
         var template = options?.RawRepresentationFactory?.Invoke(client) as GenerateContentRequest;
-        var contents = new List<Content>(template?.Contents?.Count ?? 0);
+        var messageList = messages as IReadOnlyCollection<ChatMessage> ?? messages.ToList();
+        var contents = new List<Content>((template?.Contents?.Count ?? 0) + messageList.Count);
         if (template?.Contents is { Count: > 0 } existing)
         {
             for (var i = 0; i < existing.Count; i++)
@@ -35,33 +36,41 @@ internal static class ChatRequestMapper
             }
         }
 
-        var systemParts = new List<Part>();
+        var hasTemplateSystemInstruction = template?.SystemInstruction is not null;
+        List<Part>? systemParts = null;
 
-        if (!string.IsNullOrWhiteSpace(options?.Instructions))
+        if (!hasTemplateSystemInstruction && !string.IsNullOrWhiteSpace(options?.Instructions))
         {
-            systemParts.Add(Part.FromText(options.Instructions));
+            systemParts = new List<Part>(2) { Part.FromText(options.Instructions) };
         }
 
-        var messageList = messages as IReadOnlyCollection<ChatMessage> ?? messages.ToList();
         var calls = FunctionCallRegistry.Create(messageList);
 
         foreach (var message in messageList)
         {
             if (message.Role == ChatRole.System)
             {
-                foreach (var contentItem in message.Contents)
+                if (!hasTemplateSystemInstruction)
                 {
-                    if (contentItem is TextContent { Text.Length: > 0 } sysText)
+                    foreach (var contentItem in message.Contents)
                     {
-                        systemParts.Add(Part.FromText(sysText.Text));
+                        if (contentItem is TextContent { Text.Length: > 0 } sysText)
+                        {
+                            (systemParts ??= new List<Part>(message.Contents.Count)).Add(Part.FromText(sysText.Text));
+                        }
                     }
                 }
 
                 continue;
             }
 
+            if (message.Contents.Count == 0)
+            {
+                continue;
+            }
+
             var targetRole = message.Role == ChatRole.Assistant ? Role.Model : Role.User;
-            var parts = new List<Part>();
+            var parts = new List<Part>(message.Contents.Count);
             foreach (var item in message.Contents)
             {
                 AppendPart(parts, item, calls, toolSerializerOptions);
@@ -75,9 +84,16 @@ internal static class ChatRequestMapper
             if (contents.Count > 0 && contents[^1].Role == targetRole)
             {
                 var previousParts = contents[^1].Parts;
-                foreach (var part in parts)
+                if (previousParts is List<Part> previousList)
                 {
-                    previousParts.Add(part);
+                    previousList.AddRange(parts);
+                }
+                else
+                {
+                    foreach (var part in parts)
+                    {
+                        previousParts.Add(part);
+                    }
                 }
             }
             else
@@ -94,7 +110,7 @@ internal static class ChatRequestMapper
             ? new GenerateContentRequest { Contents = contents }
             : template.CloneWithContents(contents);
 
-        if (request.SystemInstruction is null && systemParts.Count > 0)
+        if (request.SystemInstruction is null && systemParts is { Count: > 0 })
         {
             request.SystemInstruction = new Content { Parts = systemParts };
         }
@@ -352,4 +368,3 @@ internal static class ChatRequestMapper
         }
     }
 }
-

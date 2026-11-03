@@ -47,8 +47,9 @@ internal sealed class GeminiRequestHeaders
                 nameof(GeminiClientOptions.ApiKeyProvider));
         }
 
-        var headers = new List<KeyValuePair<string, string>>();
-        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var additionalCount = options.AdditionalHeaders?.Count ?? 0;
+        var headers = new List<KeyValuePair<string, string>>((hasStaticKey ? 1 : 0) + additionalCount);
+        var seenNames = new HashSet<string>((hasStaticKey || hasDynamicKeyProvider ? 1 : 0) + additionalCount, StringComparer.OrdinalIgnoreCase);
         using var probe = new HttpRequestMessage();
 
         if (hasStaticKey)
