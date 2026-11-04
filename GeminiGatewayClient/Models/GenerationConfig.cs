@@ -201,6 +201,13 @@ public sealed class GenerationConfig
                 paramName);
         }
 
+        if (ResponseJsonSchema is { ValueKind: JsonValueKind.Undefined })
+        {
+            throw new ArgumentException("GenerationConfig.ResponseJsonSchema cannot be JsonValueKind.Undefined.", paramName);
+        }
+
+        ResponseSchema?.Validate("GenerationConfig.ResponseSchema", paramName);
+
         if (MediaResolution == Models.MediaResolution.Unknown)
         {
             throw new ArgumentException("GenerationConfig.MediaResolution cannot be MediaResolution.Unknown.", paramName);
@@ -220,28 +227,28 @@ public enum MediaResolution
     /// Media resolution is unspecified.
     /// </summary>
     [JsonStringEnumMemberName("MEDIA_RESOLUTION_UNSPECIFIED")]
-    Unspecified,
+    Unspecified = 0,
 
     /// <summary>
     /// Low media resolution (64 tokens per image/frame).
     /// </summary>
     [JsonStringEnumMemberName("MEDIA_RESOLUTION_LOW")]
-    Low,
+    Low = 1,
 
     /// <summary>
     /// Medium media resolution (256 tokens per image/frame).
     /// </summary>
     [JsonStringEnumMemberName("MEDIA_RESOLUTION_MEDIUM")]
-    Medium,
+    Medium = 2,
 
     /// <summary>
     /// High media resolution (zoomed reframing with 256 tokens).
     /// </summary>
     [JsonStringEnumMemberName("MEDIA_RESOLUTION_HIGH")]
-    High,
+    High = 3,
 
     /// <summary>
     /// Fallback value used when the server returns a media resolution not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }

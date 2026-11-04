@@ -90,34 +90,34 @@ public enum ThinkingLevel
     /// Unspecified thinking level (<c>THINKING_LEVEL_UNSPECIFIED</c>); uses the model's default.
     /// </summary>
     [JsonStringEnumMemberName("THINKING_LEVEL_UNSPECIFIED")]
-    Unspecified,
+    Unspecified = 0,
 
     /// <summary>
     /// Minimal or near-zero thinking (<c>MINIMAL</c>) for low-latency classification, extraction, or basic chat.
     /// </summary>
     [JsonStringEnumMemberName("MINIMAL")]
-    Minimal,
+    Minimal = 1,
 
     /// <summary>
     /// Low reasoning depth (<c>LOW</c>) for simple tasks with reduced latency and cost.
     /// </summary>
     [JsonStringEnumMemberName("LOW")]
-    Low,
+    Low = 2,
 
     /// <summary>
     /// Balanced reasoning depth (<c>MEDIUM</c>) suitable for general-purpose workloads.
     /// </summary>
     [JsonStringEnumMemberName("MEDIUM")]
-    Medium,
+    Medium = 3,
 
     /// <summary>
     /// Maximum reasoning depth (<c>HIGH</c>) for complex math, coding, and multi-step planning.
     /// </summary>
     [JsonStringEnumMemberName("HIGH")]
-    High,
+    High = 4,
 
     /// <summary>
     /// Fallback value used when the server returns a thinking level not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }

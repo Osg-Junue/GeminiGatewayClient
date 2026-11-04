@@ -63,35 +63,35 @@ public enum UrlRetrievalStatus
     /// Default value when the retrieval status is unspecified (<c>URL_RETRIEVAL_STATUS_UNSPECIFIED</c>).
     /// </summary>
     [JsonStringEnumMemberName("URL_RETRIEVAL_STATUS_UNSPECIFIED")]
-    Unspecified,
+    Unspecified = 0,
 
     /// <summary>
     /// The URL was retrieved successfully (<c>URL_RETRIEVAL_STATUS_SUCCESS</c>).
     /// </summary>
     [JsonStringEnumMemberName("URL_RETRIEVAL_STATUS_SUCCESS")]
-    Success,
+    Success = 1,
 
     /// <summary>
     /// The URL retrieval failed due to an error (<c>URL_RETRIEVAL_STATUS_ERROR</c>).
     /// </summary>
     [JsonStringEnumMemberName("URL_RETRIEVAL_STATUS_ERROR")]
-    Error,
+    Error = 2,
 
     /// <summary>
     /// The URL retrieval failed because the content is behind a paywall (<c>URL_RETRIEVAL_STATUS_PAYWALL</c>).
     /// </summary>
     [JsonStringEnumMemberName("URL_RETRIEVAL_STATUS_PAYWALL")]
-    Paywall,
+    Paywall = 3,
 
     /// <summary>
     /// The URL retrieval failed because the content was flagged as unsafe (<c>URL_RETRIEVAL_STATUS_UNSAFE</c>).
     /// </summary>
     [JsonStringEnumMemberName("URL_RETRIEVAL_STATUS_UNSAFE")]
-    Unsafe,
+    Unsafe = 4,
 
     /// <summary>
     /// Fallback value used when the server returns a status not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }
 

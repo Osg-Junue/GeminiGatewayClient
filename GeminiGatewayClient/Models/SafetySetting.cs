@@ -58,42 +58,42 @@ public enum HarmBlockThreshold
     /// Threshold is unspecified.
     /// </summary>
     [JsonStringEnumMemberName("HARM_BLOCK_THRESHOLD_UNSPECIFIED")]
-    Unspecified,
-
-    /// <summary>
-    /// Content is allowed regardless of probability.
-    /// </summary>
-    [JsonStringEnumMemberName("BLOCK_NONE")]
-    BlockNone,
+    Unspecified = 0,
 
     /// <summary>
     /// Block content when the probability of unsafe content is low, medium, or high.
     /// </summary>
     [JsonStringEnumMemberName("BLOCK_LOW_AND_ABOVE")]
-    BlockLowAndAbove,
+    BlockLowAndAbove = 1,
 
     /// <summary>
     /// Block content when the probability of unsafe content is medium or high.
     /// </summary>
     [JsonStringEnumMemberName("BLOCK_MEDIUM_AND_ABOVE")]
-    BlockMediumAndAbove,
+    BlockMediumAndAbove = 2,
 
     /// <summary>
     /// Block content only when the probability of unsafe content is high.
     /// </summary>
     [JsonStringEnumMemberName("BLOCK_ONLY_HIGH")]
-    BlockOnlyHigh,
+    BlockOnlyHigh = 3,
+
+    /// <summary>
+    /// Content is allowed regardless of probability.
+    /// </summary>
+    [JsonStringEnumMemberName("BLOCK_NONE")]
+    BlockNone = 4,
 
     /// <summary>
     /// Turn off the safety filter for this category.
     /// </summary>
     [JsonStringEnumMemberName("OFF")]
-    Off,
+    Off = 5,
 
     /// <summary>
     /// Fallback value used when the server returns a threshold not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }
 
 /// <summary>
@@ -106,22 +106,22 @@ public enum HarmBlockMethod
     /// Evaluation method is unspecified.
     /// </summary>
     [JsonStringEnumMemberName("HARM_BLOCK_METHOD_UNSPECIFIED")]
-    Unspecified,
+    Unspecified = 0,
 
     /// <summary>
     /// Evaluate based on both probability and severity scores.
     /// </summary>
     [JsonStringEnumMemberName("SEVERITY")]
-    Severity,
+    Severity = 1,
 
     /// <summary>
     /// Evaluate based on probability score only.
     /// </summary>
     [JsonStringEnumMemberName("PROBABILITY")]
-    Probability,
+    Probability = 2,
 
     /// <summary>
     /// Fallback value used when the server returns an evaluation method not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }

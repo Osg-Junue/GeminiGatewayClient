@@ -66,34 +66,34 @@ public enum HarmSeverity
     /// Harm severity is unspecified.
     /// </summary>
     [JsonStringEnumMemberName("HARM_SEVERITY_UNSPECIFIED")]
-    Unspecified,
+    Unspecified = 0,
 
     /// <summary>
     /// Negligible severity of harm.
     /// </summary>
     [JsonStringEnumMemberName("HARM_SEVERITY_NEGLIGIBLE")]
-    Negligible,
+    Negligible = 1,
 
     /// <summary>
     /// Low severity of harm.
     /// </summary>
     [JsonStringEnumMemberName("HARM_SEVERITY_LOW")]
-    Low,
+    Low = 2,
 
     /// <summary>
     /// Medium severity of harm.
     /// </summary>
     [JsonStringEnumMemberName("HARM_SEVERITY_MEDIUM")]
-    Medium,
+    Medium = 3,
 
     /// <summary>
     /// High severity of harm.
     /// </summary>
     [JsonStringEnumMemberName("HARM_SEVERITY_HIGH")]
-    High,
+    High = 4,
 
     /// <summary>
     /// Fallback value used when the server returns a severity level not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }

@@ -14,46 +14,46 @@ public enum HarmCategory
     /// Category is unspecified.
     /// </summary>
     [JsonStringEnumMemberName("HARM_CATEGORY_UNSPECIFIED")]
-    Unspecified,
+    Unspecified = 0,
 
     /// <summary>
     /// Harassment content.
     /// </summary>
     [JsonStringEnumMemberName("HARM_CATEGORY_HARASSMENT")]
-    Harassment,
+    Harassment = 7,
 
     /// <summary>
     /// Hate speech and content that promotes discrimination or disparagement.
     /// </summary>
     [JsonStringEnumMemberName("HARM_CATEGORY_HATE_SPEECH")]
-    HateSpeech,
+    HateSpeech = 8,
 
     /// <summary>
     /// Sexually explicit content.
     /// </summary>
     [JsonStringEnumMemberName("HARM_CATEGORY_SEXUALLY_EXPLICIT")]
-    SexuallyExplicit,
+    SexuallyExplicit = 9,
 
     /// <summary>
     /// Dangerous content that promotes harm, illegal acts, or self-harm.
     /// </summary>
     [JsonStringEnumMemberName("HARM_CATEGORY_DANGEROUS_CONTENT")]
-    DangerousContent,
+    DangerousContent = 10,
 
     /// <summary>
     /// Content that may harm civic integrity.
     /// </summary>
     [JsonStringEnumMemberName("HARM_CATEGORY_CIVIC_INTEGRITY")]
-    CivicIntegrity,
+    CivicIntegrity = 11,
 
     /// <summary>
     /// Jailbreak or prompt-injection attempt.
     /// </summary>
     [JsonStringEnumMemberName("HARM_CATEGORY_JAILBREAK")]
-    Jailbreak,
+    Jailbreak = 12,
 
     /// <summary>
     /// Fallback value used when the server returns a harm category not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }

@@ -135,7 +135,13 @@ internal static class ChatRequestMapper
         // unless the caller mutated the high-level AIContent payload after creation.
         if (rawPart is not null && IsUnmodifiedRawPart(item, rawPart, signature))
         {
-            parts.Add(rawPart.Clone());
+            var clonedPart = rawPart.Clone();
+            if (string.IsNullOrEmpty(clonedPart.Text) && HasNonTextPrimaryDataField(clonedPart))
+            {
+                clonedPart.Text = null;
+            }
+
+            parts.Add(clonedPart);
             return;
         }
 
@@ -177,11 +183,17 @@ internal static class ChatRequestMapper
                 {
                     ThoughtSignature = signature,
                     VideoMetadata = rawPart?.VideoMetadata?.Clone(),
+                    ExtensionData = rawPart?.ExtensionData is not null
+                        ? new Dictionary<string, JsonElement>(rawPart.ExtensionData, StringComparer.Ordinal)
+                        : null,
                     FunctionCall = new FunctionCall
                     {
                         Id = apiId,
                         Name = call.Name,
-                        Args = ToolJsonConverter.ToArguments(call.Arguments, toolSerializerOptions)
+                        Args = ToolJsonConverter.ToArguments(call.Arguments, toolSerializerOptions),
+                        ExtensionData = rawPart?.FunctionCall?.ExtensionData is not null
+                            ? new Dictionary<string, JsonElement>(rawPart.FunctionCall.ExtensionData, StringComparer.Ordinal)
+                            : null
                     }
                 });
                 break;
@@ -227,7 +239,7 @@ internal static class ChatRequestMapper
                 string.Equals(rawPart.Text, reasoning.Text, StringComparison.Ordinal) &&
                 string.Equals(rawPart.ThoughtSignature, reasoning.ProtectedData, StringComparison.Ordinal),
             DataContent data =>
-                rawPart.Text is null &&
+                string.IsNullOrEmpty(rawPart.Text) &&
                 rawPart.InlineData?.Data is { } rawBytes &&
                 string.Equals(
                      string.IsNullOrWhiteSpace(rawPart.InlineData.MimeType) ? MimeTypes.ApplicationOctetStream : rawPart.InlineData.MimeType,
@@ -235,7 +247,7 @@ internal static class ChatRequestMapper
                      StringComparison.Ordinal) &&
                 data.Data.Span.SequenceEqual(rawBytes),
             UriContent uri =>
-                rawPart.Text is null &&
+                string.IsNullOrEmpty(rawPart.Text) &&
                 rawPart.FileData is not null &&
                 string.Equals(rawPart.FileData.FileUri, uri.Uri.ToString(), StringComparison.Ordinal) &&
                 string.Equals(
@@ -243,7 +255,7 @@ internal static class ChatRequestMapper
                     string.IsNullOrWhiteSpace(uri.MediaType) ? MimeTypes.ApplicationOctetStream : uri.MediaType,
                     StringComparison.Ordinal),
             FunctionCallContent => false,
-            _ => rawPart.Text is null && IsUnmodifiedCodeExecutionPart(item.AdditionalProperties, rawPart)
+            _ => string.IsNullOrEmpty(rawPart.Text) && IsUnmodifiedCodeExecutionPart(item.AdditionalProperties, rawPart)
         };
     }
 
@@ -369,10 +381,14 @@ internal static class ChatRequestMapper
                 return;
             }
 
-            if (rawPart is { Text: not null } &&
-                parts[^1] is { Text.Length: > 0, Thought: not true, ThoughtSignature: null or "" })
+            if (parts[^1] is { Text.Length: > 0, Thought: not true, ThoughtSignature: null or "" } prevPart)
             {
-                parts[^1].ThoughtSignature = signature;
+                prevPart.ThoughtSignature = signature;
+                if (prevPart.ExtensionData is null && rawPart?.ExtensionData is { Count: > 0 } rawExt)
+                {
+                    prevPart.ExtensionData = new Dictionary<string, JsonElement>(rawExt, StringComparer.Ordinal);
+                }
+
                 return;
             }
         }
@@ -382,7 +398,10 @@ internal static class ChatRequestMapper
             Text = hasText ? reasoning.Text : null,
             Thought = hasText ? true : null,
             ThoughtSignature = string.IsNullOrEmpty(signature) ? null : signature,
-            VideoMetadata = rawPart?.VideoMetadata?.Clone()
+            VideoMetadata = rawPart?.VideoMetadata?.Clone(),
+            ExtensionData = rawPart?.ExtensionData is not null
+                ? new Dictionary<string, JsonElement>(rawPart.ExtensionData, StringComparer.Ordinal)
+                : null
         });
     }
 

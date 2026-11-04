@@ -90,10 +90,10 @@ public enum CodeExecutionLanguage
 
     /// <summary>Python (&gt;= 3.10) with standard scientific libraries.</summary>
     [JsonStringEnumMemberName("PYTHON")]
-    Python,
+    Python = 1,
 
     /// <summary>Fallback value used when the server returns an unrecognized language.</summary>
-    Unknown,
+    Unknown = -1,
 }
 
 /// <summary>
@@ -108,17 +108,17 @@ public enum CodeExecutionOutcome
 
     /// <summary>Code execution completed successfully.</summary>
     [JsonStringEnumMemberName("OUTCOME_OK")]
-    Ok,
+    Ok = 1,
 
     /// <summary>Code execution finished but with a failure (stderr should contain the reason).</summary>
     [JsonStringEnumMemberName("OUTCOME_FAILED")]
-    Failed,
+    Failed = 2,
 
     /// <summary>Code execution ran for too long and was cancelled.</summary>
     [JsonStringEnumMemberName("OUTCOME_DEADLINE_EXCEEDED")]
-    DeadlineExceeded,
+    DeadlineExceeded = 3,
 
     /// <summary>Fallback value used when the server returns an unrecognized outcome.</summary>
-    Unknown,
+    Unknown = -1,
 }
 

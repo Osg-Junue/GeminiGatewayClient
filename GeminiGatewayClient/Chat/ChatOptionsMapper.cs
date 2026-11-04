@@ -142,26 +142,56 @@ internal static class ChatOptionsMapper
 
     private static void ApplyTools(GenerateContentRequest request, ChatOptions options)
     {
-        if (request.Tools is not null || options.Tools is not { Count: > 0 } tools)
+        if (options.Tools is not { Count: > 0 } tools)
         {
             return;
         }
 
         List<FunctionDeclaration>? declarations = null;
-        Tool? functionTool = null;
         List<Tool>? mappedTools = null;
+
+        var existingTools = request.Tools;
+        var hasExistingGoogleSearch = false;
+        var hasExistingCodeExecution = false;
+        Tool? existingFunctionTool = null;
+
+        if (existingTools is { Count: > 0 })
+        {
+            for (var i = 0; i < existingTools.Count; i++)
+            {
+                if (existingTools[i] is not { } existingTool)
+                {
+                    continue;
+                }
+
+                if (existingTool.GoogleSearch is not null)
+                {
+                    hasExistingGoogleSearch = true;
+                }
+
+                if (existingTool.CodeExecution is not null)
+                {
+                    hasExistingCodeExecution = true;
+                }
+
+                if (existingFunctionTool is null && existingTool.FunctionDeclarations is not null)
+                {
+                    existingFunctionTool = existingTool;
+                }
+            }
+        }
 
         foreach (var tool in tools)
         {
             switch (tool)
             {
                 case AIFunctionDeclaration function:
-                    if (declarations is null)
+                    if (existingTools is { Count: > 0 } && ContainsFunctionDeclaration(existingTools, function.Name))
                     {
-                        declarations = new List<FunctionDeclaration>(tools.Count);
-                        functionTool = new Tool { FunctionDeclarations = declarations };
+                        break;
                     }
 
+                    declarations ??= new List<FunctionDeclaration>(tools.Count);
                     declarations.Add(new FunctionDeclaration
                     {
                         Name = function.Name,
@@ -172,11 +202,21 @@ internal static class ChatOptionsMapper
                     break;
 
                 case HostedWebSearchTool:
-                    (mappedTools ??= new List<Tool>(2)).Add(new Tool { GoogleSearch = new GoogleSearchTool() });
+                    if (!hasExistingGoogleSearch)
+                    {
+                        (mappedTools ??= new List<Tool>(2)).Add(new Tool { GoogleSearch = new GoogleSearchTool() });
+                        hasExistingGoogleSearch = true;
+                    }
+
                     break;
 
                 case HostedCodeInterpreterTool:
-                    (mappedTools ??= new List<Tool>(2)).Add(new Tool { CodeExecution = new CodeExecutionTool() });
+                    if (!hasExistingCodeExecution)
+                    {
+                        (mappedTools ??= new List<Tool>(2)).Add(new Tool { CodeExecution = new CodeExecutionTool() });
+                        hasExistingCodeExecution = true;
+                    }
+
                     break;
 
                 default:
@@ -186,22 +226,83 @@ internal static class ChatOptionsMapper
             }
         }
 
-        if (functionTool is not null)
+        if (declarations is { Count: > 0 })
         {
-            if (mappedTools is null)
+            if (existingFunctionTool?.FunctionDeclarations is { } existingDecls)
             {
-                mappedTools = [functionTool];
+                if (existingDecls is List<FunctionDeclaration> declList)
+                {
+                    declList.AddRange(declarations);
+                }
+                else if (existingDecls.IsReadOnly)
+                {
+                    existingFunctionTool.FunctionDeclarations = [.. existingDecls, .. declarations];
+                }
+                else
+                {
+                    foreach (var decl in declarations)
+                    {
+                        existingDecls.Add(decl);
+                    }
+                }
             }
             else
             {
-                mappedTools.Insert(0, functionTool);
+                var functionTool = new Tool { FunctionDeclarations = declarations };
+                if (mappedTools is null)
+                {
+                    mappedTools = [functionTool];
+                }
+                else
+                {
+                    mappedTools.Insert(0, functionTool);
+                }
             }
         }
 
         if (mappedTools is { Count: > 0 })
         {
-            request.Tools = mappedTools;
+            if (existingTools is null)
+            {
+                request.Tools = mappedTools;
+            }
+            else if (existingTools is List<Tool> toolList)
+            {
+                toolList.AddRange(mappedTools);
+            }
+            else if (existingTools.IsReadOnly)
+            {
+                request.Tools = [.. existingTools, .. mappedTools];
+            }
+            else
+            {
+                foreach (var mappedTool in mappedTools)
+                {
+                    existingTools.Add(mappedTool);
+                }
+            }
         }
+    }
+
+    private static bool ContainsFunctionDeclaration(IList<Tool> tools, string name)
+    {
+        for (var i = 0; i < tools.Count; i++)
+        {
+            if (tools[i]?.FunctionDeclarations is not { Count: > 0 } decls)
+            {
+                continue;
+            }
+
+            for (var j = 0; j < decls.Count; j++)
+            {
+                if (decls[j] is { } decl && string.Equals(decl.Name, name, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static void ApplyToolMode(GenerateContentRequest request, ChatOptions options)

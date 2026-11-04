@@ -248,6 +248,11 @@ public sealed class GenerateContentRequest
 
     private static void ValidateContentParts(Content content, string pathPrefix, string paramName)
     {
+        if (content.Role is { } role && (role == Role.Unknown || !Enum.IsDefined(role)))
+        {
+            throw new ArgumentException($"{pathPrefix}.Role cannot be Role.Unknown.", paramName);
+        }
+
         if ((content.Parts is null || content.Parts.Count == 0) &&
             (content.ExtensionData is null || content.ExtensionData.Count == 0))
         {

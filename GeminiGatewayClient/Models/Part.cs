@@ -161,6 +161,11 @@ public sealed class Part
     public static Part FromFunctionResponse(string name, JsonElement response, string? id = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (response.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("Function response must be a JSON object (JsonValueKind.Object).", nameof(response));
+        }
+
         return new Part { FunctionResponse = new FunctionResponse { Name = name, Response = response, Id = id } };
     }
 
@@ -189,14 +194,16 @@ public sealed class Part
             throw new ArgumentException($"{pathPrefix} must have at least one field set.", paramName);
         }
 
-        var dataFieldsSet =
-            (Text is not null ? 1 : 0) +
+        var nonTextFieldsSet =
             (InlineData is not null ? 1 : 0) +
             (FileData is not null ? 1 : 0) +
             (FunctionCall is not null ? 1 : 0) +
             (FunctionResponse is not null ? 1 : 0) +
             (ExecutableCode is not null ? 1 : 0) +
             (CodeExecutionResult is not null ? 1 : 0);
+
+        var hasEffectiveText = Text is not null && (Text.Length > 0 || nonTextFieldsSet == 0);
+        var dataFieldsSet = (hasEffectiveText ? 1 : 0) + nonTextFieldsSet;
 
         if (dataFieldsSet > 1)
         {
@@ -223,9 +230,17 @@ public sealed class Part
             throw new ArgumentException($"{pathPrefix}.FileData.FileUri cannot be null or whitespace.", paramName);
         }
 
-        if (FunctionCall is not null && string.IsNullOrWhiteSpace(FunctionCall.Name))
+        if (FunctionCall is not null)
         {
-            throw new ArgumentException($"{pathPrefix}.FunctionCall.Name cannot be null or whitespace.", paramName);
+            if (string.IsNullOrWhiteSpace(FunctionCall.Name))
+            {
+                throw new ArgumentException($"{pathPrefix}.FunctionCall.Name cannot be null or whitespace.", paramName);
+            }
+
+            if (FunctionCall.Args is { ValueKind: JsonValueKind.Undefined })
+            {
+                throw new ArgumentException($"{pathPrefix}.FunctionCall.Args cannot be JsonValueKind.Undefined.", paramName);
+            }
         }
 
         if (FunctionResponse is not null)
@@ -235,9 +250,9 @@ public sealed class Part
                 throw new ArgumentException($"{pathPrefix}.FunctionResponse.Name cannot be null or whitespace.", paramName);
             }
 
-            if (FunctionResponse.Response is null)
+            if (FunctionResponse.Response is not { ValueKind: JsonValueKind.Object })
             {
-                throw new ArgumentException($"{pathPrefix}.FunctionResponse.Response cannot be null.", paramName);
+                throw new ArgumentException($"{pathPrefix}.FunctionResponse.Response must be a non-null JSON object (JsonValueKind.Object).", paramName);
             }
         }
     }

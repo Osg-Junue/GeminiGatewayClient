@@ -162,6 +162,10 @@ public sealed class VideoOffsetJsonConverter : JsonConverter<VideoOffset>
                     {
                         seconds = parsedS;
                     }
+                    else
+                    {
+                        reader.Skip();
+                    }
                 }
                 else if (reader.ValueTextEquals("nanos"u8))
                 {
@@ -174,6 +178,10 @@ public sealed class VideoOffsetJsonConverter : JsonConverter<VideoOffset>
                              int.TryParse(reader.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedN))
                     {
                         nanos = parsedN;
+                    }
+                    else
+                    {
+                        reader.Skip();
                     }
                 }
                 else

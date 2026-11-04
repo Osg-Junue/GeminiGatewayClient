@@ -127,7 +127,7 @@ internal static class ChatResponseMapper
             }
 
             var annotatedOnly = new List<AIContent>(1);
-            AttachCandidateAnnotations(candidate, parts, annotatedOnly, streamedSegments);
+            AttachCandidateAnnotations(candidate, parts, annotatedOnly, streamedSegments, isStreaming);
             return annotatedOnly;
         }
 
@@ -215,7 +215,7 @@ internal static class ChatResponseMapper
 
         if (hasAnnotations)
         {
-            AttachCandidateAnnotations(candidate, parts, contents, streamedSegments);
+            AttachCandidateAnnotations(candidate, parts, contents, streamedSegments, isStreaming);
         }
 
         return contents;
@@ -230,9 +230,12 @@ internal static class ChatResponseMapper
         Candidate candidate,
         IList<Part>? parts,
         List<AIContent> contents,
-        List<StreamedTextSegment>? streamedSegments = null)
+        List<StreamedTextSegment>? streamedSegments = null,
+        bool isStreaming = false)
     {
-        var primaryText = FindPrimaryTextContent(contents, parts, streamedSegments);
+        var needsRealtimeCarrier = isStreaming && !ContainsTextContent(contents);
+        var primaryText = FindPrimaryTextContent(contents, parts, streamedSegments, allowCreateEmpty: !isStreaming);
+        List<AIAnnotation>? carrierAnnotations = needsRealtimeCarrier ? [] : null;
 
         if (candidate.CitationMetadata?.RawCitations is { Count: > 0 } citations)
         {
@@ -243,7 +246,7 @@ internal static class ChatResponseMapper
                     continue;
                 }
 
-                var (citationTarget, region) = ResolveTargetAndRegion(
+                var targets = ResolveTargetsAndRegions(
                     contents,
                     parts,
                     streamedSegments,
@@ -252,124 +255,238 @@ internal static class ChatResponseMapper
                     citation.StartIndex,
                     citation.EndIndex);
 
-                var annotation = new CitationAnnotation
+                for (var t = 0; t < targets.Count; t++)
                 {
-                    Title = citation.Title,
-                    Url = TryCreateUri(citation.Uri),
-                    RawRepresentation = citation
-                };
-
-                if (region is not null)
-                {
-                    annotation.AnnotatedRegions = [region];
+                    var (citationTarget, region) = targets[t];
+                    var annotation = CreateCitationAnnotation(citation, region);
+                    (citationTarget.Annotations ??= []).Add(annotation);
                 }
 
-                (citationTarget.Annotations ??= []).Add(annotation);
+                if (carrierAnnotations is not null)
+                {
+                    var carrierCitation = CreateCitationAnnotation(citation, region: null);
+                    for (var t = 0; t < targets.Count; t++)
+                    {
+                        if (targets[t].Region is { } r)
+                        {
+                            (carrierCitation.AnnotatedRegions ??= []).Add(r);
+                        }
+                    }
+
+                    carrierAnnotations.Add(carrierCitation);
+                }
             }
         }
 
-        if (candidate.GroundingMetadata is not { } grounding)
+        if (candidate.GroundingMetadata is { } grounding)
         {
-            return;
-        }
+            var chunks = grounding.RawGroundingChunks;
+            var supports = grounding.RawGroundingSupports;
+            var chunkCount = chunks?.Count ?? 0;
 
-        var chunks = grounding.RawGroundingChunks;
-        var supports = grounding.RawGroundingSupports;
-        var chunkCount = chunks?.Count ?? 0;
+            bool[]? chunkReferenced = chunkCount > 0 ? new bool[chunkCount] : null;
+            CitationAnnotation?[]? carrierChunkAnnotations = carrierAnnotations is not null && chunkCount > 0
+                ? new CitationAnnotation?[chunkCount]
+                : null;
 
-        CitationAnnotation?[]? chunkAnnotations = chunkCount > 0 ? new CitationAnnotation?[chunkCount] : null;
-        TextContent?[]? chunkTargets = chunkCount > 0 ? new TextContent?[chunkCount] : null;
-
-        if (supports is { Count: > 0 })
-        {
-            for (var i = 0; i < supports.Count; i++)
+            if (supports is { Count: > 0 })
             {
-                if (supports[i] is not { } support)
+                for (var i = 0; i < supports.Count; i++)
                 {
-                    continue;
-                }
-
-                var segment = support.Segment;
-                var (target, regionToAdd) = segment is not null
-                    ? ResolveTargetAndRegion(
-                        contents,
-                        parts,
-                        streamedSegments,
-                        primaryText,
-                        segment.PartIndex,
-                        segment.StartIndex,
-                        segment.EndIndex)
-                    : (primaryText, null);
-
-                var indices = support.RawGroundingChunkIndices;
-                var attachedToChunk = false;
-                if (indices is { Count: > 0 } && chunks is not null)
-                {
-                    for (var j = 0; j < indices.Count; j++)
+                    if (supports[i] is not { } support)
                     {
-                        var chunkIndex = indices[j];
-                        if ((uint)chunkIndex >= (uint)chunkCount || chunks[chunkIndex] is not { } chunk)
+                        continue;
+                    }
+
+                    var segment = support.Segment;
+                    var targets = segment is not null
+                        ? ResolveTargetsAndRegions(
+                            contents,
+                            parts,
+                            streamedSegments,
+                            primaryText,
+                            segment.PartIndex,
+                            segment.StartIndex,
+                            segment.EndIndex)
+                        : primaryText is not null
+                            ? [(primaryText, (AnnotatedRegion?)null)]
+                            : [];
+
+                    var indices = support.RawGroundingChunkIndices;
+                    var attachedToChunk = false;
+                    if (indices is { Count: > 0 } && chunks is not null)
+                    {
+                        for (var j = 0; j < indices.Count; j++)
                         {
-                            continue;
+                            var chunkIndex = indices[j];
+                            if ((uint)chunkIndex >= (uint)chunkCount || chunks[chunkIndex] is not { } chunk)
+                            {
+                                continue;
+                            }
+
+                            attachedToChunk = true;
+                            chunkReferenced![chunkIndex] = true;
+
+                            for (var t = 0; t < targets.Count; t++)
+                            {
+                                var (target, regionToAdd) = targets[t];
+                                var annotation = GetOrAddChunkAnnotation(target, chunk);
+                                if (annotation.Snippet is null && !string.IsNullOrEmpty(segment?.Text))
+                                {
+                                    annotation.Snippet = segment.Text;
+                                }
+
+                                if (regionToAdd is not null)
+                                {
+                                    (annotation.AnnotatedRegions ??= []).Add(regionToAdd);
+                                }
+                            }
+
+                            if (carrierAnnotations is not null)
+                            {
+                                var carrierAnnotation = carrierChunkAnnotations![chunkIndex];
+                                if (carrierAnnotation is null)
+                                {
+                                    carrierAnnotation = CreateChunkAnnotation(chunk);
+                                    carrierChunkAnnotations[chunkIndex] = carrierAnnotation;
+                                    carrierAnnotations.Add(carrierAnnotation);
+                                }
+
+                                if (carrierAnnotation.Snippet is null && !string.IsNullOrEmpty(segment?.Text))
+                                {
+                                    carrierAnnotation.Snippet = segment.Text;
+                                }
+
+                                for (var t = 0; t < targets.Count; t++)
+                                {
+                                    if (targets[t].Region is { } r)
+                                    {
+                                        (carrierAnnotation.AnnotatedRegions ??= []).Add(r);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (!attachedToChunk)
+                    {
+                        for (var t = 0; t < targets.Count; t++)
+                        {
+                            var (target, regionToAdd) = targets[t];
+                            if (regionToAdd is not null || !string.IsNullOrEmpty(segment?.Text))
+                            {
+                                var supportAnnotation = new CitationAnnotation
+                                {
+                                    Snippet = segment?.Text,
+                                    RawRepresentation = support,
+                                    AnnotatedRegions = regionToAdd is not null ? [regionToAdd] : null
+                                };
+                                (target.Annotations ??= []).Add(supportAnnotation);
+                            }
                         }
 
-                        attachedToChunk = true;
-                        var annotation = chunkAnnotations![chunkIndex];
-                        if (annotation is null || !ReferenceEquals(chunkTargets![chunkIndex], target))
+                        if (carrierAnnotations is not null && (targets.Any(static x => x.Region is not null) || !string.IsNullOrEmpty(segment?.Text)))
                         {
-                            annotation = CreateChunkAnnotation(chunk);
-                            chunkAnnotations[chunkIndex] = annotation;
-                            chunkTargets![chunkIndex] = target;
-                            (target.Annotations ??= []).Add(annotation);
-                        }
+                            var carrierRegions = new List<AnnotatedRegion>();
+                            for (var t = 0; t < targets.Count; t++)
+                            {
+                                if (targets[t].Region is { } r)
+                                {
+                                    carrierRegions.Add(r);
+                                }
+                            }
 
-                        if (annotation.Snippet is null && !string.IsNullOrEmpty(segment?.Text))
-                        {
-                            annotation.Snippet = segment.Text;
-                        }
-
-                        if (regionToAdd is not null)
-                        {
-                            (annotation.AnnotatedRegions ??= []).Add(regionToAdd);
+                            carrierAnnotations.Add(new CitationAnnotation
+                            {
+                                Snippet = segment?.Text,
+                                RawRepresentation = support,
+                                AnnotatedRegions = carrierRegions.Count > 0 ? carrierRegions : null
+                            });
                         }
                     }
                 }
+            }
 
-                if (!attachedToChunk && (regionToAdd is not null || !string.IsNullOrEmpty(segment?.Text)))
+            if (chunks is { Count: > 0 })
+            {
+                for (var i = 0; i < chunkCount; i++)
                 {
-                    var supportAnnotation = new CitationAnnotation
+                    if (chunkReferenced![i] || chunks[i] is not { } chunk)
                     {
-                        Snippet = segment?.Text,
-                        RawRepresentation = support
-                    };
-
-                    if (regionToAdd is not null)
-                    {
-                        supportAnnotation.AnnotatedRegions = [regionToAdd];
+                        continue;
                     }
 
-                    (target.Annotations ??= []).Add(supportAnnotation);
+                    if (chunk.Web is null && chunk.RetrievedContext is null)
+                    {
+                        continue;
+                    }
+
+                    if (primaryText is not null)
+                    {
+                        (primaryText.Annotations ??= []).Add(CreateChunkAnnotation(chunk));
+                    }
+
+                    carrierAnnotations?.Add(CreateChunkAnnotation(chunk));
                 }
             }
         }
 
-        if (chunks is { Count: > 0 })
+        if (carrierAnnotations is { Count: > 0 })
         {
-            for (var i = 0; i < chunkCount; i++)
+            contents.Add(new AIContent
             {
-                if (chunkAnnotations![i] is not null || chunks[i] is not { } chunk)
-                {
-                    continue;
-                }
+                Annotations = carrierAnnotations,
+                RawRepresentation = (object?)candidate.GroundingMetadata ?? candidate.CitationMetadata
+            });
+        }
+    }
 
-                if (chunk.Web is null && chunk.RetrievedContext is null)
-                {
-                    continue;
-                }
-
-                (primaryText.Annotations ??= []).Add(CreateChunkAnnotation(chunk));
+    private static bool ContainsTextContent(List<AIContent> contents)
+    {
+        for (var i = 0; i < contents.Count; i++)
+        {
+            if (contents[i] is TextContent)
+            {
+                return true;
             }
         }
+
+        return false;
+    }
+
+    private static CitationAnnotation CreateCitationAnnotation(Citation citation, AnnotatedRegion? region)
+    {
+        var annotation = new CitationAnnotation
+        {
+            Title = citation.Title,
+            Url = TryCreateUri(citation.Uri),
+            RawRepresentation = citation
+        };
+
+        if (region is not null)
+        {
+            annotation.AnnotatedRegions = [region];
+        }
+
+        return annotation;
+    }
+
+    private static CitationAnnotation GetOrAddChunkAnnotation(TextContent target, GroundingChunk chunk)
+    {
+        if (target.Annotations is { } existingList)
+        {
+            for (var i = 0; i < existingList.Count; i++)
+            {
+                if (existingList[i] is CitationAnnotation existing && ReferenceEquals(existing.RawRepresentation, chunk))
+                {
+                    return existing;
+                }
+            }
+        }
+
+        var created = CreateChunkAnnotation(chunk);
+        (target.Annotations ??= []).Add(created);
+        return created;
     }
 
     private static CitationAnnotation CreateChunkAnnotation(GroundingChunk chunk)
@@ -399,10 +516,11 @@ internal static class ChatResponseMapper
         return new CitationAnnotation { RawRepresentation = chunk };
     }
 
-    private static TextContent FindPrimaryTextContent(
+    private static TextContent? FindPrimaryTextContent(
         List<AIContent> contents,
         IList<Part>? parts,
-        List<StreamedTextSegment>? streamedSegments)
+        List<StreamedTextSegment>? streamedSegments,
+        bool allowCreateEmpty)
     {
         for (var i = 0; i < contents.Count; i++)
         {
@@ -417,38 +535,83 @@ internal static class ChatResponseMapper
             return streamedSegments[^1].Content;
         }
 
-        return FindOrCreateTargetTextContent(contents, parts, partIndex: null);
+        return allowCreateEmpty
+            ? FindOrCreateTargetTextContent(contents, parts, partIndex: null)
+            : null;
     }
 
-    private static (TextContent Target, AnnotatedRegion? Region) ResolveTargetAndRegion(
+    private static List<(TextContent Target, AnnotatedRegion? Region)> ResolveTargetsAndRegions(
         List<AIContent> contents,
         IList<Part>? parts,
         List<StreamedTextSegment>? streamedSegments,
-        TextContent primaryText,
+        TextContent? primaryText,
         int? partIndex,
         int? startByte,
         int? endByte)
     {
+        if (partIndex is > 0 and var explicitIdx &&
+            parts is not null &&
+            explicitIdx < parts.Count &&
+            parts[explicitIdx] is { } explicitPart)
+        {
+            for (var i = 0; i < contents.Count; i++)
+            {
+                if (contents[i] is TextContent explicitTc && ReferenceEquals(explicitTc.RawRepresentation, explicitPart))
+                {
+                    AnnotatedRegion? explicitRegion = TryCreateRegion(explicitTc.Text, startByte, endByte, out var er) ? er : null;
+                    return [(explicitTc, explicitRegion)];
+                }
+            }
+        }
+
         if (streamedSegments is { Count: > 0 })
         {
-            if (startByte is >= 0 and var sb)
+            if (startByte is not null || endByte is not null)
             {
-                for (var i = 0; i < streamedSegments.Count; i++)
+                var sb = startByte ?? 0;
+                if (sb >= 0 && (endByte is null || endByte >= sb))
                 {
-                    var seg = streamedSegments[i];
-                    if (sb >= seg.StartByte && (sb < seg.EndByte || (i == streamedSegments.Count - 1 && sb == seg.EndByte)))
+                    List<(TextContent Target, AnnotatedRegion? Region)>? matched = null;
+                    for (var i = 0; i < streamedSegments.Count; i++)
                     {
-                        var localStart = sb - seg.StartByte;
-                        int? localEnd = endByte is { } eb
-                            ? Math.Min(eb, seg.EndByte) - seg.StartByte
-                            : null;
-                        AnnotatedRegion? region = TryCreateRegion(seg.Content.Text, localStart, localEnd, out var r) ? r : null;
-                        return (seg.Content, region);
+                        var seg = streamedSegments[i];
+                        var isLast = i == streamedSegments.Count - 1;
+                        bool overlaps;
+                        if (endByte is { } eb)
+                        {
+                            overlaps = eb > sb
+                                ? seg.EndByte > sb && seg.StartByte < eb
+                                : sb >= seg.StartByte && (sb < seg.EndByte || (isLast && sb == seg.EndByte));
+                        }
+                        else
+                        {
+                            overlaps = seg.EndByte > sb || (isLast && sb == seg.EndByte);
+                        }
+
+                        if (overlaps)
+                        {
+                            var localStart = Math.Max(0, sb - seg.StartByte);
+                            int? localEnd = endByte is { } ebVal
+                                ? Math.Min(ebVal, seg.EndByte) - seg.StartByte
+                                : null;
+                            AnnotatedRegion? region = TryCreateRegion(seg.Content.Text, localStart, localEnd, out var r) ? r : null;
+                            (matched ??= new List<(TextContent, AnnotatedRegion?)>(2)).Add((seg.Content, region));
+                        }
+                    }
+
+                    if (matched is { Count: > 0 })
+                    {
+                        return matched;
                     }
                 }
             }
 
-            return (primaryText, null);
+            return primaryText is not null ? [(primaryText, null)] : [];
+        }
+
+        if (primaryText is null)
+        {
+            return [];
         }
 
         var target = partIndex is not null
@@ -457,7 +620,7 @@ internal static class ChatResponseMapper
         AnnotatedRegion? nonStreamRegion = TryCreateRegion(target.Text, startByte, endByte, out var regionResult)
             ? regionResult
             : null;
-        return (target, nonStreamRegion);
+        return [(target, nonStreamRegion)];
     }
 
     private static TextContent FindOrCreateTargetTextContent(

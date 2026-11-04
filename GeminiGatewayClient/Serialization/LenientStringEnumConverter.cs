@@ -32,9 +32,6 @@ public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(Dynam
         foreach (var field in typeof(TEnum).GetFields(BindingFlags.Public | BindingFlags.Static))
         {
             var value = (TEnum)field.GetValue(null)!;
-            var numericValue = Convert.ToInt32(value, CultureInfo.InvariantCulture);
-            fromNumeric.TryAdd(numericValue, value);
-
             var name = field.Name;
             var wireAttr = field.GetCustomAttribute<JsonStringEnumMemberNameAttribute>();
             var wire = wireAttr?.Name ?? name;
@@ -48,6 +45,9 @@ public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(Dynam
                 fromWire.TryAdd(name, value);
                 continue;
             }
+
+            var numericValue = Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            fromNumeric.TryAdd(numericValue, value);
 
             toWire[value] = JsonEncodedText.Encode(wire);
             fromWire[wire] = value;

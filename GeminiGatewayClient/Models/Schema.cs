@@ -178,4 +178,56 @@ public sealed class Schema
 
         return clone;
     }
+
+    internal void Validate(string pathPrefix, string paramName, HashSet<Schema>? visited = null)
+    {
+        if (Type == SchemaType.Unknown)
+        {
+            throw new ArgumentException($"{pathPrefix}.Type cannot be SchemaType.Unknown.", paramName);
+        }
+
+        if (Default is { ValueKind: JsonValueKind.Undefined })
+        {
+            throw new ArgumentException($"{pathPrefix}.Default cannot be JsonValueKind.Undefined.", paramName);
+        }
+
+        if (Items is null && Properties is null && AnyOf is null)
+        {
+            return;
+        }
+
+        visited ??= new HashSet<Schema>(ReferenceEqualityComparer.Instance);
+        if (!visited.Add(this))
+        {
+            return;
+        }
+
+        Items?.Validate($"{pathPrefix}.Items", paramName, visited);
+
+        if (Properties is not null)
+        {
+            foreach (var (key, propSchema) in Properties)
+            {
+                if (propSchema is null)
+                {
+                    throw new ArgumentException($"{pathPrefix}.Properties['{key}'] cannot be null.", paramName);
+                }
+
+                propSchema.Validate($"{pathPrefix}.Properties['{key}']", paramName, visited);
+            }
+        }
+
+        if (AnyOf is not null)
+        {
+            for (var i = 0; i < AnyOf.Count; i++)
+            {
+                if (AnyOf[i] is not { } subSchema)
+                {
+                    throw new ArgumentException($"{pathPrefix}.AnyOf[{i}] cannot be null.", paramName);
+                }
+
+                subSchema.Validate($"{pathPrefix}.AnyOf[{i}]", paramName, visited);
+            }
+        }
+    }
 }

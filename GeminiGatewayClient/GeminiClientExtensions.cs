@@ -177,13 +177,52 @@ public static class GeminiClientExtensions
 
         if (response.Candidates is [{ Content: { RawParts: { Count: > 0 } parts } candidateContent }, ..])
         {
+            var hasMeaningfulPart = false;
+            var needsNormalization = false;
             for (var i = 0; i < parts.Count; i++)
             {
-                if (parts[i] is { } part && !IsPureEmptyTextPart(part))
+                if (parts[i] is not { } part || IsPureEmptyTextPart(part))
+                {
+                    needsNormalization = true;
+                    continue;
+                }
+
+                hasMeaningfulPart = true;
+                if (string.IsNullOrEmpty(part.Text) && HasNonTextPrimaryDataField(part))
+                {
+                    needsNormalization = true;
+                }
+            }
+
+            if (hasMeaningfulPart)
+            {
+                if (!needsNormalization)
                 {
                     content = candidateContent;
                     return true;
                 }
+
+                var normalized = candidateContent.Clone();
+                var normalizedParts = new List<Part>(parts.Count);
+                for (var i = 0; i < parts.Count; i++)
+                {
+                    if (parts[i] is not { } part || IsPureEmptyTextPart(part))
+                    {
+                        continue;
+                    }
+
+                    var clonedPart = part.Clone();
+                    if (string.IsNullOrEmpty(clonedPart.Text) && HasNonTextPrimaryDataField(clonedPart))
+                    {
+                        clonedPart.Text = null;
+                    }
+
+                    normalizedParts.Add(clonedPart);
+                }
+
+                normalized.Parts = normalizedParts;
+                content = normalized;
+                return true;
             }
         }
 

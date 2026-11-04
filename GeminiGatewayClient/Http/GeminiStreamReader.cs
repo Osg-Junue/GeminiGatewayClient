@@ -29,7 +29,7 @@ internal static class GeminiStreamReader
         int maxSseEventBytes = MaxSseLineBytes) =>
         format == GeminiStreamingFormat.ServerSentEvents
             ? ReadServerSentEventsAsync(stream, statusCode, watchdog, maxSseEventBytes)
-            : ReadJsonArrayAsync(stream, statusCode, watchdog);
+            : ReadJsonArrayAsync(stream, statusCode, watchdog, maxSseEventBytes);
 
     private static async IAsyncEnumerable<GenerateContentResponse> ReadServerSentEventsAsync(
         Stream stream,
@@ -43,7 +43,7 @@ internal static class GeminiStreamReader
         var isFirstLine = true;
         var skipLeadingLf = false;
 
-        var buffer = ArrayPool<byte>.Shared.Rent(InitialReadBufferBytes);
+        var buffer = ArrayPool<byte>.Shared.Rent(Math.Min(InitialReadBufferBytes, Math.Max(1, maxSseEventBytes)));
         var start = 0;
         var searchStart = 0;
         var buffered = 0;
@@ -67,12 +67,12 @@ internal static class GeminiStreamReader
 
                 if (buffered == buffer.Length)
                 {
-                    if (buffer.Length >= MaxSseLineBytes)
+                    if (buffer.Length >= maxSseEventBytes)
                     {
                         throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
                     }
 
-                    var newCapacity = (int)Math.Min((long)buffer.Length * 2, MaxSseLineBytes);
+                    var newCapacity = (int)Math.Min((long)buffer.Length * 2, maxSseEventBytes);
                     var larger = ArrayPool<byte>.Shared.Rent(newCapacity);
                     buffer.AsSpan(0, buffered).CopyTo(larger);
                     ArrayPool<byte>.Shared.Return(buffer);
@@ -100,6 +100,11 @@ internal static class GeminiStreamReader
                         if (skipLeadingLf && !tailLine.IsEmpty && tailLine[0] == (byte)'\n')
                         {
                             tailLine = tailLine[1..];
+                        }
+
+                        if (tailLine.Length > maxSseEventBytes)
+                        {
+                            throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
                         }
 
                         if (!tailLine.IsEmpty)
@@ -149,12 +154,22 @@ internal static class GeminiStreamReader
                     var relativeNewlineIdx = unsearched.IndexOfAny((byte)'\r', (byte)'\n');
                     if (relativeNewlineIdx < 0)
                     {
+                        if (buffered - start > maxSseEventBytes)
+                        {
+                            throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
+                        }
+
                         searchStart = buffered;
                         break;
                     }
 
                     var newlineIdx = searchStart + relativeNewlineIdx;
                     var line = buffer.AsSpan(start, newlineIdx - start);
+                    if (line.Length > maxSseEventBytes)
+                    {
+                        throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
+                    }
+
                     var delimiter = buffer[newlineIdx];
                     start = newlineIdx + 1;
 
@@ -444,9 +459,10 @@ internal static class GeminiStreamReader
     private static async IAsyncEnumerable<GenerateContentResponse> ReadJsonArrayAsync(
         Stream stream,
         HttpStatusCode statusCode,
-        StreamIdleWatchdog watchdog)
+        StreamIdleWatchdog watchdog,
+        int maxSseEventBytes)
     {
-        using var recordingStream = new PrefixRecordingStream(stream, MaxNonSseBytes, watchdog);
+        using var recordingStream = new PrefixRecordingStream(stream, MaxNonSseBytes, maxSseEventBytes, statusCode, watchdog);
         var enumerator = JsonSerializer
             .DeserializeAsyncEnumerable(recordingStream, GeminiJsonContext.Default.GenerateContentResponse, watchdog.CallerToken)
             .GetAsyncEnumerator(watchdog.CallerToken);
@@ -465,14 +481,15 @@ internal static class GeminiStreamReader
                     }
 
                     yieldedAny = true;
-                    recordingStream.StopRecording();
+                    recordingStream.OnElementYielded();
                     current = ToResponse(enumerator.Current, statusCode);
                 }
                 catch (JsonException ex)
                 {
-                    var captured = recordingStream.WrittenSpan;
-                    if (!yieldedAny && !captured.IsEmpty)
+                    if (!yieldedAny && !recordingStream.WrittenSpan.IsEmpty)
                     {
+                        await recordingStream.DrainToMaxRecordedBytesAsync().ConfigureAwait(false);
+                        var captured = recordingStream.WrittenSpan;
                         current = DeserializeUtf8Chunk(captured, statusCode);
                         stopAfterCurrent = true;
                     }
@@ -481,7 +498,7 @@ internal static class GeminiStreamReader
                         throw new GeminiApiException(
                             "Failed to deserialize a Gemini streaming chunk.",
                             statusCode,
-                            ExtractBoundedString(captured),
+                            ExtractBoundedString(recordingStream.WrittenSpan),
                             ex);
                     }
                 }
@@ -516,18 +533,63 @@ internal static class GeminiStreamReader
     /// <summary>
     /// Captures the initial bytes read from a JSON-array stream so non-array error objects (<c>{"error": ...}</c>)
     /// or gateway HTML pages returned with HTTP 200 can be diagnosed if <see cref="JsonSerializer.DeserializeAsyncEnumerable{TValue}(Stream, System.Text.Json.Serialization.Metadata.JsonTypeInfo{TValue}, CancellationToken)"/>
-    /// rejects the root token.
+    /// rejects the root token, while also enforcing the per-element byte limit.
     /// </summary>
-    private sealed class PrefixRecordingStream(Stream inner, int maxRecordedBytes, StreamIdleWatchdog watchdog) : Stream
+    private sealed class PrefixRecordingStream(
+        Stream inner,
+        int maxRecordedBytes,
+        int maxElementBytes,
+        HttpStatusCode statusCode,
+        StreamIdleWatchdog watchdog) : Stream
     {
         private PooledByteBufferWriter? _recorded = new(256);
+        private long _currentElementBytes;
 
         public ReadOnlySpan<byte> WrittenSpan => _recorded is not null ? _recorded.WrittenSpan : ReadOnlySpan<byte>.Empty;
+
+        public void OnElementYielded()
+        {
+            _currentElementBytes = 0;
+            StopRecording();
+        }
 
         public void StopRecording()
         {
             _recorded?.Dispose();
             _recorded = null;
+        }
+
+        public async ValueTask DrainToMaxRecordedBytesAsync()
+        {
+            while (_recorded is { } recorded && recorded.WrittenCount < maxRecordedBytes)
+            {
+                var remaining = maxRecordedBytes - recorded.WrittenCount;
+                var destination = recorded.GetMemory(Math.Min(InitialReadBufferBytes, remaining));
+                if (destination.Length > remaining)
+                {
+                    destination = destination[..remaining];
+                }
+
+                int read;
+                watchdog.BeforeRead();
+                var readSucceeded = false;
+                try
+                {
+                    read = await inner.ReadAsync(destination, watchdog.Token).ConfigureAwait(false);
+                    readSucceeded = true;
+                }
+                finally
+                {
+                    watchdog.AfterRead(readSucceeded);
+                }
+
+                if (read == 0)
+                {
+                    break;
+                }
+
+                recorded.Advance(read);
+            }
         }
 
         public override bool CanRead => inner.CanRead;
@@ -551,14 +613,23 @@ internal static class GeminiStreamReader
                 watchdog.AfterRead(readSucceeded);
             }
 
-            if (read > 0 && _recorded is { } recorded)
+            if (read > 0)
             {
-                var remaining = maxRecordedBytes - recorded.WrittenCount;
-                if (remaining > 0)
+                if (_recorded is { } recorded)
                 {
-                    var toCopy = Math.Min(read, remaining);
-                    buffer.Span[..toCopy].CopyTo(recorded.GetSpan(toCopy));
-                    recorded.Advance(toCopy);
+                    var remaining = maxRecordedBytes - recorded.WrittenCount;
+                    if (remaining > 0)
+                    {
+                        var toCopy = Math.Min(read, remaining);
+                        buffer.Span[..toCopy].CopyTo(recorded.GetSpan(toCopy));
+                        recorded.Advance(toCopy);
+                    }
+                }
+
+                _currentElementBytes += read;
+                if (_currentElementBytes > maxElementBytes)
+                {
+                    throw new GeminiApiException("A JSON stream chunk exceeded the maximum allowed length.", statusCode);
                 }
             }
 

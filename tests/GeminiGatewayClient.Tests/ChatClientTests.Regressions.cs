@@ -598,9 +598,9 @@ public partial class ChatClientTests
         Assert.NotNull(nextHandler.LastRequestBody);
         using var sentDoc = JsonDocument.Parse(nextHandler.LastRequestBody);
         var parts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
-        Assert.Equal(2, parts.GetArrayLength());
+        Assert.Equal(1, parts.GetArrayLength());
         Assert.Equal("Answer", parts[0].GetProperty("text").GetString());
-        Assert.Equal("sig-empty-text", parts[1].GetProperty("thoughtSignature").GetString());
+        Assert.Equal("sig-empty-text", parts[0].GetProperty("thoughtSignature").GetString());
     }
 
     [Fact]

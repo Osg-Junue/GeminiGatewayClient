@@ -113,6 +113,8 @@ services.AddGeminiClient(options => { /* ... */ })
     });
 ```
 
+> **Note (Streaming & Post-Header Retry Boundary):** `HttpMessageHandler` resilience pipelines (such as `AddStandardResilienceHandler`) operate at the `SendAsync` header boundary (`HttpCompletionOption.ResponseHeadersRead` for streaming). They automatically retry transient transport errors and non-2xx HTTP status codes (e.g., `429` / `503`) before response headers arrive, whereas mid-stream failures after an HTTP 200 header is received—such as an in-stream `{"error": ...}` payload (`GeminiApiException` with `IsTransient == true`) or a stalled stream (`TimeoutException` from `StreamIdleTimeout`)—surface to the caller during enumeration.
+
 ---
 
 ## 3. Single-Turn Generation & Streaming
@@ -640,7 +642,7 @@ When you pass your own `HttpClient` to `new GeminiClient(options, httpClient)`, 
 | `ApiKeyPrefix` | `string?` | `null` | Prefix prepended to the key value (for example `"Bearer "`). |
 | `AdditionalHeaders` | `IDictionary<string, string>` | Empty | Extra request headers sent on every call. Validated against CRLF injection and duplicates. |
 | `Timeout` | `TimeSpan` | 5 minutes | Request timeout applied to internally created and DI-managed `HttpClient` instances. |
-| `StreamIdleTimeout` | `TimeSpan` | 2 minutes | Maximum idle time between streaming chunks before throwing `TimeoutException`. |
+| `StreamIdleTimeout` | `TimeSpan?` | 2 minutes | Maximum idle time between streaming chunks before throwing `TimeoutException` (`null` or `Timeout.InfiniteTimeSpan` disables). |
 | `AllowInsecureHttp` | `bool` | `false` | Allows plain `http://` for non-loopback hosts when `true` (`http://localhost` is always allowed). |
 | `StreamingFormat` | `GeminiStreamingFormat` | `ServerSentEvents` | Streaming wire format: `ServerSentEvents` (`?alt=sse`) or `JsonArray`. |
 | `ToolSerializerOptions` | `JsonSerializerOptions?` | `null` | Optional `JsonSerializerOptions` (e.g., custom `JsonSerializerContext`) for serializing custom POCO tool results in `IChatClient`. |
