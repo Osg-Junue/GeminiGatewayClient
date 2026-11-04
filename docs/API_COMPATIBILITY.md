@@ -198,5 +198,5 @@ To prevent deserialization crashes when Google adds new fields or enum values to
 1. **`[JsonExtensionData]` on every DTO**: All request and response model classes include `IDictionary<string, JsonElement>? ExtensionData`, ensuring unknown JSON properties survive round-trip serialization.
 2. **`LenientStringEnumConverter<TEnum>` on all 16 wire enums**:
    - `FinishReason`, `BlockReason`, `HarmCategory`, `HarmProbability`, `HarmSeverity`, `HarmBlockThreshold`, `HarmBlockMethod`, `Role`, `SchemaType`, `ThinkingLevel`, `MediaResolution`, `FunctionCallingMode`, `CodeExecutionLanguage`, `CodeExecutionOutcome`, `UrlRetrievalStatus`, and `TaskType`.
-   - Unrecognized string or integer tokens deserialize to `Unknown` (`0`) instead of throwing `JsonException`.
-   - Outbound validation (`GenerateContentRequest.Validate()`, `EmbedContentRequest.Validate()`) rejects `Unknown` on request enums before an HTTP call is made.
+   - Known members use official Google Protobuf enum numbers (`Unspecified = 0` where defined); unrecognized string or integer tokens deserialize to `Unknown` (`-1`) instead of throwing `JsonException`.
+   - Outbound validation (`GenerateContentRequest.Validate()`, `EmbedContentRequest.Validate()`, `BatchEmbedContentsRequest.Validate()`) rejects `Unknown` on request enums before an HTTP call is made (while allowing response-originated `CodeExecutionLanguage.Unknown` and `CodeExecutionOutcome.Unknown` for multi-turn history replay).

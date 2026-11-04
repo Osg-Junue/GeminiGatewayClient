@@ -36,7 +36,7 @@ public sealed class ToolConfig
 
     internal void Validate(string paramName = "request")
     {
-        if (FunctionCallingConfig?.Mode == FunctionCallingMode.Unknown)
+        if (FunctionCallingConfig is { } fcc && (fcc.Mode == FunctionCallingMode.Unknown || !Enum.IsDefined(fcc.Mode)))
         {
             throw new ArgumentException("FunctionCallingConfig.Mode cannot be FunctionCallingMode.Unknown.", paramName);
         }

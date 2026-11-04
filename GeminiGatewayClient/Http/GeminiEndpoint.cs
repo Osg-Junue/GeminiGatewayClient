@@ -116,21 +116,6 @@ internal sealed class GeminiEndpoint
             }
         }
 
-        if ((string.IsNullOrWhiteSpace(model) || string.Equals(model, DefaultEmbeddingModel, StringComparison.Ordinal)) &&
-            !serverSentEvents &&
-            _defaultEmbedContentUri is not null)
-        {
-            if (string.Equals(operation, "embedContent", StringComparison.Ordinal))
-            {
-                return _defaultEmbedContentUri;
-            }
-
-            if (string.Equals(operation, "batchEmbedContents", StringComparison.Ordinal))
-            {
-                return _defaultBatchEmbedContentsUri!;
-            }
-        }
-
         var resourcePath = ResolveResourcePath(model);
         return BuildOperationUri(_baseUri, resourcePath, operation, serverSentEvents);
     }
@@ -249,7 +234,7 @@ internal sealed class GeminiEndpoint
     /// </summary>
     internal static string? ToResourcePath(string? model)
     {
-        if (string.IsNullOrEmpty(model))
+        if (string.IsNullOrWhiteSpace(model))
         {
             return null;
         }
@@ -257,7 +242,7 @@ internal sealed class GeminiEndpoint
         var span = model.AsSpan().Trim().Trim('/');
         if (span.IsEmpty)
         {
-            return null;
+            throw new ArgumentException($"Model resource name '{model}' contains an empty or relative path segment.", nameof(model));
         }
 
         if (span.Contains(':'))
@@ -269,6 +254,11 @@ internal sealed class GeminiEndpoint
 
         if (!span.Contains('/'))
         {
+            if (span is "." or "..")
+            {
+                throw new ArgumentException($"Model resource name '{model}' contains a relative path segment.", nameof(model));
+            }
+
             return string.Concat(ModelsSegment, Uri.EscapeDataString(span));
         }
 
@@ -277,9 +267,9 @@ internal sealed class GeminiEndpoint
         foreach (var range in span.Split('/'))
         {
             var segment = span[range];
-            if (segment.IsEmpty || segment.IsWhiteSpace())
+            if (segment.IsEmpty || segment.IsWhiteSpace() || segment is "." or "..")
             {
-                throw new ArgumentException($"Model resource name '{model}' contains an empty path segment.", nameof(model));
+                throw new ArgumentException($"Model resource name '{model}' contains an empty or relative path segment.", nameof(model));
             }
 
             if (!first)

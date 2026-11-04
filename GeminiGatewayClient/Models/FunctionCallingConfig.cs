@@ -57,28 +57,28 @@ public enum FunctionCallingMode
     /// The model decides whether to predict a function call or a natural language response.
     /// </summary>
     [JsonStringEnumMemberName("AUTO")]
-    Auto,
-
-    /// <summary>
-    /// The model is prohibited from making function calls.
-    /// </summary>
-    [JsonStringEnumMemberName("NONE")]
-    None,
+    Auto = 1,
 
     /// <summary>
     /// The model is constrained to always predict a function call from the allowed functions.
     /// </summary>
     [JsonStringEnumMemberName("ANY")]
-    Any,
+    Any = 2,
+
+    /// <summary>
+    /// The model is prohibited from making function calls.
+    /// </summary>
+    [JsonStringEnumMemberName("NONE")]
+    None = 3,
 
     /// <summary>
     /// The model predicts either a function call or a natural language response, enforcing schema adherence on function calls.
     /// </summary>
     [JsonStringEnumMemberName("VALIDATED")]
-    Validated,
+    Validated = 4,
 
     /// <summary>
     /// Fallback value used when the server returns a function calling mode not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }

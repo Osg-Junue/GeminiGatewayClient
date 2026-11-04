@@ -41,28 +41,15 @@ internal sealed class GeminiClientSettings
     public JsonSerializerOptions? ToolSerializerOptions { get; }
 
     /// <summary>
-    /// Validates <paramref name="options"/> and captures an immutable snapshot.
+    /// Validates cross-property invariants on <paramref name="options"/> and captures an immutable snapshot.
+    /// Individual property ranges (e.g., <see cref="GeminiClientOptions.Timeout"/>, <see cref="GeminiClientOptions.StreamIdleTimeout"/>,
+    /// <see cref="GeminiClientOptions.StreamingFormat"/>) are enforced eagerly by <see cref="GeminiClientOptions"/> property setters.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException">The options are invalid.</exception>
     public static GeminiClientSettings Create(GeminiClientOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-
-        if (!IsValidTimeout(options.Timeout))
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), options.Timeout, "GeminiClientOptions.Timeout must be positive or Timeout.InfiniteTimeSpan.");
-        }
-
-        if (options.StreamIdleTimeout is { } idle && !IsValidTimeout(idle))
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), idle, "GeminiClientOptions.StreamIdleTimeout must be positive or Timeout.InfiniteTimeSpan.");
-        }
-
-        if (!Enum.IsDefined(options.StreamingFormat))
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), options.StreamingFormat, "GeminiClientOptions.StreamingFormat is not a defined value.");
-        }
 
         var defaultEmbeddingModel = string.IsNullOrWhiteSpace(options.EmbeddingModel) ? null : options.EmbeddingModel.Trim();
 
@@ -75,6 +62,4 @@ internal sealed class GeminiClientSettings
             options.StreamingFormat,
             options.ToolSerializerOptions);
     }
-
-    private static bool IsValidTimeout(TimeSpan value) => value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan;
 }

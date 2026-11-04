@@ -598,9 +598,9 @@ public partial class ChatClientTests
         Assert.NotNull(nextHandler.LastRequestBody);
         using var sentDoc = JsonDocument.Parse(nextHandler.LastRequestBody);
         var parts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
-        Assert.Equal(2, parts.GetArrayLength());
+        Assert.Equal(1, parts.GetArrayLength());
         Assert.Equal("Answer", parts[0].GetProperty("text").GetString());
-        Assert.Equal("sig-empty-text", parts[1].GetProperty("thoughtSignature").GetString());
+        Assert.Equal("sig-empty-text", parts[0].GetProperty("thoughtSignature").GetString());
     }
 
     [Fact]
@@ -813,10 +813,9 @@ public partial class ChatClientTests
         Assert.NotNull(nextHandler.LastRequestBody);
         using var sentDoc = JsonDocument.Parse(nextHandler.LastRequestBody);
         var assistantParts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
-        Assert.Equal(2, assistantParts.GetArrayLength());
+        Assert.Equal(1, assistantParts.GetArrayLength());
         Assert.Equal("Hello world!", assistantParts[0].GetProperty("text").GetString());
-        Assert.Equal("sig-multi-chunk", assistantParts[1].GetProperty("thoughtSignature").GetString());
-        Assert.False(assistantParts[1].TryGetProperty("text", out _));
+        Assert.Equal("sig-multi-chunk", assistantParts[0].GetProperty("thoughtSignature").GetString());
 
         // Single-chunk streaming with text + thoughtSignature must deduplicate the companion and send only 1 wire part
         const string singleChunkSse = """

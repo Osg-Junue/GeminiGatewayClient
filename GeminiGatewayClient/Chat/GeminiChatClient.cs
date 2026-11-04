@@ -108,9 +108,13 @@ public sealed class GeminiChatClient : IChatClient
     private static async IAsyncEnumerable<ChatResponseUpdate> StreamCoreAsync(
         IAsyncEnumerable<GenerateContentResponse> chunks,
         string? model,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        CancellationToken requestCancellationToken,
+        [EnumeratorCancellation] CancellationToken enumeratorCancellationToken = default)
     {
+        using var linkedCts = GeminiClient.CreateLinkedTokenSource(requestCancellationToken, enumeratorCancellationToken, out var cancellationToken);
         GenerateContentResponse? lastUsageChunk = null;
+        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
+        var cumulativeUtf8Bytes = 0;
 
         await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
@@ -119,7 +123,7 @@ public sealed class GeminiChatClient : IChatClient
                 lastUsageChunk = chunk;
             }
 
-            yield return ChatResponseMapper.ToChatResponseUpdate(chunk, model);
+            yield return ChatResponseMapper.ToChatResponseUpdate(chunk, model, ref streamedSegments, ref cumulativeUtf8Bytes);
         }
 
         if (ChatResponseMapper.ToUsageUpdate(lastUsageChunk, model) is { } usageUpdate)

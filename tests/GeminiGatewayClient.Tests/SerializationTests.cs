@@ -785,4 +785,108 @@ public class SerializationTests
         var emptyBatch = new BatchEmbedContentsRequest();
         Assert.Throws<ArgumentException>(() => emptyBatch.Validate());
     }
+
+    [Fact]
+    public void Validate_RejectsPartWithExecutableCodeAndTextOrCodeExecutionResult()
+    {
+        var textAndExecCode = new GenerateContentRequest
+        {
+            Contents =
+            [
+                new Content
+                {
+                    Role = Role.Model,
+                    Parts =
+                    [
+                        new Part
+                        {
+                            Text = "running code",
+                            ExecutableCode = new ExecutableCode { Language = CodeExecutionLanguage.Python, Code = "print(1)" }
+                        }
+                    ]
+                }
+            ]
+        };
+        Assert.Throws<ArgumentException>(() => textAndExecCode.Validate());
+
+        var execCodeAndResult = new GenerateContentRequest
+        {
+            Contents =
+            [
+                new Content
+                {
+                    Role = Role.Model,
+                    Parts =
+                    [
+                        new Part
+                        {
+                            ExecutableCode = new ExecutableCode { Language = CodeExecutionLanguage.Python, Code = "print(1)" },
+                            CodeExecutionResult = new CodeExecutionResult { Outcome = CodeExecutionOutcome.Ok, Output = "1" }
+                        }
+                    ]
+                }
+            ]
+        };
+        Assert.Throws<ArgumentException>(() => execCodeAndResult.Validate());
+    }
+
+    [Fact]
+    public void VideoOffset_NegativeAndSubSecondOffsets_SerializeAndRoundTripWithoutFloatingPointPrecisionLoss()
+    {
+        var request = new GenerateContentRequest
+        {
+            Contents =
+            [
+                new Content
+                {
+                    Role = Role.User,
+                    Parts =
+                    [
+                        new Part
+                        {
+                            Text = "clip",
+                            VideoMetadata = new VideoMetadata
+                            {
+                                StartOffset = new VideoOffset { Seconds = 0, Nanos = -500_000_000 },
+                                EndOffset = new VideoOffset { Seconds = 123_456_789, Nanos = 123_456_789 }
+                            }
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var json = JsonSerializer.Serialize(request, GeminiJsonContext.Default.GenerateContentRequest);
+        using var doc = JsonDocument.Parse(json);
+        var videoMeta = doc.RootElement.GetProperty("contents")[0].GetProperty("parts")[0].GetProperty("videoMetadata");
+        Assert.Equal("-0.5s", videoMeta.GetProperty("startOffset").GetString());
+        Assert.Equal("123456789.123456789s", videoMeta.GetProperty("endOffset").GetString());
+
+        var roundTripped = JsonSerializer.Deserialize(json, GeminiJsonContext.Default.GenerateContentRequest);
+        var rtMeta = roundTripped!.Contents[0].Parts[0].VideoMetadata!;
+        Assert.Equal(0, rtMeta.StartOffset?.Seconds);
+        Assert.Equal(-500_000_000, rtMeta.StartOffset?.Nanos);
+        Assert.Equal(123_456_789, rtMeta.EndOffset?.Seconds);
+        Assert.Equal(123_456_789, rtMeta.EndOffset?.Nanos);
+
+        // Leading '+' on sub-second duration string is accepted
+        var plusSubSecond = JsonSerializer.Deserialize("""
+            {
+              "contents": [{ "role": "user", "parts": [{ "text": "clip", "videoMetadata": { "startOffset": "+.5s" } }] }]
+            }
+            """, GeminiJsonContext.Default.GenerateContentRequest);
+        Assert.Equal(0, plusSubSecond!.Contents[0].Parts[0].VideoMetadata!.StartOffset?.Seconds);
+        Assert.Equal(500_000_000, plusSubSecond.Contents[0].Parts[0].VideoMetadata!.StartOffset?.Nanos);
+
+        // Malformed duration strings without any digits around '.' throw JsonException
+        foreach (var malformed in new[] { ".s", "-.s", "+.s", "- 5s" })
+        {
+            var malformedJson = $$"""
+                {
+                  "contents": [{ "role": "user", "parts": [{ "text": "clip", "videoMetadata": { "startOffset": "{{malformed}}" } }] }]
+                }
+                """;
+            Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(malformedJson, GeminiJsonContext.Default.GenerateContentRequest));
+        }
+    }
 }

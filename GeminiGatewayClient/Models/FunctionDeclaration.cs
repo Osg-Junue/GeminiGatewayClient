@@ -100,5 +100,18 @@ public sealed class FunctionDeclaration
         {
             throw new ArgumentException($"FunctionDeclaration '{Name}' cannot set both Response and ResponseJsonSchema.", paramName);
         }
+
+        if (ParametersJsonSchema is { ValueKind: JsonValueKind.Undefined })
+        {
+            throw new ArgumentException($"FunctionDeclaration '{Name}' ParametersJsonSchema cannot be JsonValueKind.Undefined.", paramName);
+        }
+
+        if (ResponseJsonSchema is { ValueKind: JsonValueKind.Undefined })
+        {
+            throw new ArgumentException($"FunctionDeclaration '{Name}' ResponseJsonSchema cannot be JsonValueKind.Undefined.", paramName);
+        }
+
+        Parameters?.Validate($"FunctionDeclaration('{Name}').Parameters", paramName);
+        Response?.Validate($"FunctionDeclaration('{Name}').Response", paramName);
     }
 }

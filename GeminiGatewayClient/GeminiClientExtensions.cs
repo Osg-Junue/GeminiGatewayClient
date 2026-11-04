@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.Json;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
@@ -177,13 +178,52 @@ public static class GeminiClientExtensions
 
         if (response.Candidates is [{ Content: { RawParts: { Count: > 0 } parts } candidateContent }, ..])
         {
+            var hasMeaningfulPart = false;
+            var needsNormalization = false;
             for (var i = 0; i < parts.Count; i++)
             {
-                if (parts[i] is { } part && !IsPureEmptyTextPart(part))
+                if (parts[i] is not { } part || IsPureEmptyTextPart(part))
+                {
+                    needsNormalization = true;
+                    continue;
+                }
+
+                hasMeaningfulPart = true;
+                if (string.IsNullOrEmpty(part.Text) && HasNonTextPrimaryDataField(part))
+                {
+                    needsNormalization = true;
+                }
+            }
+
+            if (hasMeaningfulPart)
+            {
+                if (!needsNormalization)
                 {
                     content = candidateContent;
                     return true;
                 }
+
+                var normalized = candidateContent.Clone();
+                var normalizedParts = new List<Part>(parts.Count);
+                for (var i = 0; i < parts.Count; i++)
+                {
+                    if (parts[i] is not { } part || IsPureEmptyTextPart(part))
+                    {
+                        continue;
+                    }
+
+                    var clonedPart = part.Clone();
+                    if (string.IsNullOrEmpty(clonedPart.Text) && HasNonTextPrimaryDataField(clonedPart))
+                    {
+                        clonedPart.Text = null;
+                    }
+
+                    normalizedParts.Add(clonedPart);
+                }
+
+                normalized.Parts = normalizedParts;
+                content = normalized;
+                return true;
             }
         }
 
@@ -208,6 +248,8 @@ public static class GeminiClientExtensions
 
         var aggregatedParts = new List<Part>();
         var role = Role.Model;
+        StringBuilder? textBuilder = null;
+        Part? activeBuilderPart = null;
 
         foreach (var chunk in chunks)
         {
@@ -230,10 +272,12 @@ public static class GeminiClientExtensions
             {
                 if (parts[i] is { } part)
                 {
-                    AppendAggregatedPart(aggregatedParts, part);
+                    AppendAggregatedPart(aggregatedParts, part, ref activeBuilderPart, ref textBuilder);
                 }
             }
         }
+
+        FlushTextBuilder(ref activeBuilderPart, textBuilder);
 
         return aggregatedParts.Count > 0
             ? new Content { Role = role, Parts = aggregatedParts }
@@ -259,6 +303,8 @@ public static class GeminiClientExtensions
 
         var aggregatedParts = new List<Part>();
         var role = Role.Model;
+        StringBuilder? textBuilder = null;
+        Part? activeBuilderPart = null;
 
         await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
@@ -281,17 +327,23 @@ public static class GeminiClientExtensions
             {
                 if (parts[i] is { } part)
                 {
-                    AppendAggregatedPart(aggregatedParts, part);
+                    AppendAggregatedPart(aggregatedParts, part, ref activeBuilderPart, ref textBuilder);
                 }
             }
         }
+
+        FlushTextBuilder(ref activeBuilderPart, textBuilder);
 
         return aggregatedParts.Count > 0
             ? new Content { Role = role, Parts = aggregatedParts }
             : null;
     }
 
-    private static void AppendAggregatedPart(List<Part> aggregatedParts, Part part)
+    private static void AppendAggregatedPart(
+        List<Part> aggregatedParts,
+        Part part,
+        ref Part? activeBuilderPart,
+        ref StringBuilder? textBuilder)
     {
         if (IsPureEmptyTextPart(part))
         {
@@ -317,6 +369,7 @@ public static class GeminiClientExtensions
                     var last = aggregatedParts[^1];
                     if (string.IsNullOrEmpty(last.ThoughtSignature))
                     {
+                        FlushTextBuilder(ref activeBuilderPart, textBuilder);
                         last.ThoughtSignature = part.ThoughtSignature;
                         return;
                     }
@@ -327,11 +380,13 @@ public static class GeminiClientExtensions
                     }
                 }
 
+                FlushTextBuilder(ref activeBuilderPart, textBuilder);
                 aggregatedParts.Add(new Part { ThoughtSignature = part.ThoughtSignature });
                 return;
             }
 
             // Thought text chunk or normal text chunk: coalesce consecutive chunks of the same kind
+            // only while the preceding part has not yet been closed with a thoughtSignature.
             if (!string.IsNullOrEmpty(part.Text) && aggregatedParts.Count > 0)
             {
                 var last = aggregatedParts[^1];
@@ -346,14 +401,24 @@ public static class GeminiClientExtensions
                     last.CodeExecutionResult is null &&
                     last.VideoMetadata is null &&
                     (last.ExtensionData is null || last.ExtensionData.Count == 0) &&
-                    (string.IsNullOrEmpty(last.ThoughtSignature) || string.IsNullOrEmpty(part.ThoughtSignature));
+                    string.IsNullOrEmpty(last.ThoughtSignature);
 
                 if (lastIsSameTextKind)
                 {
-                    last.Text += part.Text;
+                    if (!ReferenceEquals(activeBuilderPart, last))
+                    {
+                        FlushTextBuilder(ref activeBuilderPart, textBuilder);
+                        textBuilder ??= new StringBuilder(Math.Max(64, last.Text!.Length + part.Text.Length));
+                        textBuilder.Clear();
+                        textBuilder.Append(last.Text);
+                        activeBuilderPart = last;
+                    }
+
+                    textBuilder!.Append(part.Text);
                     if (!string.IsNullOrEmpty(part.ThoughtSignature))
                     {
                         last.ThoughtSignature = part.ThoughtSignature;
+                        FlushTextBuilder(ref activeBuilderPart, textBuilder);
                     }
 
                     return;
@@ -361,8 +426,34 @@ public static class GeminiClientExtensions
             }
         }
 
-        aggregatedParts.Add(part.Clone());
+        FlushTextBuilder(ref activeBuilderPart, textBuilder);
+
+        var cloned = part.Clone();
+        if (string.IsNullOrEmpty(cloned.Text) && HasNonTextPrimaryDataField(cloned))
+        {
+            cloned.Text = null;
+        }
+
+        aggregatedParts.Add(cloned);
     }
+
+    private static void FlushTextBuilder(ref Part? activeBuilderPart, StringBuilder? textBuilder)
+    {
+        if (activeBuilderPart is not null && textBuilder is not null)
+        {
+            activeBuilderPart.Text = textBuilder.ToString();
+            activeBuilderPart = null;
+            textBuilder.Clear();
+        }
+    }
+
+    private static bool HasNonTextPrimaryDataField(Part part) =>
+        part.InlineData is not null ||
+        part.FileData is not null ||
+        part.FunctionCall is not null ||
+        part.FunctionResponse is not null ||
+        part.ExecutableCode is not null ||
+        part.CodeExecutionResult is not null;
 
     private static bool IsPureEmptyTextPart(Part part) =>
         string.IsNullOrEmpty(part.Text) &&

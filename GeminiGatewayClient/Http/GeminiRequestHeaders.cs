@@ -15,12 +15,12 @@ internal sealed class GeminiRequestHeaders
         KeyValuePair<string, string>[] staticHeaders,
         string apiKeyHeader,
         string? apiKeyPrefix,
-        Func<CancellationToken, ValueTask<string>>? apiKeyProvider)
+        Func<CancellationToken, ValueTask<string>>? _apiKeyProvider)
     {
         _staticHeaders = staticHeaders;
         _apiKeyHeader = apiKeyHeader;
         _apiKeyPrefix = apiKeyPrefix;
-        _apiKeyProvider = apiKeyProvider;
+        this._apiKeyProvider = _apiKeyProvider;
     }
 
     /// <summary>
@@ -105,19 +105,22 @@ internal sealed class GeminiRequestHeaders
     private async ValueTask ApplyDynamicKeyAsync(HttpRequestMessage message, CancellationToken cancellationToken)
     {
         var key = await _apiKeyProvider!(cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(key) || ContainsNewLine(key))
+        if (string.IsNullOrWhiteSpace(key) || ContainsInvalidControlChars(key, allowHorizontalTab: true))
         {
-            throw new InvalidOperationException("GeminiClientOptions.ApiKeyProvider returned an empty, whitespace-only, or newline-containing value.");
+            throw new InvalidOperationException("GeminiClientOptions.ApiKeyProvider returned an empty, whitespace-only, or control/newline-containing value.");
         }
 
-        message.Headers.TryAddWithoutValidation(_apiKeyHeader, $"{_apiKeyPrefix}{key}");
+        if (!message.Headers.TryAddWithoutValidation(_apiKeyHeader, $"{_apiKeyPrefix}{key}"))
+        {
+            throw new InvalidOperationException($"Failed to apply credential header '{_apiKeyHeader}'.");
+        }
     }
 
     private static void Validate(HttpRequestMessage probe, string name, string value, string paramName)
     {
-        if (ContainsNewLine(name) || ContainsNewLine(value))
+        if (ContainsInvalidControlChars(name, allowHorizontalTab: false) || ContainsInvalidControlChars(value, allowHorizontalTab: true))
         {
-            throw new ArgumentException($"Header '{name}' contains invalid newline characters.", paramName);
+            throw new ArgumentException($"Header '{name}' contains invalid newline or control characters.", paramName);
         }
 
         if (!probe.Headers.TryAddWithoutValidation(name, value))
@@ -128,6 +131,16 @@ internal sealed class GeminiRequestHeaders
         }
     }
 
-    private static bool ContainsNewLine(string value) => value.AsSpan().IndexOfAny('\r', '\n') >= 0;
-}
+    private static bool ContainsInvalidControlChars(string value, bool allowHorizontalTab)
+    {
+        foreach (var ch in value.AsSpan())
+        {
+            if ((ch < 0x20 && (!allowHorizontalTab || ch != '\t')) || ch == 0x7F)
+            {
+                return true;
+            }
+        }
 
+        return false;
+    }
+}

@@ -14,46 +14,46 @@ public enum BlockReason
     /// Default value when the block reason is unspecified (<c>BLOCK_REASON_UNSPECIFIED</c>).
     /// </summary>
     [JsonStringEnumMemberName("BLOCK_REASON_UNSPECIFIED")]
-    Unspecified,
+    Unspecified = 0,
 
     /// <summary>
     /// Prompt was blocked for safety reasons. Inspect <see cref="PromptFeedback.SafetyRatings"/> for details.
     /// </summary>
     [JsonStringEnumMemberName("SAFETY")]
-    Safety,
+    Safety = 1,
 
     /// <summary>
     /// Prompt was blocked for unknown or other platform reasons.
     /// </summary>
     [JsonStringEnumMemberName("OTHER")]
-    Other,
+    Other = 2,
 
     /// <summary>
     /// Prompt was blocked because it contained terms from a terminology blocklist.
     /// </summary>
     [JsonStringEnumMemberName("BLOCKLIST")]
-    BlockList,
+    BlockList = 3,
 
     /// <summary>
     /// Prompt was blocked for potentially containing prohibited content.
     /// </summary>
     [JsonStringEnumMemberName("PROHIBITED_CONTENT")]
-    ProhibitedContent,
+    ProhibitedContent = 4,
 
     /// <summary>
     /// Prompt was blocked because candidates would violate image generation safety policies.
     /// </summary>
     [JsonStringEnumMemberName("IMAGE_SAFETY")]
-    ImageSafety,
+    ImageSafety = 5,
 
     /// <summary>
     /// Prompt was blocked due to jailbreak or prompt-injection detection.
     /// </summary>
     [JsonStringEnumMemberName("JAILBREAK")]
-    Jailbreak,
+    Jailbreak = 6,
 
     /// <summary>
     /// Fallback value used when the server returns a block reason not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }

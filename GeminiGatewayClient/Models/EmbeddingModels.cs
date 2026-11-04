@@ -95,6 +95,11 @@ public sealed class EmbedContentRequest
             throw new ArgumentException($"{pathPrefix}.Content cannot be null.", paramName);
         }
 
+        if (Content.Role is { } role && (role == Role.Unknown || !Enum.IsDefined(role)))
+        {
+            throw new ArgumentException($"{pathPrefix}.Content.Role cannot be Role.Unknown.", paramName);
+        }
+
         if ((Content.RawParts is null || Content.RawParts.Count == 0) &&
             (Content.ExtensionData is null || Content.ExtensionData.Count == 0))
         {
@@ -267,59 +272,59 @@ public enum TaskType
     /// Unset value, which defaults to one of the other task types on the server (<c>TASK_TYPE_UNSPECIFIED</c>).
     /// </summary>
     [JsonStringEnumMemberName("TASK_TYPE_UNSPECIFIED")]
-    Unspecified,
+    Unspecified = 0,
 
     /// <summary>
     /// The given text is a query in a search/retrieval setting (<c>RETRIEVAL_QUERY</c>).
     /// </summary>
     [JsonStringEnumMemberName("RETRIEVAL_QUERY")]
-    RetrievalQuery,
+    RetrievalQuery = 1,
 
     /// <summary>
     /// The given text is a document from the corpus being searched (<c>RETRIEVAL_DOCUMENT</c>).
     /// </summary>
     [JsonStringEnumMemberName("RETRIEVAL_DOCUMENT")]
-    RetrievalDocument,
+    RetrievalDocument = 2,
 
     /// <summary>
     /// The given text will be used for semantic textual similarity (STS) (<c>SEMANTIC_SIMILARITY</c>).
     /// </summary>
     [JsonStringEnumMemberName("SEMANTIC_SIMILARITY")]
-    SemanticSimilarity,
+    SemanticSimilarity = 3,
 
     /// <summary>
     /// The given text will be classified (<c>CLASSIFICATION</c>).
     /// </summary>
     [JsonStringEnumMemberName("CLASSIFICATION")]
-    Classification,
+    Classification = 4,
 
     /// <summary>
     /// The embeddings will be used for clustering (<c>CLUSTERING</c>).
     /// </summary>
     [JsonStringEnumMemberName("CLUSTERING")]
-    Clustering,
+    Clustering = 5,
 
     /// <summary>
     /// The given text will be used for question answering (<c>QUESTION_ANSWERING</c>).
     /// </summary>
     [JsonStringEnumMemberName("QUESTION_ANSWERING")]
-    QuestionAnswering,
+    QuestionAnswering = 6,
 
     /// <summary>
     /// The given text will be used for fact verification (<c>FACT_VERIFICATION</c>).
     /// </summary>
     [JsonStringEnumMemberName("FACT_VERIFICATION")]
-    FactVerification,
+    FactVerification = 7,
 
     /// <summary>
     /// The given text is a natural-language query for code retrieval (<c>CODE_RETRIEVAL_QUERY</c>).
     /// </summary>
     [JsonStringEnumMemberName("CODE_RETRIEVAL_QUERY")]
-    CodeRetrievalQuery,
+    CodeRetrievalQuery = 8,
 
     /// <summary>
     /// Fallback value used when the server returns a task type not yet defined in this version of the library.
     /// </summary>
-    Unknown
+    Unknown = -1
 }
 

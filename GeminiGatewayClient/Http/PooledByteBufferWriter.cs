@@ -13,22 +13,49 @@ internal sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
 
     private byte[] _buffer;
     private int _index;
+    private bool _disposed;
 
     public PooledByteBufferWriter(int initialCapacity = DefaultInitialBufferSize)
     {
         _buffer = ArrayPool<byte>.Shared.Rent(Math.Max(initialCapacity, MinimumBufferSize));
     }
 
-    public ReadOnlySpan<byte> WrittenSpan => _buffer.AsSpan(0, _index);
+    public ReadOnlySpan<byte> WrittenSpan
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _buffer.AsSpan(0, _index);
+        }
+    }
 
-    public ReadOnlyMemory<byte> WrittenMemory => _buffer.AsMemory(0, _index);
+    public ReadOnlyMemory<byte> WrittenMemory
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _buffer.AsMemory(0, _index);
+        }
+    }
 
-    public int WrittenCount => _index;
+    public int WrittenCount
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _index;
+        }
+    }
 
-    public void Clear() => _index = 0;
+    public void Clear()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _index = 0;
+    }
 
     public void Advance(int count)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentOutOfRangeException.ThrowIfNegative(count);
         if (_index > _buffer.Length - count)
         {
@@ -40,18 +67,26 @@ internal sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
 
     public Memory<byte> GetMemory(int sizeHint = 0)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         CheckAndResizeBuffer(sizeHint);
         return _buffer.AsMemory(_index);
     }
 
     public Span<byte> GetSpan(int sizeHint = 0)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         CheckAndResizeBuffer(sizeHint);
         return _buffer.AsSpan(_index);
     }
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         var toReturn = _buffer;
         _buffer = [];
         _index = 0;

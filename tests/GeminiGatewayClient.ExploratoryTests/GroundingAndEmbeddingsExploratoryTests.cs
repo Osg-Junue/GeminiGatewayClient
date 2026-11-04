@@ -175,10 +175,15 @@ public sealed class GroundingAndEmbeddingsExploratoryTests(ExploratoryTestFixtur
         const int dimensions = 256;
 
         var sw = Stopwatch.StartNew();
-        var queryResponse = await client.EmbedContentAsync(
+        var singleRequest = EmbedContentRequest.FromText(
             text: "C# の IAsyncEnumerable<T> を使った非同期ストリーミング処理の実装方法",
             taskType: TaskType.RetrievalQuery,
             outputDimensionality: dimensions);
+        Assert.Null(singleRequest.Model);
+
+        var queryResponse = await client.EmbedContentAsync(singleRequest);
+        // Caller's request instance must remain unmutated after normalization
+        Assert.Null(singleRequest.Model);
 
         var batchResponse = await client.BatchEmbedContentsAsync(new BatchEmbedContentsRequest
         {
@@ -272,4 +277,3 @@ public sealed class GroundingAndEmbeddingsExploratoryTests(ExploratoryTestFixtur
         return dot / (Math.Sqrt(normA) * Math.Sqrt(normB));
     }
 }
-

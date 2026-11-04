@@ -273,10 +273,11 @@ public partial class ChatClientTests
         Assert.NotNull(handler.LastRequestBody);
         using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
         var assistantParts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
-        Assert.Equal(3, assistantParts.GetArrayLength());
+        Assert.Equal(2, assistantParts.GetArrayLength());
         Assert.True(assistantParts[0].GetProperty("thought").GetBoolean());
         Assert.Equal("sig-thought", assistantParts[0].GetProperty("thoughtSignature").GetString());
-        Assert.Equal("sig-trailing", assistantParts[2].GetProperty("thoughtSignature").GetString());
+        Assert.Equal("Final answer.", assistantParts[1].GetProperty("text").GetString());
+        Assert.Equal("sig-trailing", assistantParts[1].GetProperty("thoughtSignature").GetString());
     }
 
     [Fact]
