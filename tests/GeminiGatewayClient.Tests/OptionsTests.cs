@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -304,5 +305,108 @@ public class OptionsTests
         }, httpClient);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.GenerateContentAsync("Hi"));
+    }
+
+    [Fact]
+    public void GeminiClientOptions_ToString_And_RedactedEndpoint_MaskSensitiveQueryParameters()
+    {
+        var options = new GeminiClientOptions
+        {
+            Endpoint = new Uri("https://generativelanguage.googleapis.com/v1beta?api-version=2026-01-01&key=AIzaSySuperSecretKey999&access_token=BearerTok123&sig=MySig456#secretFragment"),
+            Model = DefaultModel
+        };
+
+        var text = options.ToString();
+        var redacted = options.RedactedEndpoint;
+
+        Assert.DoesNotContain("AIzaSySuperSecretKey999", text);
+        Assert.DoesNotContain("BearerTok123", text);
+        Assert.DoesNotContain("MySig456", text);
+        Assert.DoesNotContain("secretFragment", text);
+        Assert.Contains("api-version=2026-01-01", text);
+        Assert.Contains("key=***", text);
+        Assert.Contains("access_token=***", text);
+        Assert.Contains("sig=***", text);
+        Assert.Contains("#***", redacted);
+
+        var userInfoAndFragmentOnly = new GeminiClientOptions
+        {
+            Endpoint = new Uri("https://svcUser:TopSecretPass@gateway.example.com/v1beta#fragmentToken789"),
+            Model = DefaultModel
+        };
+        var userInfoText = userInfoAndFragmentOnly.ToString();
+        Assert.DoesNotContain("svcUser", userInfoText);
+        Assert.DoesNotContain("TopSecretPass", userInfoText);
+        Assert.DoesNotContain("fragmentToken789", userInfoText);
+        Assert.Equal("https://***@gateway.example.com/v1beta#***", userInfoAndFragmentOnly.RedactedEndpoint);
+    }
+
+    [Fact]
+    public void AddGeminiClient_RegistersValidateOnStart_AndFailsFastViaStartupValidator()
+    {
+        var invalidServices = new ServiceCollection();
+        invalidServices.AddGeminiClient(options =>
+        {
+            options.Endpoint = new Uri("http://remote-insecure-host.example.com/v1beta");
+            options.Model = DefaultModel;
+        });
+
+        using var invalidProvider = invalidServices.BuildServiceProvider();
+        var startupValidator = invalidProvider.GetRequiredService<IStartupValidator>();
+        Assert.Throws<OptionsValidationException>(() => startupValidator.Validate());
+
+        var validServices = new ServiceCollection();
+        validServices.AddGeminiClient(options =>
+        {
+            options.Model = DefaultModel;
+            options.ApiKey = "valid-key";
+        });
+
+        using var validProvider = validServices.BuildServiceProvider();
+        validProvider.GetRequiredService<IStartupValidator>().Validate();
+    }
+
+    [Fact]
+    public void GeminiClientOptions_BindConfiguration_BindsAllPropertiesIncludingAdditionalHeaders()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Gemini:Endpoint"] = "https://gateway.example.com/gemini/v1beta",
+                ["Gemini:Model"] = "gemini-2.5-pro",
+                ["Gemini:EmbeddingModel"] = "gemini-embedding-001",
+                ["Gemini:ApiKey"] = "cfg-secret-key",
+                ["Gemini:ApiKeyHeader"] = "Authorization",
+                ["Gemini:ApiKeyPrefix"] = "Bearer ",
+                ["Gemini:AdditionalHeaders:X-Tenant-Id"] = "tenant-42",
+                ["Gemini:AdditionalHeaders:X-Environment"] = "production",
+                ["Gemini:Timeout"] = "00:03:30",
+                ["Gemini:StreamIdleTimeout"] = "00:01:15",
+                ["Gemini:AllowInsecureHttp"] = "true",
+                ["Gemini:StreamingFormat"] = "JsonArray"
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddOptions<GeminiClientOptions>().BindConfiguration("Gemini");
+        services.AddGeminiClient();
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IStartupValidator>().Validate();
+
+        var bound = provider.GetRequiredService<IOptions<GeminiClientOptions>>().Value;
+        Assert.Equal(new Uri("https://gateway.example.com/gemini/v1beta"), bound.Endpoint);
+        Assert.Equal("gemini-2.5-pro", bound.Model);
+        Assert.Equal("gemini-embedding-001", bound.EmbeddingModel);
+        Assert.Equal("cfg-secret-key", bound.ApiKey);
+        Assert.Equal("Authorization", bound.ApiKeyHeader);
+        Assert.Equal("Bearer ", bound.ApiKeyPrefix);
+        Assert.Equal("tenant-42", bound.AdditionalHeaders["X-Tenant-Id"]);
+        Assert.Equal("production", bound.AdditionalHeaders["X-Environment"]);
+        Assert.Equal(TimeSpan.FromMinutes(3.5), bound.Timeout);
+        Assert.Equal(TimeSpan.FromSeconds(75), bound.StreamIdleTimeout);
+        Assert.True(bound.AllowInsecureHttp);
+        Assert.Equal(GeminiStreamingFormat.JsonArray, bound.StreamingFormat);
     }
 }

@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.Json;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
@@ -247,6 +248,8 @@ public static class GeminiClientExtensions
 
         var aggregatedParts = new List<Part>();
         var role = Role.Model;
+        StringBuilder? textBuilder = null;
+        Part? activeBuilderPart = null;
 
         foreach (var chunk in chunks)
         {
@@ -269,10 +272,12 @@ public static class GeminiClientExtensions
             {
                 if (parts[i] is { } part)
                 {
-                    AppendAggregatedPart(aggregatedParts, part);
+                    AppendAggregatedPart(aggregatedParts, part, ref activeBuilderPart, ref textBuilder);
                 }
             }
         }
+
+        FlushTextBuilder(ref activeBuilderPart, textBuilder);
 
         return aggregatedParts.Count > 0
             ? new Content { Role = role, Parts = aggregatedParts }
@@ -298,6 +303,8 @@ public static class GeminiClientExtensions
 
         var aggregatedParts = new List<Part>();
         var role = Role.Model;
+        StringBuilder? textBuilder = null;
+        Part? activeBuilderPart = null;
 
         await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
@@ -320,17 +327,23 @@ public static class GeminiClientExtensions
             {
                 if (parts[i] is { } part)
                 {
-                    AppendAggregatedPart(aggregatedParts, part);
+                    AppendAggregatedPart(aggregatedParts, part, ref activeBuilderPart, ref textBuilder);
                 }
             }
         }
+
+        FlushTextBuilder(ref activeBuilderPart, textBuilder);
 
         return aggregatedParts.Count > 0
             ? new Content { Role = role, Parts = aggregatedParts }
             : null;
     }
 
-    private static void AppendAggregatedPart(List<Part> aggregatedParts, Part part)
+    private static void AppendAggregatedPart(
+        List<Part> aggregatedParts,
+        Part part,
+        ref Part? activeBuilderPart,
+        ref StringBuilder? textBuilder)
     {
         if (IsPureEmptyTextPart(part))
         {
@@ -356,6 +369,7 @@ public static class GeminiClientExtensions
                     var last = aggregatedParts[^1];
                     if (string.IsNullOrEmpty(last.ThoughtSignature))
                     {
+                        FlushTextBuilder(ref activeBuilderPart, textBuilder);
                         last.ThoughtSignature = part.ThoughtSignature;
                         return;
                     }
@@ -366,6 +380,7 @@ public static class GeminiClientExtensions
                     }
                 }
 
+                FlushTextBuilder(ref activeBuilderPart, textBuilder);
                 aggregatedParts.Add(new Part { ThoughtSignature = part.ThoughtSignature });
                 return;
             }
@@ -390,16 +405,28 @@ public static class GeminiClientExtensions
 
                 if (lastIsSameTextKind)
                 {
-                    last.Text += part.Text;
+                    if (!ReferenceEquals(activeBuilderPart, last))
+                    {
+                        FlushTextBuilder(ref activeBuilderPart, textBuilder);
+                        textBuilder ??= new StringBuilder(Math.Max(64, last.Text!.Length + part.Text.Length));
+                        textBuilder.Clear();
+                        textBuilder.Append(last.Text);
+                        activeBuilderPart = last;
+                    }
+
+                    textBuilder!.Append(part.Text);
                     if (!string.IsNullOrEmpty(part.ThoughtSignature))
                     {
                         last.ThoughtSignature = part.ThoughtSignature;
+                        FlushTextBuilder(ref activeBuilderPart, textBuilder);
                     }
 
                     return;
                 }
             }
         }
+
+        FlushTextBuilder(ref activeBuilderPart, textBuilder);
 
         var cloned = part.Clone();
         if (string.IsNullOrEmpty(cloned.Text) && HasNonTextPrimaryDataField(cloned))
@@ -408,6 +435,16 @@ public static class GeminiClientExtensions
         }
 
         aggregatedParts.Add(cloned);
+    }
+
+    private static void FlushTextBuilder(ref Part? activeBuilderPart, StringBuilder? textBuilder)
+    {
+        if (activeBuilderPart is not null && textBuilder is not null)
+        {
+            activeBuilderPart.Text = textBuilder.ToString();
+            activeBuilderPart = null;
+            textBuilder.Clear();
+        }
     }
 
     private static bool HasNonTextPrimaryDataField(Part part) =>

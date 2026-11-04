@@ -254,8 +254,10 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         Uri requestUri,
         GenerateContentRequest request,
         bool serverSentEvents,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        CancellationToken requestCancellationToken,
+        [EnumeratorCancellation] CancellationToken enumeratorCancellationToken = default)
     {
+        using var linkedCts = CreateLinkedTokenSource(requestCancellationToken, enumeratorCancellationToken, out var cancellationToken);
         using var httpRequest = await CreateRequestMessageAsync(
             requestUri,
             request,
@@ -300,6 +302,22 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                 await chunks.DisposeAsync().ConfigureAwait(false);
             }
         }
+    }
+
+    internal static CancellationTokenSource? CreateLinkedTokenSource(
+        CancellationToken token1,
+        CancellationToken token2,
+        out CancellationToken effectiveToken)
+    {
+        if (token1.CanBeCanceled && token2.CanBeCanceled && token1 != token2)
+        {
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(token1, token2);
+            effectiveToken = cts.Token;
+            return cts;
+        }
+
+        effectiveToken = token1.CanBeCanceled ? token1 : token2;
+        return null;
     }
 
     private Uri PrepareRequest(GenerateContentRequest request, string? model, string operation, bool serverSentEvents)
@@ -456,18 +474,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         {
             try
             {
-                watchdog.BeforeRead();
-                var readSucceeded = false;
-                try
-                {
-                    var exception = await GeminiErrorParser.CreateFromResponseAsync(response, watchdog.Token).ConfigureAwait(false);
-                    readSucceeded = true;
-                    throw exception;
-                }
-                finally
-                {
-                    watchdog.AfterRead(readSucceeded);
-                }
+                var exception = await GeminiErrorParser.CreateFromResponseAsync(response, watchdog).ConfigureAwait(false);
+                throw exception;
             }
             catch (OperationCanceledException ex) when (watchdog.HasTimedOut)
             {

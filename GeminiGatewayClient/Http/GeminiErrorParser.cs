@@ -43,9 +43,19 @@ internal static class GeminiErrorParser
     /// <summary>
     /// Builds an exception from a non-success HTTP response, reading at most <see cref="MaxErrorBodyChars"/> of its body.
     /// </summary>
-    public static async Task<GeminiApiException> CreateFromResponseAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    public static Task<GeminiApiException> CreateFromResponseAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        var body = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        using var watchdog = new StreamIdleWatchdog(idleTimeout: null, cancellationToken);
+        return CreateFromResponseAsync(response, watchdog);
+    }
+
+    /// <summary>
+    /// Builds an exception from a non-success HTTP response, reading at most <see cref="MaxErrorBodyChars"/> of its body
+    /// while enforcing per-read idle timeouts via <paramref name="watchdog"/>.
+    /// </summary>
+    public static async Task<GeminiApiException> CreateFromResponseAsync(HttpResponseMessage response, StreamIdleWatchdog watchdog)
+    {
+        var body = await ReadBoundedAsync(response.Content, watchdog).ConfigureAwait(false);
         var details = Parse(body);
         var retryAfter = details.RetryDelay ?? GetRetryAfterHeader(response);
 
@@ -108,7 +118,7 @@ internal static class GeminiErrorParser
 
     private static HttpStatusCode MapStatusCode(int? code, string? rpcStatus, HttpStatusCode fallback)
     {
-        if (code is >= 100 and <= 599)
+        if (code is >= 100 and <= 599 and not (>= 200 and <= 299))
         {
             return (HttpStatusCode)code.Value;
         }
@@ -240,9 +250,21 @@ internal static class GeminiErrorParser
         return null;
     }
 
-    private static async Task<string> ReadBoundedAsync(HttpContent content, CancellationToken cancellationToken)
+    private static async Task<string> ReadBoundedAsync(HttpContent content, StreamIdleWatchdog watchdog)
     {
-        var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        Stream stream;
+        watchdog.BeforeRead();
+        var openSucceeded = false;
+        try
+        {
+            stream = await content.ReadAsStreamAsync(watchdog.Token).ConfigureAwait(false);
+            openSucceeded = true;
+        }
+        finally
+        {
+            watchdog.AfterRead(openSucceeded);
+        }
+
         await using (stream.ConfigureAwait(false))
         {
             using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true);
@@ -255,7 +277,19 @@ internal static class GeminiErrorParser
 
                 while (remaining > 0)
                 {
-                    var read = await reader.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
+                    int read;
+                    watchdog.BeforeRead();
+                    var readSucceeded = false;
+                    try
+                    {
+                        read = await reader.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), watchdog.Token).ConfigureAwait(false);
+                        readSucceeded = true;
+                    }
+                    finally
+                    {
+                        watchdog.AfterRead(readSucceeded);
+                    }
+
                     if (read == 0)
                     {
                         break;

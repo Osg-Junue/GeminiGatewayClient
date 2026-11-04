@@ -16,7 +16,7 @@ namespace GeminiGatewayClient;
 /// <see cref="GeminiClient"/> takes an immutable, validated snapshot when it is constructed, so later changes do not affect existing clients.
 /// </para>
 /// </summary>
-[DebuggerDisplay("Endpoint = {Endpoint}, Model = {Model}, EmbeddingModel = {EmbeddingModel}, ApiKeyHeader = {ApiKeyHeader}")]
+[DebuggerDisplay("Endpoint = {RedactedEndpoint}, Model = {Model}, EmbeddingModel = {EmbeddingModel}, ApiKeyHeader = {ApiKeyHeader}")]
 public sealed class GeminiClientOptions
 {
     /// <summary>
@@ -164,14 +164,16 @@ public sealed class GeminiClientOptions
     /// </summary>
     public JsonSerializerOptions? ToolSerializerOptions { get; set; }
 
+    internal string RedactedEndpoint => FormatEndpoint(Endpoint);
+
     /// <summary>
-    /// Formats option members while redacting <see cref="ApiKey"/> and <see cref="AdditionalHeaders"/> values
-    /// so credentials are never leaked through <c>ToString()</c> or structured logging.
+    /// Formats option members while redacting <see cref="ApiKey"/>, <see cref="AdditionalHeaders"/> values, and sensitive
+    /// <see cref="Endpoint"/> query parameters so credentials are never leaked through <c>ToString()</c> or structured logging.
     /// </summary>
     public override string ToString()
     {
         var builder = new StringBuilder("GeminiClientOptions { ");
-        builder.Append("Endpoint = ").Append(Endpoint);
+        builder.Append("Endpoint = ").Append(RedactedEndpoint);
         builder.Append(", Model = ").Append(Model);
         if (!string.IsNullOrWhiteSpace(EmbeddingModel))
         {
@@ -195,6 +197,107 @@ public sealed class GeminiClientOptions
         builder.Append(", StreamingFormat = ").Append(StreamingFormat);
         return builder.Append(" }").ToString();
     }
+
+    private static string FormatEndpoint(Uri endpoint)
+    {
+        var raw = endpoint.ToString();
+        var hasUserInfo = endpoint.IsAbsoluteUri && !string.IsNullOrEmpty(endpoint.UserInfo);
+        var fragmentIndex = raw.IndexOf('#', StringComparison.Ordinal);
+        var searchEnd = fragmentIndex >= 0 ? fragmentIndex : raw.Length;
+        var queryIndex = raw.AsSpan(0, searchEnd).IndexOf('?');
+
+        if (!hasUserInfo && queryIndex < 0 && fragmentIndex < 0)
+        {
+            return raw;
+        }
+
+        var pathEnd = queryIndex >= 0 ? queryIndex : searchEnd;
+        var sb = new StringBuilder(raw.Length);
+
+        var prefixStart = 0;
+        if (hasUserInfo)
+        {
+            var schemeEnd = raw.IndexOf("://", StringComparison.Ordinal);
+            if (schemeEnd >= 0)
+            {
+                var atIndex = raw.IndexOf('@', schemeEnd + 3);
+                if (atIndex > schemeEnd + 3 && atIndex < pathEnd)
+                {
+                    sb.Append(raw.AsSpan(0, schemeEnd + 3)).Append("***@");
+                    prefixStart = atIndex + 1;
+                }
+            }
+        }
+
+        sb.Append(raw.AsSpan(prefixStart, pathEnd - prefixStart));
+
+        if (queryIndex >= 0)
+        {
+            sb.Append('?');
+            var querySpan = raw.AsSpan(queryIndex + 1, searchEnd - (queryIndex + 1));
+            var first = true;
+            var remaining = querySpan;
+            while (!remaining.IsEmpty)
+            {
+                var ampIndex = remaining.IndexOf('&');
+                ReadOnlySpan<char> pair;
+                if (ampIndex >= 0)
+                {
+                    pair = remaining[..ampIndex];
+                    remaining = remaining[(ampIndex + 1)..];
+                }
+                else
+                {
+                    pair = remaining;
+                    remaining = ReadOnlySpan<char>.Empty;
+                }
+
+                if (!first)
+                {
+                    sb.Append('&');
+                }
+
+                first = false;
+
+                var eqIndex = pair.IndexOf('=');
+                if (eqIndex > 0)
+                {
+                    var paramName = pair[..eqIndex];
+                    sb.Append(paramName).Append('=');
+                    if (IsSensitiveQueryParam(paramName))
+                    {
+                        sb.Append("***");
+                    }
+                    else
+                    {
+                        sb.Append(pair[(eqIndex + 1)..]);
+                    }
+                }
+                else
+                {
+                    sb.Append(pair);
+                }
+            }
+        }
+
+        if (fragmentIndex >= 0)
+        {
+            sb.Append("#***");
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool IsSensitiveQueryParam(ReadOnlySpan<char> name) =>
+        name.Contains("key", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("sig", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("auth", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("pass", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("pwd", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("cred", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("code", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

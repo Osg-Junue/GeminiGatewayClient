@@ -18,6 +18,33 @@ public sealed class GeminiApiException : Exception
     }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Initializes a new instance of <see cref="GeminiApiException"/> with a default message.
+    /// </summary>
+    public GeminiApiException()
+        : base("Gemini API request failed.")
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of <see cref="GeminiApiException"/> with the specified error message.
+    /// </summary>
+    /// <param name="message">High-level error description.</param>
+    public GeminiApiException(string? message)
+        : base(message ?? "Gemini API request failed.")
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of <see cref="GeminiApiException"/> with the specified error message and inner exception.
+    /// </summary>
+    /// <param name="message">High-level error description.</param>
+    /// <param name="innerException">Underlying exception, if any.</param>
+    public GeminiApiException(string? message, Exception? innerException)
+        : base(message ?? "Gemini API request failed.", innerException)
+    {
+    }
+
+    /// <summary>
     /// Initializes a new instance of <see cref="GeminiApiException"/>.
     /// </summary>
     /// <param name="message">High-level error description.</param>

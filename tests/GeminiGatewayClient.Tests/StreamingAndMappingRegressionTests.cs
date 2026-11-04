@@ -1196,6 +1196,487 @@ public partial class ChatClientTests
         Assert.Equal(TimeSpan.FromSeconds(10) + TimeSpan.FromTicks(5), metadata.EndOffset?.ToTimeSpan());
     }
 
+    [Fact]
+    public void ToolJsonConverter_ToResponseObject_StronglyTypedDictionaries_SerializeAsJsonObjectsWithoutReflection()
+    {
+        var emptyOptions = new JsonSerializerOptions();
+
+        var stringDict = new Dictionary<string, string>
+        {
+            ["city"] = "Tokyo",
+            ["condition"] = "Sunny"
+        };
+        var stringElement = ToolJsonConverter.ToResponseObject(stringDict, emptyOptions);
+        Assert.Equal(JsonValueKind.Object, stringElement.ValueKind);
+        Assert.Equal("Tokyo", stringElement.GetProperty("city").GetString());
+        Assert.Equal("Sunny", stringElement.GetProperty("condition").GetString());
+
+        var intDict = new Dictionary<string, int>
+        {
+            ["tempC"] = 24,
+            ["humidity"] = 60
+        };
+        var intElement = ToolJsonConverter.ToResponseObject(intDict, emptyOptions);
+        Assert.Equal(JsonValueKind.Object, intElement.ValueKind);
+        Assert.Equal(24, intElement.GetProperty("tempC").GetInt32());
+        Assert.Equal(60, intElement.GetProperty("humidity").GetInt32());
+
+        var readOnlyDict = new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(
+            new Dictionary<string, object?>
+            {
+                ["nested"] = new List<Dictionary<string, int>>
+                {
+                    new() { ["score"] = 99 }
+                }
+            });
+        var roElement = ToolJsonConverter.ToResponseObject(readOnlyDict, emptyOptions);
+        Assert.Equal(JsonValueKind.Object, roElement.ValueKind);
+        Assert.Equal(99, roElement.GetProperty("nested")[0].GetProperty("score").GetInt32());
+
+        // Custom IReadOnlyDictionary<string, T> that does NOT implement non-generic System.Collections.IDictionary,
+        // plus LINQ IEnumerable<KeyValuePair<string, int>> projection.
+        var customRoString = new NonLegacyReadOnlyDictionary<string>(stringDict);
+        var customRoElement = ToolJsonConverter.ToResponseObject(customRoString, emptyOptions);
+        Assert.Equal(JsonValueKind.Object, customRoElement.ValueKind);
+        Assert.Equal("Tokyo", customRoElement.GetProperty("city").GetString());
+
+        var customRoInt = new NonLegacyReadOnlyDictionary<int>(intDict);
+        var customRoIntElement = ToolJsonConverter.ToResponseObject(customRoInt, emptyOptions);
+        Assert.Equal(JsonValueKind.Object, customRoIntElement.ValueKind);
+        Assert.Equal(24, customRoIntElement.GetProperty("tempC").GetInt32());
+
+        var linqFiltered = intDict.Where(kv => kv.Value > 30);
+        var linqElement = ToolJsonConverter.ToResponseObject(linqFiltered, emptyOptions);
+        Assert.Equal(JsonValueKind.Object, linqElement.ValueKind);
+        Assert.Equal(60, linqElement.GetProperty("humidity").GetInt32());
+    }
+
+    private sealed class NonLegacyReadOnlyDictionary<TValue>(IReadOnlyDictionary<string, TValue> inner) : IReadOnlyDictionary<string, TValue>
+    {
+        public TValue this[string key] => inner[key];
+        public IEnumerable<string> Keys => inner.Keys;
+        public IEnumerable<TValue> Values => inner.Values;
+        public int Count => inner.Count;
+        public bool ContainsKey(string key) => inner.ContainsKey(key);
+        public bool TryGetValue(string key, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out TValue value) => inner.TryGetValue(key, out value);
+        public IEnumerator<KeyValuePair<string, TValue>> GetEnumerator() => inner.GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    [Fact]
+    public void ChatResponseMapper_MapUsage_WhenTotalsAlreadyIncludeSubcomponents_DoesNotDoubleCount()
+    {
+        // Case 1: Gateway/endpoint where PromptTokenCount (7) already includes ToolUsePromptTokenCount (2)
+        // and CandidatesTokenCount (7) already includes ThoughtsTokenCount (3), so 7 + 7 == 14 (TotalTokenCount).
+        var inclusiveResponse = new GenerateContentResponse
+        {
+            Candidates = [new Candidate { Content = new Content { Role = Role.Model, Parts = [Part.FromText("ok")] }, FinishReason = FinishReason.Stop }],
+            UsageMetadata = new UsageMetadata
+            {
+                PromptTokenCount = 7,
+                ToolUsePromptTokenCount = 2,
+                CandidatesTokenCount = 7,
+                ThoughtsTokenCount = 3,
+                TotalTokenCount = 14
+            }
+        };
+
+        var mappedInclusive = ChatResponseMapper.ToChatResponse(inclusiveResponse, DefaultModel);
+        Assert.NotNull(mappedInclusive.Usage);
+        Assert.Equal(7, mappedInclusive.Usage!.InputTokenCount);
+        Assert.Equal(7, mappedInclusive.Usage.OutputTokenCount);
+        Assert.Equal(14, mappedInclusive.Usage.TotalTokenCount);
+        Assert.Equal(3, mappedInclusive.Usage.ReasoningTokenCount);
+
+        // Case 2: CandidatesTokenCount is exclusive of ThoughtsTokenCount (4 + 3 = 7),
+        // while PromptTokenCount (7) already includes ToolUsePromptTokenCount (2), total = 14.
+        var halfInclusiveResponse = new GenerateContentResponse
+        {
+            Candidates = [new Candidate { Content = new Content { Role = Role.Model, Parts = [Part.FromText("ok")] }, FinishReason = FinishReason.Stop }],
+            UsageMetadata = new UsageMetadata
+            {
+                PromptTokenCount = 7,
+                ToolUsePromptTokenCount = 2,
+                CandidatesTokenCount = 4,
+                ThoughtsTokenCount = 3,
+                TotalTokenCount = 14
+            }
+        };
+
+        var mappedHalf = ChatResponseMapper.ToChatResponse(halfInclusiveResponse, DefaultModel);
+        Assert.NotNull(mappedHalf.Usage);
+        Assert.Equal(7, mappedHalf.Usage!.InputTokenCount);
+        Assert.Equal(7, mappedHalf.Usage.OutputTokenCount);
+        Assert.Equal(14, mappedHalf.Usage.TotalTokenCount);
+
+        // Case 3: TotalTokenCount is omitted in JSON (0) while PromptTokenCount (5), CandidatesTokenCount (4), and ThoughtsTokenCount (3) are populated.
+        var omittedTotalResponse = new GenerateContentResponse
+        {
+            Candidates = [new Candidate { Content = new Content { Role = Role.Model, Parts = [Part.FromText("ok")] }, FinishReason = FinishReason.Stop }],
+            UsageMetadata = new UsageMetadata
+            {
+                PromptTokenCount = 5,
+                CandidatesTokenCount = 4,
+                ThoughtsTokenCount = 3,
+                TotalTokenCount = 0
+            }
+        };
+
+        var mappedOmittedTotal = ChatResponseMapper.ToChatResponse(omittedTotalResponse, DefaultModel);
+        Assert.NotNull(mappedOmittedTotal.Usage);
+        Assert.Equal(5, mappedOmittedTotal.Usage!.InputTokenCount);
+        Assert.Equal(7, mappedOmittedTotal.Usage.OutputTokenCount);
+        Assert.Equal(12, mappedOmittedTotal.Usage.TotalTokenCount);
+        Assert.Equal(3, mappedOmittedTotal.Usage.ReasoningTokenCount);
+    }
+
+    [Fact]
+    public async Task StreamGenerateContentAsync_And_GetStreamingResponseAsync_RespectBothMethodAndEnumeratorCancellationTokens()
+    {
+        const string sse = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"chunk1\"}]}}]}\n\n";
+        using var methodCts = new CancellationTokenSource();
+        using var enumCts = new CancellationTokenSource();
+        methodCts.Cancel();
+
+        using var handler1 = new RecordingHandler(sse);
+        using var httpClient1 = new HttpClient(handler1);
+        using var client1 = CreateClient(httpClient1);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in client1
+                .StreamGenerateContentAsync("Hi", cancellationToken: methodCts.Token)
+                .WithCancellation(enumCts.Token))
+            {
+            }
+        });
+
+        using IChatClient chatClient = new GeminiChatClient(client1);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in chatClient
+                .GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Hi")], cancellationToken: methodCts.Token)
+                .WithCancellation(enumCts.Token))
+            {
+            }
+        });
+    }
+
+    [Fact]
+    public async Task StreamIdleWatchdog_TimerFiresBetweenReads_RefreshesSpentTokenOnNextReadInsteadOfFalseTimeout()
+    {
+        using var callerCts = new CancellationTokenSource();
+        using var watchdog = new StreamIdleWatchdog(TimeSpan.FromMilliseconds(15), callerCts.Token);
+
+        // Simulate a read where the idle timer expires right as the read completes,
+        // leaving the internal CTS canceled while the caller token is still active.
+        watchdog.BeforeRead();
+        var firstToken = watchdog.Token;
+        await Task.Delay(40);
+        Assert.True(firstToken.IsCancellationRequested);
+        watchdog.AfterRead(succeeded: true);
+
+        // The next read must obtain a fresh non-canceled token rather than failing immediately.
+        watchdog.BeforeRead();
+        var secondToken = watchdog.Token;
+        Assert.False(secondToken.IsCancellationRequested);
+        watchdog.AfterRead(succeeded: true);
+    }
+
+    [Fact]
+    public async Task ToModelContent_And_ToModelContentAsync_LargeChunkSequence_AggregatesTextAndThoughtsAccurately()
+    {
+        var chunks = new List<GenerateContentResponse>(capacity: 205);
+        var expectedThought = new StringBuilder();
+        var expectedText = new StringBuilder();
+
+        for (var i = 0; i < 100; i++)
+        {
+            var piece = $"thought-{i};";
+            expectedThought.Append(piece);
+            chunks.Add(new GenerateContentResponse
+            {
+                Candidates =
+                [
+                    new Candidate
+                    {
+                        Content = new Content
+                        {
+                            Role = Role.Model,
+                            Parts = [new Part { Text = piece, Thought = true }]
+                        }
+                    }
+                ]
+            });
+        }
+
+        // Empty text carrier with ThoughtSignature that should merge into the preceding thought part
+        const string sig = "AQIDBA==";
+        chunks.Add(new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts = [new Part { Text = string.Empty, Thought = true, ThoughtSignature = sig }]
+                    }
+                }
+            ]
+        });
+
+        for (var i = 0; i < 100; i++)
+        {
+            var piece = $"text-{i};";
+            expectedText.Append(piece);
+            chunks.Add(new GenerateContentResponse
+            {
+                Candidates =
+                [
+                    new Candidate
+                    {
+                        Content = new Content
+                        {
+                            Role = Role.Model,
+                            Parts = [Part.FromText(piece)]
+                        }
+                    }
+                ]
+            });
+        }
+
+        var syncContent = chunks.ToModelContent();
+        Assert.NotNull(syncContent);
+        Assert.Equal(Role.Model, syncContent!.Role);
+        Assert.NotNull(syncContent.Parts);
+        Assert.Equal(2, syncContent.Parts!.Count);
+        Assert.True(syncContent.Parts[0].Thought);
+        Assert.Equal(expectedThought.ToString(), syncContent.Parts[0].Text);
+        Assert.Equal(sig, syncContent.Parts[0].ThoughtSignature);
+        Assert.Null(syncContent.Parts[1].Thought);
+        Assert.Equal(expectedText.ToString(), syncContent.Parts[1].Text);
+
+        var asyncContent = await ToAsyncEnumerable(chunks).ToModelContentAsync();
+        Assert.NotNull(asyncContent);
+        Assert.NotNull(asyncContent!.Parts);
+        Assert.Equal(2, asyncContent.Parts!.Count);
+        Assert.Equal(expectedThought.ToString(), asyncContent.Parts[0].Text);
+        Assert.Equal(sig, asyncContent.Parts[0].ThoughtSignature);
+        Assert.Equal(expectedText.ToString(), asyncContent.Parts[1].Text);
+
+        static async IAsyncEnumerable<GenerateContentResponse> ToAsyncEnumerable(IEnumerable<GenerateContentResponse> items)
+        {
+            foreach (var item in items)
+            {
+                await Task.Yield();
+                yield return item;
+            }
+        }
+    }
+
+    [Fact]
+    public void PooledByteBufferWriter_AccessAfterDispose_ThrowsObjectDisposedExceptionAndNeverReRentsBuffer()
+    {
+        var writer = new PooledByteBufferWriter(initialCapacity: 64);
+        var span = writer.GetSpan(4);
+        "test"u8.CopyTo(span);
+        writer.Advance(4);
+        Assert.Equal(4, writer.WrittenCount);
+
+        writer.Dispose();
+        writer.Dispose(); // Idempotent second dispose
+
+        Assert.Throws<ObjectDisposedException>(() => _ = writer.WrittenCount);
+        Assert.Throws<ObjectDisposedException>(() => _ = writer.WrittenSpan);
+        Assert.Throws<ObjectDisposedException>(() => _ = writer.WrittenMemory);
+        Assert.Throws<ObjectDisposedException>(() => writer.Clear());
+        Assert.Throws<ObjectDisposedException>(() => writer.Advance(1));
+        Assert.Throws<ObjectDisposedException>(() => _ = writer.GetMemory(16));
+        Assert.Throws<ObjectDisposedException>(() => _ = writer.GetSpan(16));
+    }
+
+    [Fact]
+    public void ChatOptionsMapper_ApplyAdditionalProperties_MapsKnownAndExtensionPropertiesRespectingPrecedence()
+    {
+        var stubClient = new StubGeminiClient();
+        using var chatClient = new GeminiChatClient(stubClient);
+        var aotOptions = new JsonSerializerOptions();
+        using var jsonDoc = JsonDocument.Parse("""{"logprobs":5,"responseLogprobs":true,"mediaResolution":"MEDIA_RESOLUTION_HIGH","responseModalities":["TEXT","AUDIO"]}""");
+
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["candidateCount"] = 2L, // boxed long
+                ["temperature"] = 0.25f, // boxed float
+                ["responseLogprobs"] = jsonDoc.RootElement.GetProperty("responseLogprobs"),
+                ["logprobs"] = jsonDoc.RootElement.GetProperty("logprobs"),
+                ["mediaResolution"] = jsonDoc.RootElement.GetProperty("mediaResolution"),
+                ["responseModalities"] = jsonDoc.RootElement.GetProperty("responseModalities"),
+                ["cachedContent"] = "cachedContents/abc-123",
+                ["store"] = true,
+                ["labels"] = new Dictionary<string, string> { ["env"] = "prod" },
+                ["speechConfig"] = new Dictionary<string, string> { ["voiceName"] = "Kore" },
+                ["customGatewayFlag"] = new Dictionary<string, string> { ["region"] = "ap-northeast1" }
+            }
+        };
+
+        var request = ChatRequestMapper.ToRequest(
+            [new ChatMessage(ChatRole.User, "Hi")],
+            options,
+            chatClient,
+            DefaultModel,
+            aotOptions);
+
+        Assert.Equal("cachedContents/abc-123", request.CachedContent);
+        Assert.True(request.Store);
+        Assert.Equal("prod", request.Labels!["env"]);
+        Assert.NotNull(request.GenerationConfig);
+        Assert.Equal(2, request.GenerationConfig!.CandidateCount);
+        Assert.Equal(0.25, request.GenerationConfig.Temperature!.Value, precision: 4);
+        Assert.True(request.GenerationConfig.ResponseLogprobs);
+        Assert.Equal(5, request.GenerationConfig.Logprobs);
+        Assert.Equal(MediaResolution.High, request.GenerationConfig.MediaResolution);
+        Assert.Equal(["TEXT", "AUDIO"], request.GenerationConfig.ResponseModalities);
+        Assert.Equal("Kore", request.GenerationConfig.ExtensionData!["speechConfig"].GetProperty("voiceName").GetString());
+        Assert.NotNull(request.ExtensionData);
+        Assert.Single(request.ExtensionData!);
+        Assert.Equal("ap-northeast1", request.ExtensionData!["customGatewayFlag"].GetProperty("region").GetString());
+
+        // Verify RawRepresentationFactory precedence: existing values on the template are not overwritten
+        // AND must not leak into request.ExtensionData (which would emit duplicate JSON keys on the wire).
+        var optionsWithTemplate = new ChatOptions
+        {
+            RawRepresentationFactory = _ => new GenerateContentRequest
+            {
+                CachedContent = "cachedContents/from-template",
+                Store = false,
+                GenerationConfig = new GenerationConfig { CandidateCount = 1 }
+            },
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["candidateCount"] = 4L,
+                ["cachedContent"] = "cachedContents/from-additional-props",
+                ["store"] = true
+            }
+        };
+
+        var templatedRequest = ChatRequestMapper.ToRequest(
+            [new ChatMessage(ChatRole.User, "Hi")],
+            optionsWithTemplate,
+            chatClient,
+            DefaultModel,
+            aotOptions);
+        Assert.Equal("cachedContents/from-template", templatedRequest.CachedContent);
+        Assert.False(templatedRequest.Store);
+        Assert.Equal(1, templatedRequest.GenerationConfig!.CandidateCount);
+        Assert.Null(templatedRequest.ExtensionData);
+
+        var wireJson = JsonSerializer.Serialize(templatedRequest, GeminiGatewayClient.Serialization.GeminiJsonContext.Default.GenerateContentRequest);
+        using var wireDoc = JsonDocument.Parse(wireJson);
+        Assert.Equal("cachedContents/from-template", wireDoc.RootElement.GetProperty("cachedContent").GetString());
+        Assert.False(wireDoc.RootElement.GetProperty("store").GetBoolean());
+        Assert.Equal(1, wireDoc.RootElement.GetProperty("generationConfig").GetProperty("candidateCount").GetInt32());
+    }
+
+    [Fact]
+    public void GeminiErrorParser_InStreamErrorWith2xxCode_MapsToNonSuccessStatusCode()
+    {
+        using var doc1 = JsonDocument.Parse("""{"error":{"code":200,"message":"Backend stream error","status":"UNAVAILABLE"}}""");
+        var ex1 = GeminiErrorParser.TryCreateFromStreamPayload(doc1.RootElement, HttpStatusCode.OK);
+        Assert.NotNull(ex1);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, ex1!.StatusCode);
+        Assert.Equal(200, ex1.ErrorCode);
+
+        using var doc2 = JsonDocument.Parse("""{"error":{"code":200,"message":"Unknown stream error"}}""");
+        var ex2 = GeminiErrorParser.TryCreateFromStreamPayload(doc2.RootElement, HttpStatusCode.OK);
+        Assert.NotNull(ex2);
+        Assert.Equal(HttpStatusCode.InternalServerError, ex2!.StatusCode);
+    }
+
+    [Fact]
+    public void GeminiApiException_StandardConstructors_InitializeExpectedDefaults()
+    {
+        var exDefault = new GeminiApiException();
+        Assert.Equal((HttpStatusCode)0, exDefault.StatusCode);
+        Assert.Null(exDefault.ErrorCode);
+        Assert.Null(exDefault.ErrorContent);
+
+        var exMessage = new GeminiApiException("custom failure");
+        Assert.Equal("custom failure", exMessage.Message);
+        Assert.Equal((HttpStatusCode)0, exMessage.StatusCode);
+
+        var inner = new InvalidOperationException("root cause");
+        var exInner = new GeminiApiException("wrapped failure", inner);
+        Assert.Equal("wrapped failure", exInner.Message);
+        Assert.Same(inner, exInner.InnerException);
+        Assert.Equal((HttpStatusCode)0, exInner.StatusCode);
+    }
+
+    [Fact]
+    public async Task GeminiErrorParser_CreateFromResponseAsync_UsesPerReadWatchdogRatherThanCumulativeTimeout()
+    {
+        // 4 chunks x 25ms = 100ms total read duration, while idle timeout per read is 65ms.
+        // A cumulative CTS would time out at 65ms, whereas per-read watchdog arming succeeds.
+        const string errorJson = """{"error":{"code":503,"message":"Slow trickle error body","status":"UNAVAILABLE"}}""";
+        var errorBytes = Encoding.UTF8.GetBytes(errorJson);
+
+        using var response = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+        {
+            Content = new StreamContent(new DelayedTrickleStream(errorBytes, maxBytesPerRead: 24, delayPerReadMs: 25))
+        };
+        using var watchdog = new StreamIdleWatchdog(TimeSpan.FromMilliseconds(65), CancellationToken.None);
+
+        var ex = await GeminiErrorParser.CreateFromResponseAsync(response, watchdog);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, ex.StatusCode);
+        Assert.Equal("Slow trickle error body", ex.ErrorMessage);
+    }
+
+    private sealed class DelayedTrickleStream(byte[] data, int maxBytesPerRead, int delayPerReadMs) : Stream
+    {
+        private int _position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_position >= data.Length)
+            {
+                return 0;
+            }
+
+            await Task.Delay(delayPerReadMs, cancellationToken);
+            var toCopy = Math.Min(Math.Min(buffer.Length, maxBytesPerRead), data.Length - _position);
+            data.AsSpan(_position, toCopy).CopyTo(buffer.Span);
+            _position += toCopy;
+            return toCopy;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private sealed class TrickleStream(byte[] data, int maxBytesPerRead) : Stream
     {
         private int _position;

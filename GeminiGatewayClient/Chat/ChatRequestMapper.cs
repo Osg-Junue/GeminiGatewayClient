@@ -119,7 +119,7 @@ internal static class ChatRequestMapper
 
         if (options is not null)
         {
-            ChatOptionsMapper.Apply(request, options, modelId);
+            ChatOptionsMapper.Apply(request, options, modelId, toolSerializerOptions);
         }
 
         return request;

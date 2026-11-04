@@ -10,12 +10,383 @@ namespace GeminiGatewayClient.Chat;
 /// </summary>
 internal static class ChatOptionsMapper
 {
-    public static void Apply(GenerateContentRequest request, ChatOptions options, string? modelId)
+    public static void Apply(
+        GenerateContentRequest request,
+        ChatOptions options,
+        string? modelId,
+        JsonSerializerOptions? serializerOptions = null)
     {
         ApplyGenerationConfig(request, options, modelId);
         ApplyTools(request, options);
         ApplyToolMode(request, options);
+        ApplyAdditionalProperties(request, options, serializerOptions);
     }
+
+    private static void ApplyAdditionalProperties(
+        GenerateContentRequest request,
+        ChatOptions options,
+        JsonSerializerOptions? serializerOptions)
+    {
+        if (options.AdditionalProperties is not { Count: > 0 } properties)
+        {
+            return;
+        }
+
+        var effectiveSerializerOptions = serializerOptions ?? AIJsonUtilities.DefaultOptions;
+        GenerationConfig? config = null;
+
+        GenerationConfig EnsureConfig() => config ??= request.GenerationConfig?.Clone() ?? new GenerationConfig();
+
+        foreach (var (key, value) in properties)
+        {
+            if (string.IsNullOrWhiteSpace(key) || value is null)
+            {
+                continue;
+            }
+
+            switch (key)
+            {
+                case "cachedContent":
+                    if (request.CachedContent is null && TryGetString(value) is { } cachedContent)
+                    {
+                        request.CachedContent = cachedContent;
+                    }
+
+                    break;
+
+                case "store":
+                    if (request.Store is null && TryGetBoolean(value) is { } store)
+                    {
+                        request.Store = store;
+                    }
+
+                    break;
+
+                case "labels":
+                    if (request.Labels is null && TryGetStringDictionary(value) is { } labels)
+                    {
+                        request.Labels = labels;
+                    }
+
+                    break;
+
+                case "candidateCount":
+                    if (TryGetInt32(value) is { } candidateCount)
+                    {
+                        EnsureConfig().CandidateCount ??= candidateCount;
+                    }
+
+                    break;
+
+                case "responseLogprobs":
+                    if (TryGetBoolean(value) is { } responseLogprobs)
+                    {
+                        EnsureConfig().ResponseLogprobs ??= responseLogprobs;
+                    }
+
+                    break;
+
+                case "logprobs":
+                    if (TryGetInt32(value) is { } logprobs)
+                    {
+                        EnsureConfig().Logprobs ??= logprobs;
+                    }
+
+                    break;
+
+                case "enableEnhancedCivicAnswers":
+                    if (TryGetBoolean(value) is { } civicAnswers)
+                    {
+                        EnsureConfig().EnableEnhancedCivicAnswers ??= civicAnswers;
+                    }
+
+                    break;
+
+                case "audioTimestamp":
+                    if (TryGetBoolean(value) is { } audioTimestamp)
+                    {
+                        EnsureConfig().AudioTimestamp ??= audioTimestamp;
+                    }
+
+                    break;
+
+                case "mediaResolution":
+                    if (TryGetMediaResolution(value) is { } mediaResolution)
+                    {
+                        EnsureConfig().MediaResolution ??= mediaResolution;
+                    }
+
+                    break;
+
+                case "responseModalities":
+                    if (TryGetStringList(value) is { } modalities)
+                    {
+                        EnsureConfig().ResponseModalities ??= modalities;
+                    }
+
+                    break;
+
+                case "temperature":
+                    if (TryGetDouble(value) is { } temperature)
+                    {
+                        EnsureConfig().Temperature ??= temperature;
+                    }
+
+                    break;
+
+                case "topP":
+                    if (TryGetDouble(value) is { } topP)
+                    {
+                        EnsureConfig().TopP ??= topP;
+                    }
+
+                    break;
+
+                case "topK":
+                    if (TryGetInt32(value) is { } topK)
+                    {
+                        EnsureConfig().TopK ??= topK;
+                    }
+
+                    break;
+
+                case "maxOutputTokens":
+                    if (TryGetInt32(value) is { } maxOutputTokens)
+                    {
+                        EnsureConfig().MaxOutputTokens ??= maxOutputTokens;
+                    }
+
+                    break;
+
+                case "presencePenalty":
+                    if (TryGetDouble(value) is { } presencePenalty)
+                    {
+                        EnsureConfig().PresencePenalty ??= presencePenalty;
+                    }
+
+                    break;
+
+                case "frequencyPenalty":
+                    if (TryGetDouble(value) is { } frequencyPenalty)
+                    {
+                        EnsureConfig().FrequencyPenalty ??= frequencyPenalty;
+                    }
+
+                    break;
+
+                case "seed":
+                    if (TryGetInt32(value) is { } seed)
+                    {
+                        EnsureConfig().Seed ??= seed;
+                    }
+
+                    break;
+
+                case "stopSequences":
+                    if (TryGetStringList(value) is { } stopSequences)
+                    {
+                        EnsureConfig().StopSequences ??= stopSequences;
+                    }
+
+                    break;
+
+                case "responseMimeType":
+                    if (TryGetString(value) is { } responseMimeType)
+                    {
+                        EnsureConfig().ResponseMimeType ??= responseMimeType;
+                    }
+
+                    break;
+
+                case "responseSchema":
+                    if (value is Schema schema)
+                    {
+                        var targetConfig = EnsureConfig();
+                        if (targetConfig.ResponseJsonSchema is null)
+                        {
+                            targetConfig.ResponseSchema ??= schema.Clone();
+                        }
+                    }
+
+                    break;
+
+                case "responseJsonSchema":
+                {
+                    var targetConfig = EnsureConfig();
+                    if (targetConfig.ResponseSchema is null && targetConfig.ResponseJsonSchema is null)
+                    {
+                        targetConfig.ResponseJsonSchema = ToolJsonConverter.ToJsonElement(value, effectiveSerializerOptions);
+                    }
+
+                    break;
+                }
+
+                case "thinkingConfig":
+                    if (value is ThinkingConfig thinkingConfig)
+                    {
+                        EnsureConfig().ThinkingConfig ??= thinkingConfig.Clone();
+                    }
+
+                    break;
+
+                case "speechConfig" or "imageConfig":
+                {
+                    var targetConfig = EnsureConfig();
+                    var ext = targetConfig.ExtensionData ??= new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+                    if (!ext.ContainsKey(key))
+                    {
+                        ext[key] = ToolJsonConverter.ToJsonElement(value, effectiveSerializerOptions);
+                    }
+
+                    break;
+                }
+
+                case "contents" or "systemInstruction" or "generationConfig" or "tools" or "toolConfig":
+                    break;
+
+                case "safetySettings" when request.SafetySettings is not null:
+                    break;
+
+                default:
+                {
+                    var ext = request.ExtensionData ??= new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+                    if (!ext.ContainsKey(key))
+                    {
+                        ext[key] = ToolJsonConverter.ToJsonElement(value, effectiveSerializerOptions);
+                    }
+
+                    break;
+                }
+            }
+        }
+
+        if (config is not null && (request.GenerationConfig is not null || !IsEmpty(config)))
+        {
+            request.GenerationConfig = config;
+        }
+    }
+
+    private static int? TryGetInt32(object value) =>
+        value switch
+        {
+            int i => i,
+            long l when l is >= int.MinValue and <= int.MaxValue => (int)l,
+            short s => s,
+            sbyte sb => sb,
+            byte b => b,
+            ushort us => us,
+            uint u when u <= int.MaxValue => (int)u,
+            JsonElement { ValueKind: JsonValueKind.Number } el when el.TryGetInt32(out var parsed) => parsed,
+            _ => null
+        };
+
+    private static double? TryGetDouble(object value) =>
+        value switch
+        {
+            double d => d,
+            float f => f,
+            decimal m => (double)m,
+            int i => i,
+            long l => l,
+            JsonElement { ValueKind: JsonValueKind.Number } el when el.TryGetDouble(out var parsed) => parsed,
+            _ => null
+        };
+
+    private static bool? TryGetBoolean(object value) =>
+        value switch
+        {
+            bool b => b,
+            JsonElement { ValueKind: JsonValueKind.True } => true,
+            JsonElement { ValueKind: JsonValueKind.False } => false,
+            _ => null
+        };
+
+    private static string? TryGetString(object value) =>
+        value switch
+        {
+            string s => s,
+            JsonElement { ValueKind: JsonValueKind.String } el => el.GetString(),
+            _ => null
+        };
+
+    private static List<string>? TryGetStringList(object value)
+    {
+        switch (value)
+        {
+            case IEnumerable<string> strings:
+                return [.. strings];
+
+            case JsonElement { ValueKind: JsonValueKind.Array } array:
+            {
+                var result = new List<string>(array.GetArrayLength());
+                foreach (var item in array.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String && item.GetString() is { } s)
+                    {
+                        result.Add(s);
+                    }
+                }
+
+                return result;
+            }
+
+            default:
+                return null;
+        }
+    }
+
+    private static Dictionary<string, string>? TryGetStringDictionary(object value)
+    {
+        switch (value)
+        {
+            case IEnumerable<KeyValuePair<string, string>> pairs:
+            {
+                var dict = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var (k, v) in pairs)
+                {
+                    dict[k] = v;
+                }
+
+                return dict;
+            }
+
+            case JsonElement { ValueKind: JsonValueKind.Object } obj:
+            {
+                var dict = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var prop in obj.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.String && prop.Value.GetString() is { } s)
+                    {
+                        dict[prop.Name] = s;
+                    }
+                }
+
+                return dict;
+            }
+
+            default:
+                return null;
+        }
+    }
+
+    private static MediaResolution? TryGetMediaResolution(object value) =>
+        value switch
+        {
+            MediaResolution mr => mr,
+            string s => ParseMediaResolutionString(s),
+            JsonElement { ValueKind: JsonValueKind.String } el when el.GetString() is { } s => ParseMediaResolutionString(s),
+            _ => null
+        };
+
+    private static MediaResolution? ParseMediaResolutionString(string s) =>
+        s switch
+        {
+            _ when s.Equals("MEDIA_RESOLUTION_LOW", StringComparison.OrdinalIgnoreCase) || s.Equals("Low", StringComparison.OrdinalIgnoreCase) => MediaResolution.Low,
+            _ when s.Equals("MEDIA_RESOLUTION_MEDIUM", StringComparison.OrdinalIgnoreCase) || s.Equals("Medium", StringComparison.OrdinalIgnoreCase) => MediaResolution.Medium,
+            _ when s.Equals("MEDIA_RESOLUTION_HIGH", StringComparison.OrdinalIgnoreCase) || s.Equals("High", StringComparison.OrdinalIgnoreCase) => MediaResolution.High,
+            _ when s.Equals("MEDIA_RESOLUTION_UNSPECIFIED", StringComparison.OrdinalIgnoreCase) || s.Equals("Unspecified", StringComparison.OrdinalIgnoreCase) => MediaResolution.Unspecified,
+            _ => null
+        };
 
     private static void ApplyGenerationConfig(GenerateContentRequest request, ChatOptions options, string? modelId)
     {

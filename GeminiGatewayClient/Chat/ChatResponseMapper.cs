@@ -854,16 +854,64 @@ internal static class ChatResponseMapper
         };
     }
 
-    private static UsageDetails? MapUsage(UsageMetadata? usage) => usage is null
-        ? null
-        : new UsageDetails
+    private static UsageDetails? MapUsage(UsageMetadata? usage)
+    {
+        if (usage is null)
         {
-            InputTokenCount = usage.PromptTokenCount + (usage.ToolUsePromptTokenCount ?? 0),
-            OutputTokenCount = usage.CandidatesTokenCount + (usage.ThoughtsTokenCount ?? 0),
-            TotalTokenCount = usage.TotalTokenCount,
+            return null;
+        }
+
+        var prompt = usage.PromptTokenCount;
+        var candidates = usage.CandidatesTokenCount;
+        var toolPrompt = usage.ToolUsePromptTokenCount ?? 0;
+        var thoughts = usage.ThoughtsTokenCount ?? 0;
+        var total = usage.TotalTokenCount;
+
+        // Gemini Developer API reports totalTokenCount = prompt + toolUsePrompt + candidates + thoughts
+        // (candidatesTokenCount excludes thoughtsTokenCount), whereas Microsoft.Extensions.AI UsageDetails
+        // defines OutputTokenCount as inclusive of ReasoningTokenCount. If an endpoint, gateway, or model
+        // version already includes toolUsePromptTokenCount in promptTokenCount or thoughtsTokenCount in
+        // candidatesTokenCount (so adding them would exceed totalTokenCount), avoid double-counting.
+        bool includeToolPrompt;
+        bool includeThoughts;
+        if (total <= 0 || prompt + toolPrompt + candidates + thoughts <= total)
+        {
+            includeToolPrompt = toolPrompt > 0;
+            includeThoughts = thoughts > 0;
+        }
+        else if (prompt + candidates == total)
+        {
+            includeToolPrompt = false;
+            includeThoughts = false;
+        }
+        else if (prompt + candidates + thoughts == total)
+        {
+            includeToolPrompt = false;
+            includeThoughts = thoughts > 0;
+        }
+        else if (prompt + toolPrompt + candidates == total)
+        {
+            includeToolPrompt = toolPrompt > 0;
+            includeThoughts = false;
+        }
+        else
+        {
+            includeToolPrompt = false;
+            includeThoughts = false;
+        }
+
+        var inputTokens = prompt + (includeToolPrompt ? toolPrompt : 0);
+        var outputTokens = candidates + (includeThoughts ? thoughts : 0);
+
+        return new UsageDetails
+        {
+            InputTokenCount = inputTokens,
+            OutputTokenCount = outputTokens,
+            TotalTokenCount = total > 0 ? total : inputTokens + outputTokens,
             ReasoningTokenCount = usage.ThoughtsTokenCount,
             CachedInputTokenCount = usage.CachedContentTokenCount
         };
+    }
 
     private static AdditionalPropertiesDictionary? CreateResponseProperties(BlockReason? blockReason, GroundingMetadata? groundingMetadata)
     {

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace GeminiGatewayClient.Http;
 
 /// <summary>
@@ -9,9 +11,12 @@ namespace GeminiGatewayClient.Http;
 /// </summary>
 internal sealed class StreamIdleWatchdog : IDisposable
 {
+    private static readonly TimeSpan s_timerResolutionGuard = TimeSpan.FromMilliseconds(50);
+
     private CancellationTokenSource? _cts;
     private readonly CancellationToken _callerToken;
     private readonly TimeSpan _idleTimeout;
+    private long _readStartTimestamp;
     private volatile bool _reading;
     private volatile bool _timedOut;
 
@@ -48,14 +53,35 @@ internal sealed class StreamIdleWatchdog : IDisposable
         !_callerToken.IsCancellationRequested;
 
     /// <summary>
-    /// Arms the idle timer immediately before awaiting a stream read.
+    /// Arms the idle timer immediately before awaiting a stream read, refreshing the internal token source if the previous
+    /// timer callback fired in the race window after <see cref="AfterRead"/> disarmed it.
     /// </summary>
     public void BeforeRead()
     {
         _timedOut = false;
-        if (_cts is { IsCancellationRequested: false })
+        if (_cts is null)
         {
-            _reading = true;
+            return;
+        }
+
+        if (_cts.IsCancellationRequested)
+        {
+            if (_callerToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            ReplaceCts();
+        }
+
+        _readStartTimestamp = Stopwatch.GetTimestamp();
+        _reading = true;
+        _cts.CancelAfter(_idleTimeout);
+
+        if (_cts.IsCancellationRequested && !_callerToken.IsCancellationRequested)
+        {
+            ReplaceCts();
+            _readStartTimestamp = Stopwatch.GetTimestamp();
             _cts.CancelAfter(_idleTimeout);
         }
     }
@@ -63,7 +89,7 @@ internal sealed class StreamIdleWatchdog : IDisposable
     /// <summary>
     /// Disarms the idle timer immediately after a stream read completes so consumer processing time is never counted as stream idle time.
     /// Preserves <see cref="HasTimedOut"/> when the read was aborted by the idle timer, and resets the token source if the timer
-    /// fired in the race window after <paramref name="succeeded"/> became <c>true</c>.
+    /// fired or was queued on the thread pool in the race window after <paramref name="succeeded"/> became <c>true</c>.
     /// </summary>
     public void AfterRead(bool succeeded = true)
     {
@@ -76,6 +102,17 @@ internal sealed class StreamIdleWatchdog : IDisposable
         if (!_cts.IsCancellationRequested)
         {
             _cts.CancelAfter(Timeout.InfiniteTimeSpan);
+            if (succeeded &&
+                !_callerToken.IsCancellationRequested &&
+                (_cts.IsCancellationRequested ||
+                 (_readStartTimestamp != 0 && Stopwatch.GetElapsedTime(_readStartTimestamp) + s_timerResolutionGuard >= _idleTimeout)))
+            {
+                // A read that completed right as _idleTimeout elapsed may have a TimerQueueTimer callback already
+                // dequeued on the ThreadPool (which CancelAfter(Infinite) cannot abort). Retire the CTS so any
+                // in-flight callback cancels the retired instance rather than the next read.
+                ReplaceCts();
+            }
+
             return;
         }
 
@@ -88,14 +125,19 @@ internal sealed class StreamIdleWatchdog : IDisposable
         {
             // The timer fired in the tiny window after the read had already returned data.
             // Replace the spent CTS so the next read starts with an uncancelled token instead of throwing a false TimeoutException.
-            var expired = _cts;
-            _cts = CancellationTokenSource.CreateLinkedTokenSource(_callerToken);
-            expired.Dispose();
+            ReplaceCts();
         }
         else
         {
             _timedOut = true;
         }
+    }
+
+    private void ReplaceCts()
+    {
+        var expired = _cts;
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(_callerToken);
+        expired?.Dispose();
     }
 
     public void Dispose() => _cts?.Dispose();

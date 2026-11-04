@@ -108,8 +108,10 @@ public sealed class GeminiChatClient : IChatClient
     private static async IAsyncEnumerable<ChatResponseUpdate> StreamCoreAsync(
         IAsyncEnumerable<GenerateContentResponse> chunks,
         string? model,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        CancellationToken requestCancellationToken,
+        [EnumeratorCancellation] CancellationToken enumeratorCancellationToken = default)
     {
+        using var linkedCts = GeminiClient.CreateLinkedTokenSource(requestCancellationToken, enumeratorCancellationToken, out var cancellationToken);
         GenerateContentResponse? lastUsageChunk = null;
         List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
         var cumulativeUtf8Bytes = 0;

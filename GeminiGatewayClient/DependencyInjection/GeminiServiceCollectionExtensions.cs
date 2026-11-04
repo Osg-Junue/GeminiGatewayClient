@@ -24,7 +24,8 @@ public static class GeminiServiceCollectionExtensions
         /// <see cref="IEmbeddingGenerator{TInput, TEmbedding}"/> backed by <see cref="IHttpClientFactory"/>.
         /// <para>
         /// Options come from the options pattern, so <paramref name="configure"/> can be combined with
-        /// <c>services.AddOptions&lt;GeminiClientOptions&gt;().BindConfiguration("Gemini")</c>. Options are validated when the client is first resolved.
+        /// <c>services.AddOptions&lt;GeminiClientOptions&gt;().BindConfiguration("Gemini")</c>. Options are validated at host startup
+        /// (<see cref="OptionsBuilderExtensions.ValidateOnStart{TOptions}(OptionsBuilder{TOptions})"/>) and when the client is first resolved.
         /// <see cref="GeminiClientOptions.Timeout"/> is applied to the named <see cref="HttpClient"/>, and the default primary handler does not
         /// follow redirects (so credential headers are never forwarded to another host).
         /// </para>
@@ -74,6 +75,7 @@ public static class GeminiServiceCollectionExtensions
         var alreadyRegistered = services.Any(static d => d.ServiceType == typeof(GeminiClientSettings));
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GeminiClientOptions>, GeminiClientOptionsValidator>());
+        services.AddOptions<GeminiClientOptions>().ValidateOnStart();
 
         services.TryAddSingleton(static sp =>
             GeminiClientSettings.Create(sp.GetRequiredService<IOptions<GeminiClientOptions>>().Value));
