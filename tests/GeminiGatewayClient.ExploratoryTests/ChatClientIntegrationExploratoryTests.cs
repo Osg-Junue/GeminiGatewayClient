@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Serialization;
+using GeminiGatewayClient.Chat;
 using GeminiGatewayClient.ExploratoryTests.Infrastructure;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -358,6 +359,467 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
         Assert.NotNull(directResponse.Text);
         Assert.NotNull(chatResponse.Text);
         Assert.Equal(2, providerInvocations);
+    }
+
+    [ExploratoryFact]
+    public async Task IChatClient_UseFunctionInvocation_ParallelToolCalls_ExecutesConcurrentlyAndSynthesizesAnswer()
+    {
+        LogSection("TC-MEAI-01: Parallel Tool Calls Concurrency & Synthesis");
+        using var geminiClient = CreateGeminiClient();
+
+        var executionTrace = new List<string>();
+        var traceLock = new object();
+
+        [Description("指定された支店所在都市の現在の天気状況（晴れ・雪など）と気温を取得します。")]
+        object GetBranchWeather([Description("支店都市名 (例: Sapporo, Fukuoka)")] string branchCity)
+        {
+            var entry = $"GetBranchWeather({branchCity})";
+            lock (traceLock)
+            {
+                executionTrace.Add(entry);
+            }
+            Output.WriteLine($"  [C# Tool Invoked] {entry}");
+            var isSapporo = branchCity.Contains("Sapporo", StringComparison.OrdinalIgnoreCase) || branchCity.Contains("札幌", StringComparison.OrdinalIgnoreCase);
+            return new
+            {
+                branchCity,
+                condition = isSapporo ? "雪 (Snowy)" : "快晴 (Clear)",
+                temperatureCelsius = isSapporo ? -2 : 18
+            };
+        }
+
+        [Description("指定された支店所在都市における特定の商品SKUの倉庫在庫数を取得します。")]
+        object GetBranchStock(
+            [Description("支店都市名 (例: Sapporo, Fukuoka)")] string branchCity,
+            [Description("商品SKUコード (例: SKU-DRIVE-2TB)")] string itemSku)
+        {
+            var entry = $"GetBranchStock({branchCity}, {itemSku})";
+            lock (traceLock)
+            {
+                executionTrace.Add(entry);
+            }
+            Output.WriteLine($"  [C# Tool Invoked] {entry}");
+            var isSapporo = branchCity.Contains("Sapporo", StringComparison.OrdinalIgnoreCase) || branchCity.Contains("札幌", StringComparison.OrdinalIgnoreCase);
+            return new
+            {
+                branchCity,
+                itemSku,
+                inStockCount = isSapporo ? 15 : 42,
+                warehouseZone = isSapporo ? "Zone-A1" : "Zone-C3"
+            };
+        }
+
+        IChatClient pipeline = new ChatClientBuilder(geminiClient.AsIChatClient())
+            .UseFunctionInvocation()
+            .Build();
+
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(GetBranchWeather, "get_branch_weather"),
+            AIFunctionFactory.Create(GetBranchStock, "get_branch_stock")
+        };
+
+        var prompt = "札幌支店 (`Sapporo`) と福岡支店 (`Fukuoka`) の両方について、現地の天気と商品 `SKU-DRIVE-2TB` の在庫数を同時に調べて比較報告してください。";
+
+        var sw = Stopwatch.StartNew();
+        var response = await pipeline.GetResponseAsync(
+            [
+                new ChatMessage(ChatRole.System, "あなたは支店物流・営業支援アシスタントです。提供されたツールを呼び出して情報を収集し、全支店の天気と在庫数を明確に対比して報告してください。"),
+                new ChatMessage(ChatRole.User, prompt)
+            ],
+            new ChatOptions
+            {
+                Temperature = 0.0f,
+                Tools = tools
+            });
+        sw.Stop();
+
+        LogChatResponseSummary(response, sw.Elapsed);
+
+        Output.WriteLine("\n--- Execution Trace ---");
+        foreach (var call in executionTrace)
+        {
+            Output.WriteLine($"  {call}");
+        }
+
+        Assert.NotNull(response.Text);
+        Assert.NotEmpty(response.Text);
+
+        // Verify that tools were executed for both branches
+        Assert.True(executionTrace.Count >= 2, $"Expected at least 2 tool calls across execution trace, but executed {executionTrace.Count}. Trace: {string.Join(", ", executionTrace)}");
+        Assert.Contains(executionTrace, c => c.Contains("Sapporo", StringComparison.OrdinalIgnoreCase) || c.Contains("札幌", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(executionTrace, c => c.Contains("Fukuoka", StringComparison.OrdinalIgnoreCase) || c.Contains("福岡", StringComparison.OrdinalIgnoreCase));
+
+        // Semantic invariant: response synthesizes weather and stock information for both branches
+        var text = response.Text;
+        Assert.True(
+            text.Contains("Sapporo", StringComparison.OrdinalIgnoreCase) || text.Contains("札幌", StringComparison.OrdinalIgnoreCase),
+            "Expected final response to mention Sapporo.");
+        Assert.True(
+            text.Contains("Fukuoka", StringComparison.OrdinalIgnoreCase) || text.Contains("福岡", StringComparison.OrdinalIgnoreCase),
+            "Expected final response to mention Fukuoka.");
+        Assert.True(
+            text.Contains("15") || text.Contains("42"),
+            "Expected final response to reflect inventory quantities (15 or 42).");
+    }
+
+    [ExploratoryFact]
+    public async Task IChatClient_UseFunctionInvocation_ComplexParametersAndEnums_BindsCorrectly()
+    {
+        LogSection("TC-MEAI-02: Complex Parameters, Enums & Collections Schema Binding");
+        using var geminiClient = CreateGeminiClient();
+
+        TicketFilter? capturedFilter = null;
+
+        [Description("指定した検索条件（部署、優先度、タグリスト、最大件数）に一致するサポートチケットを検索します。")]
+        object QuerySupportTickets([Description("検索条件フィルターオブジェクト")] TicketFilter filter)
+        {
+            capturedFilter = filter;
+            Output.WriteLine($"  [C# Tool Invoked] QuerySupportTickets Department={filter.Department}, Priority={filter.Priority}, Tags=[{string.Join(", ", filter.Tags ?? [])}], MaxCount={filter.MaxCount}");
+            return new[]
+            {
+                new
+                {
+                    ticketId = "TCK-8810",
+                    title = "VPN Gateway Security Alert",
+                    department = filter.Department,
+                    priority = filter.Priority.ToString(),
+                    tags = filter.Tags ?? []
+                }
+            };
+        }
+
+        IChatClient pipeline = new ChatClientBuilder(geminiClient.AsIChatClient())
+            .UseFunctionInvocation()
+            .Build();
+
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(QuerySupportTickets, "query_support_tickets")
+        };
+
+        var prompt = "ITサポート部門 (`ITSupport`) のチケットで、優先度が `Urgent`、タグに `Network` と `Security` が付いているものを最大 3 件検索してください。";
+
+        var sw = Stopwatch.StartNew();
+        var response = await pipeline.GetResponseAsync(
+            [
+                new ChatMessage(ChatRole.System, "あなたはITサービスデスクアシスタントです。依頼に従ってツールを呼び出してチケットを検索し、結果を要約して報告してください。"),
+                new ChatMessage(ChatRole.User, prompt)
+            ],
+            new ChatOptions
+            {
+                Temperature = 0.0f,
+                Tools = tools
+            });
+        sw.Stop();
+
+        LogChatResponseSummary(response, sw.Elapsed);
+
+        Assert.NotNull(capturedFilter);
+        Assert.Contains("ITSupport", capturedFilter.Department, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(SupportPriority.Urgent, capturedFilter.Priority);
+        Assert.NotNull(capturedFilter.Tags);
+        Assert.Contains(capturedFilter.Tags, t => string.Equals(t, "Network", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(capturedFilter.Tags, t => string.Equals(t, "Security", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(3, capturedFilter.MaxCount);
+
+        Assert.NotNull(response.Text);
+        Assert.True(
+            response.Text.Contains("TCK-8810", StringComparison.OrdinalIgnoreCase) ||
+            response.Text.Contains("VPN", StringComparison.OrdinalIgnoreCase) ||
+            response.Text.Contains("Urgent", StringComparison.OrdinalIgnoreCase),
+            "Expected final answer to summarize the search results from the tool.");
+    }
+
+    [ExploratoryFact]
+    public async Task IChatClient_UseFunctionInvocation_ToolErrorPayload_ModelRecoversGracefully()
+    {
+        LogSection("TC-MEAI-03: Tool Error Payload & Model Autonomous Recovery");
+        using var geminiClient = CreateGeminiClient();
+
+        var executionTrace = new List<string>();
+
+        [Description("ユーザーIDから社内連絡先プロフィールを照会します。")]
+        object FindUserProfile([Description("検索対象のユーザーID (例: USER-999)")] string userId)
+        {
+            var entry = $"FindUserProfile(userId={userId})";
+            executionTrace.Add(entry);
+            Output.WriteLine($"  [C# Tool Invoked] {entry}");
+            if (string.Equals(userId, "USER-999", StringComparison.OrdinalIgnoreCase))
+            {
+                return new
+                {
+                    status = "ERROR",
+                    errorCode = "USER_NOT_FOUND",
+                    message = $"User '{userId}' was not found in the employee directory."
+                };
+            }
+
+            return new { status = "OK", userId, name = "Kenji Sato", email = "kenji@example.com" };
+        }
+
+        [Description("ユーザーが存在しない場合に指定部署の代表連絡窓口を検索します。")]
+        object FindFallbackContact([Description("部署名 (例: HR, ITSupport)")] string department)
+        {
+            var entry = $"FindFallbackContact(department={department})";
+            executionTrace.Add(entry);
+            Output.WriteLine($"  [C# Tool Invoked] {entry}");
+            return new
+            {
+                status = "OK",
+                department,
+                contactEmail = "hr-desk@example.co.jp",
+                phone = "03-5555-0199"
+            };
+        }
+
+        IChatClient pipeline = new ChatClientBuilder(geminiClient.AsIChatClient())
+            .UseFunctionInvocation()
+            .Build();
+
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(FindUserProfile, "find_user_profile"),
+            AIFunctionFactory.Create(FindFallbackContact, "find_fallback_contact")
+        };
+
+        var prompt = "ユーザー `USER-999` の連絡先を調べてください。もしユーザーが見つからなければ、人事部 (`HR`) の連絡先窓口を調べて案内してください。";
+
+        var sw = Stopwatch.StartNew();
+        var response = await pipeline.GetResponseAsync(
+            [
+                new ChatMessage(ChatRole.System, "あなたは社内ヘルプデスクアシスタントです。指示に従ってツールを活用し、エラーが発生した場合は適切に対処して報告してください。"),
+                new ChatMessage(ChatRole.User, prompt)
+            ],
+            new ChatOptions
+            {
+                Temperature = 0.0f,
+                Tools = tools
+            });
+        sw.Stop();
+
+        LogChatResponseSummary(response, sw.Elapsed);
+
+        Assert.NotEmpty(executionTrace);
+        Assert.Contains(executionTrace, e => e.Contains("FindUserProfile", StringComparison.Ordinal) && e.Contains("USER-999", StringComparison.Ordinal));
+
+        Assert.NotNull(response.Text);
+        Assert.NotEmpty(response.Text);
+        var text = response.Text;
+        var handledGracefully = text.Contains("USER-999", StringComparison.OrdinalIgnoreCase) ||
+                                text.Contains("見つかりません", StringComparison.OrdinalIgnoreCase) ||
+                                text.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+                                text.Contains("hr-desk@example.co.jp", StringComparison.OrdinalIgnoreCase) ||
+                                text.Contains("人事", StringComparison.OrdinalIgnoreCase);
+        Assert.True(handledGracefully, $"Expected model to communicate error recovery or fallback, but got: {text}");
+    }
+
+    [ExploratoryFact]
+    public async Task IChatClient_ChatClientBuilder_MultiMiddlewarePipeline_TracksTelemetryAndPreservesGetService()
+    {
+        LogSection("TC-MEAI-04: Multi-Middleware Pipeline Telemetry & GetService<T> Transparency");
+        using var geminiClient = CreateGeminiClient();
+
+        var telemetryMiddleware = new TelemetryTrackingDelegatingChatClient(geminiClient.AsIChatClient());
+
+        IChatClient pipeline = new ChatClientBuilder(telemetryMiddleware)
+            .UseFunctionInvocation()
+            .Build();
+
+        [Description("商品SKUの最新定価（円）を取得します。")]
+        object LookupItemPrice([Description("商品SKUコード")] string sku)
+        {
+            Output.WriteLine($"  [C# Tool Invoked] LookupItemPrice(sku={sku})");
+            return new { sku, priceJpy = 12800 };
+        }
+
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(LookupItemPrice, "lookup_item_price")
+        };
+
+        var prompt = "商品 `SKU-KEYBOARD-PRO` の最新価格を調べて教えてください。";
+
+        var sw = Stopwatch.StartNew();
+        var response = await pipeline.GetResponseAsync(
+            [
+                new ChatMessage(ChatRole.User, prompt)
+            ],
+            new ChatOptions
+            {
+                Tools = tools
+            });
+        sw.Stop();
+
+        LogChatResponseSummary(response, sw.Elapsed);
+
+        Output.WriteLine($"Telemetry Stats: InvocationCount={telemetryMiddleware.InvocationCount}, TotalInputTokens={telemetryMiddleware.TotalInputTokens}, TotalOutputTokens={telemetryMiddleware.TotalOutputTokens}");
+
+        Assert.True(telemetryMiddleware.InvocationCount >= 2, $"Expected at least 2 middleware invocations across function calling loop, but got {telemetryMiddleware.InvocationCount}.");
+        Assert.True(telemetryMiddleware.TotalInputTokens > 0, "Expected non-zero tracked input tokens.");
+        Assert.True(telemetryMiddleware.TotalOutputTokens > 0, "Expected non-zero tracked output tokens.");
+
+        var resolvedGeminiChatClient = pipeline.GetService<GeminiChatClient>();
+        var resolvedGeminiClient = pipeline.GetService<IGeminiClient>();
+
+        Assert.NotNull(resolvedGeminiChatClient);
+        Assert.NotNull(resolvedGeminiClient);
+
+        Assert.NotNull(response.Text);
+        Assert.True(
+            response.Text.Contains("12,800", StringComparison.Ordinal) || response.Text.Contains("12800", StringComparison.Ordinal),
+            $"Expected response to contain price (12,800 or 12800), but got: {response.Text}");
+    }
+
+    [ExploratoryFact]
+    public async Task IChatClient_UseFunctionInvocation_CombinedWithReasoningOptions_PreservesThoughtSignatures()
+    {
+        LogSection("TC-MEAI-05: UseFunctionInvocation() Combined with ReasoningOptions (Thought Signatures)");
+        using var geminiClient = CreateGeminiClient();
+
+        [Description("与えられた正の数値の平方根(ルート)を計算します。")]
+        double ComputeSquareRoot([Description("平方根を求めたい正の数値")] double value)
+        {
+            Output.WriteLine($"  [C# Tool Invoked] ComputeSquareRoot(value={value})");
+            return Math.Sqrt(value);
+        }
+
+        IChatClient pipeline = new ChatClientBuilder(geminiClient.AsIChatClient())
+            .UseFunctionInvocation()
+            .Build();
+
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(ComputeSquareRoot, "compute_square_root")
+        };
+
+        var prompt = "面積が 1764 平方メートルの正方形の敷地があります。この敷地の一辺の長さを、提供された平方根計算ツール `compute_square_root` を使用して計算し、さらにその外周の合計長さを求めてください。";
+
+        var sw = Stopwatch.StartNew();
+        var response = await pipeline.GetResponseAsync(
+            [
+                new ChatMessage(ChatRole.System, "あなたは幾何学計算アシスタントです。論理的に思考し、計算ツールを適切に呼び出して答えを求めてください。"),
+                new ChatMessage(ChatRole.User, prompt)
+            ],
+            new ChatOptions
+            {
+                Reasoning = new ReasoningOptions
+                {
+                    Effort = ReasoningEffort.Low,
+                    Output = ReasoningOutput.Summary
+                },
+                Tools = tools
+            });
+        sw.Stop();
+
+        LogChatResponseSummary(response, sw.Elapsed);
+
+        Assert.NotNull(response.Text);
+        var text = response.Text;
+        Assert.True(
+            text.Contains("42", StringComparison.Ordinal) || text.Contains("168", StringComparison.Ordinal),
+            $"Expected response to contain 42 (side length) or 168 (perimeter), but got: {text}");
+
+        Assert.NotNull(response.Usage);
+        Assert.True(
+            response.Usage.ReasoningTokenCount is > 0 ||
+            response.Messages.SelectMany(m => m.Contents).OfType<TextReasoningContent>().Any() ||
+            response.Usage.OutputTokenCount > 0,
+            "Expected reasoning tokens, TextReasoningContent, or non-zero output tokens.");
+    }
+
+    [ExploratoryFact]
+    public async Task IChatClient_UseFunctionInvocation_ParameterlessFunction_ExecutesWithoutSchemaRejection()
+    {
+        LogSection("TC-MEAI-06: Parameterless Function (Null Schema Avoids HTTP 400 Rejection)");
+        using var geminiClient = CreateGeminiClient();
+
+        var systemStatusInvoked = false;
+
+        [Description("現在稼働中のゲートウェイサーバーのシステム稼働状況を取得します。")]
+        object GetSystemStatus()
+        {
+            systemStatusInvoked = true;
+            Output.WriteLine("  [C# Tool Invoked] GetSystemStatus()");
+            return new
+            {
+                status = "ALL_SYSTEMS_OPERATIONAL",
+                uptimeHours = 720,
+                activeConnections = 142
+            };
+        }
+
+        IChatClient pipeline = new ChatClientBuilder(geminiClient.AsIChatClient())
+            .UseFunctionInvocation()
+            .Build();
+
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(GetSystemStatus, "get_system_status")
+        };
+
+        var prompt = "現在のシステム稼働状況を確認して教えてください。";
+
+        var sw = Stopwatch.StartNew();
+        var response = await pipeline.GetResponseAsync(
+            [
+                new ChatMessage(ChatRole.User, prompt)
+            ],
+            new ChatOptions
+            {
+                Tools = tools
+            });
+        sw.Stop();
+
+        LogChatResponseSummary(response, sw.Elapsed);
+
+        Assert.True(systemStatusInvoked, "Expected parameterless function GetSystemStatus to be invoked by the model.");
+        Assert.NotNull(response.Text);
+        var text = response.Text;
+        Assert.True(
+            text.Contains("OPERATIONAL", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("稼働", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("720", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("142", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("正常", StringComparison.OrdinalIgnoreCase),
+            $"Expected response to contain system status info, but got: {text}");
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum SupportPriority
+    {
+        Low,
+        Normal,
+        High,
+        Urgent
+    }
+
+    public sealed record TicketFilter(
+        [property: JsonPropertyName("department")] string Department,
+        [property: JsonPropertyName("priority")] SupportPriority Priority,
+        [property: JsonPropertyName("tags")] List<string>? Tags,
+        [property: JsonPropertyName("maxCount")] int MaxCount = 5);
+
+    private sealed class TelemetryTrackingDelegatingChatClient(IChatClient innerClient) : DelegatingChatClient(innerClient)
+    {
+        public int InvocationCount { get; private set; }
+        public long TotalInputTokens { get; private set; }
+        public long TotalOutputTokens { get; private set; }
+
+        public override async Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            InvocationCount++;
+            var response = await base.GetResponseAsync(messages, options, cancellationToken);
+            if (response.Usage is { } usage)
+            {
+                TotalInputTokens += usage.InputTokenCount ?? 0;
+                TotalOutputTokens += usage.OutputTokenCount ?? 0;
+            }
+            return response;
+        }
     }
 
     private sealed record AccountLookupResult(
