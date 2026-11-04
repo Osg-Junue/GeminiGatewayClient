@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.1.0] - 2026-11-04
+
+### Added
+- **Google Search grounding & URL context support (#10)**:
+  - Added strongly-typed `GroundingMetadata` (`WebSearchQueries`, `SearchEntryPoint`, `GroundingChunks`, `GroundingSupports`, `GroundingSegment`) and `UrlContextMetadata` (`UrlMetadata`, `UrlRetrievalStatus`) on `Candidate`, plus `UrlContextTool` (`Tool.UrlContext`).
+  - Mapped `CitationMetadata` and `GroundingMetadata` onto `Microsoft.Extensions.AI` `TextContent.Annotations` (`CitationAnnotation` with UTF-8 byte -> UTF-16 `char` span conversion across streaming and non-streaming responses) and exposed `WebSearchQueries` in `ChatResponse.AdditionalProperties[GeminiChatPropertyNames.WebSearchQueries]`.
+- **Embeddings (`:embedContent`, `:batchEmbedContents`) & `IEmbeddingGenerator<string, Embedding<float>>` (#10)**:
+  - Added `EmbedContentRequest`, `BatchEmbedContentsRequest`, `EmbedContentResponse`, `BatchEmbedContentsResponse`, `ContentEmbedding`, and `TaskType` models registered in `GeminiJsonContext` for Native AOT.
+  - Added `IGeminiClient.EmbedContentAsync`, `IGeminiClient.BatchEmbedContentsAsync`, `IGeminiClient.DefaultEmbeddingModel`, and `GeminiClientOptions.EmbeddingModel` with automatic `models/{model}` wire normalization.
+  - Added `GeminiEmbeddingGenerator` (`IEmbeddingGenerator<string, Embedding<float>>`), `client.AsIEmbeddingGenerator()`, and DI registration in `services.AddGeminiClient(...)`.
+- **Standard exception constructors & `ChatOptions.AdditionalProperties` forwarding (#11, #12)**:
+  - Added CA1032-compliant constructors on `GeminiApiException`.
+  - Forwarded known generation/request options (`cachedContent`, `store`, `labels`, `candidateCount`, `responseLogprobs`, `logprobs`, `enableEnhancedCivicAnswers`, `audioTimestamp`, `mediaResolution`, `responseModalities`, `thinkingConfig`, etc.) and unknown extension properties from `ChatOptions.AdditionalProperties` in `ChatOptionsMapper` / `ChatRequestMapper`.
+
+### Changed
+- **Streaming, mapping, validation & DI hardening (#8, #9, #11, #12)**:
+  - Linked caller `CancellationToken` and `[EnumeratorCancellation]` token in streaming pipelines, eliminated chunk-boundary `StreamIdleWatchdog` timer races, and applied per-chunk watchdog tracking to non-2xx error body reads.
+  - Drained split non-array HTTP 200 error payloads in `JsonArray` streaming, enforced 64 MB per-element bounds, fixed numeric/boolean literal delimiter consumption, and excluded 2xx status codes from in-stream error mapping.
+  - Preserved `ThoughtSignature` across multi-chunk streaming updates (`TextContent` and `TextReasoningContent`) and persisted history round-trips (`RawRepresentation == null`), while excluding `Thought` parts from `StreamGenerateContentTextAsync`.
+  - Added reflection-free Native AOT serialization for non-generic `IDictionary` and typed `IEnumerable<KeyValuePair<string, TValue>>` in `ToolJsonConverter`.
+  - Prevented token double-counting of `ToolUsePromptTokenCount` and `ThoughtsTokenCount` in `ChatResponseMapper.MapUsage` and backfilled `TotalTokenCount` when omitted.
+  - Aligned all 16 wire enums with official Google Protobuf field numbers (`Unknown = -1`), tightened pre-flight `Validate()` checks (`Role.Unknown`, `SchemaType.Unknown`, `ExecutableCode` / `CodeExecutionResult` oneof exclusivity, `FunctionResponse` JSON object validation), and switched `VideoOffsetJsonConverter` to exact 64-bit integer nanosecond arithmetic.
+  - Rejected relative path segments (`.` / `..`) in `GeminiEndpoint.ToResourcePath`, rejected RFC 9110 control characters in `GeminiRequestHeaders`, and redacted `Endpoint` query/userinfo/fragment in `GeminiClientOptions.ToString()`.
+  - Registered `GeminiClient`, `IGeminiClient`, `IChatClient`, and `IEmbeddingGenerator` as singletons with `.ValidateOnStart()` in `AddGeminiClient(...)` while supporting late `IGeminiClient` test/mock overrides.
+
 ## [2.0.3] - 2026-11-04
 
 ### Changed
