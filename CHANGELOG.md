@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed (Breaking)
+- **Null elements in `ChatOptions.RawRepresentationFactory` templates now fail validation**: a `null` in a template's `Contents`, `Content.Parts`, `Tools`, `Tool.FunctionDeclarations`, `SafetySettings`, or `Schema.AnyOf` now throws `ArgumentException` before anything is sent, matching a `null` passed directly on a request. Except for array-backed `Parts`, these elements were previously removed silently while cloning the template. `null` values in server responses are still tolerated.
+- **Exception types for cyclic or very deep tool values**: self-referencing or deeply nested collections in tool results and arguments can now surface as `InvalidOperationException` or `JsonReaderException` instead of `JsonException`, unless `JsonSerializerOptions.ReferenceHandler` is set.
+
+### Changed
+- **Request bodies keep non-ASCII text as UTF-8**: text in the Basic Multilingual Plane is no longer written as `\uXXXX` escapes, which reduces Japanese conversation bodies by about 40%. The JSON is semantically unchanged, HTML-sensitive ASCII such as `<` and `&` stays escaped, and supplementary characters such as emoji stay escaped.
+- **Request mapping and validation**:
+  - Request validation no longer allocates a path string per content or part, and formats paths only on failure. `Schema` validation follows the same approach but still allocates for its visited set and enumerators.
+  - Replayed function-call arguments are compared by raw bytes before falling back to `JsonElement.DeepEquals`, which removes most of the cost of re-sending large arguments on every turn.
+  - `ToolJsonConverter.ToDictionary` pre-sizes its result, and plain sequences in tool values skip a redundant serializer pass.
+- **Response handling**:
+  - Bodies with a known `Content-Length` no longer grow and copy the buffer for the final read.
+  - `GeminiStreamReader` now uses a single SSE line-processing path and `SearchValues<byte>` newline scanning.
+  - Grounding chunk tracking uses a 64-bit mask, and model collections are allocated lazily.
+
+### Fixed
+- Single-use sequences returned as tool results were serialized as an empty array, because they were enumerated more than once. They are now enumerated once.
+- A `FunctionResultContent` with a `Part` attached as `RawRepresentation` re-sent the attached response even after `Result` changed. It now sends the current result while keeping the attached name, id, and metadata.
+- `ChatRequestMapper` threw `NullReferenceException` for a template whose `Contents` ended with `null`.
+- Buffered responses starting with a UTF-8 byte order mark failed to parse, which also hid the details of error bodies.
+- Explicit citation resolution ignored `partIndex == 0`.
+
 ## [2.1.0] - 2026-11-04
 
 ### Added
