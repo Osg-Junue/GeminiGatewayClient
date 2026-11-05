@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using GeminiGatewayClient.Models;
@@ -239,12 +240,9 @@ internal static class ChatRequestMapper
 
         foreach (var (key, value) in arguments)
         {
-            // Replayed arguments are byte-identical to the wire, so the vectorized compare settles nearly every call;
-            // DeepEquals stays as the fallback for values that are equal but formatted differently.
             if (value is not JsonElement element ||
                 !rawObj.TryGetProperty(key, out var rawProp) ||
-                !(JsonMarshal.GetRawUtf8Value(element).SequenceEqual(JsonMarshal.GetRawUtf8Value(rawProp)) ||
-                  JsonElement.DeepEquals(element, rawProp)))
+                !IsSameJson(element, rawProp))
             {
                 return false;
             }
@@ -252,6 +250,18 @@ internal static class ChatRequestMapper
 
         return true;
     }
+
+    /// <summary>
+    /// Replayed arguments are byte-identical to the wire, so the vectorized compare settles nearly every call;
+    /// <see cref="JsonElement.DeepEquals"/> stays as the fallback for values that are equal but formatted differently.
+    /// </summary>
+    /// <remarks>
+    /// Kept out of line: inlined, it stops the JIT from stack-allocating the caller's boxed dictionary enumerator (56 B per call).
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool IsSameJson(JsonElement left, JsonElement right) =>
+        JsonMarshal.GetRawUtf8Value(left).SequenceEqual(JsonMarshal.GetRawUtf8Value(right)) ||
+        JsonElement.DeepEquals(left, right);
 
     private static bool IsUnmodifiedRawPart(AIContent item, Part rawPart, string? signature)
     {
