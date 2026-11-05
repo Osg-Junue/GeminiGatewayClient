@@ -285,6 +285,11 @@ internal static class GeminiErrorParser
                         read = await reader.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), watchdog.Token).ConfigureAwait(false);
                         readSucceeded = true;
                     }
+                    catch (IOException)
+                    {
+                        // The status and headers already arrived, so a cut-off body must not hide them or the retry advice.
+                        break;
+                    }
                     finally
                     {
                         watchdog.AfterRead(readSucceeded);

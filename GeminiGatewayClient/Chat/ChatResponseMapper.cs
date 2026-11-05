@@ -153,7 +153,8 @@ internal static class ChatResponseMapper
                     }
                     break;
 
-                case { ThoughtSignature: { Length: > 0 }, Text: null or "", InlineData: null, FileData: null, ExecutableCode: null, CodeExecutionResult: null, FunctionResponse: null }:
+                case { ThoughtSignature: { Length: > 0 }, Text: null or "", InlineData: null, FileData: null, ExecutableCode: null, CodeExecutionResult: null, FunctionResponse: null }
+                    when !IsUnknownPartKind(part):
                     contents.Add(new TextReasoningContent(string.Empty)
                     {
                         ProtectedData = part.ThoughtSignature,
@@ -210,6 +211,12 @@ internal static class ChatResponseMapper
                     AttachThoughtSignature(codeContent, part.ThoughtSignature);
                     contents.Add(codeContent);
                     break;
+
+                // Part kinds without a chat mapping (for example toolCall) still have to reach the next turn,
+                // unless the part could not be resent, which would break every later turn of the conversation.
+                case { ExtensionData.Count: > 0 } when part.GetValidationError() is null:
+                    contents.Add(new AIContent { RawRepresentation = part });
+                    break;
             }
         }
 
@@ -220,6 +227,11 @@ internal static class ChatResponseMapper
 
         return contents;
     }
+
+    /// <summary>
+    /// An empty <c>text</c> key marks a trailing signature carrier; without one, unknown fields mean a part kind this client does not model.
+    /// </summary>
+    private static bool IsUnknownPartKind(Part part) => part is { Text: null, ExtensionData.Count: > 0 };
 
     private static bool HasCandidateAnnotations(Candidate candidate) =>
         candidate.CitationMetadata?.Citations is { Count: > 0 } ||

@@ -206,7 +206,7 @@ internal static class ToolJsonConverter
             case DateOnly date: writer.WriteStringValue(date.ToString("O", CultureInfo.InvariantCulture)); break;
             case TimeOnly time: writer.WriteStringValue(time.ToString("O", CultureInfo.InvariantCulture)); break;
             case TimeSpan span: writer.WriteStringValue(span.ToString("c", CultureInfo.InvariantCulture)); break;
-            case Uri uri: writer.WriteStringValue(uri.ToString()); break;
+            case Uri uri: writer.WriteStringValue(uri.OriginalString); break;
             case Enum enumValue:
                 if (TrySerialize(enumValue, options, out var serializedEnum))
                 {

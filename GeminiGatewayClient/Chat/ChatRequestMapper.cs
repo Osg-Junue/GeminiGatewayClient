@@ -164,7 +164,7 @@ internal static class ChatRequestMapper
                 break;
 
             case UriContent uri:
-                var uriPart = Part.FromUri(uri.Uri.ToString(), string.IsNullOrWhiteSpace(uri.MediaType) ? null : uri.MediaType);
+                var uriPart = Part.FromUri(uri.Uri.OriginalString, string.IsNullOrWhiteSpace(uri.MediaType) ? null : uri.MediaType);
                 uriPart.ThoughtSignature = signature;
                 uriPart.VideoMetadata = rawPart?.VideoMetadata?.Clone();
                 parts.Add(uriPart);
@@ -285,15 +285,14 @@ internal static class ChatRequestMapper
             DataContent data =>
                 string.IsNullOrEmpty(rawPart.Text) &&
                 rawPart.InlineData?.Data is { } rawBytes &&
-                string.Equals(
-                     string.IsNullOrWhiteSpace(rawPart.InlineData.MimeType) ? MimeTypes.ApplicationOctetStream : rawPart.InlineData.MimeType,
-                     string.IsNullOrWhiteSpace(data.MediaType) ? MimeTypes.ApplicationOctetStream : data.MediaType,
-                     StringComparison.Ordinal) &&
+                // A response may omit the MIME type, but a request must carry one, so that part is rebuilt rather than replayed.
+                !string.IsNullOrWhiteSpace(rawPart.InlineData.MimeType) &&
+                string.Equals(rawPart.InlineData.MimeType, data.MediaType, StringComparison.Ordinal) &&
                 data.Data.Span.SequenceEqual(rawBytes),
             UriContent uri =>
                 string.IsNullOrEmpty(rawPart.Text) &&
                 rawPart.FileData is not null &&
-                string.Equals(rawPart.FileData.FileUri, uri.Uri.ToString(), StringComparison.Ordinal) &&
+                string.Equals(rawPart.FileData.FileUri, uri.Uri.OriginalString, StringComparison.Ordinal) &&
                 string.Equals(
                     string.IsNullOrWhiteSpace(rawPart.FileData.MimeType) ? MimeTypes.ApplicationOctetStream : rawPart.FileData.MimeType,
                     string.IsNullOrWhiteSpace(uri.MediaType) ? MimeTypes.ApplicationOctetStream : uri.MediaType,

@@ -64,7 +64,7 @@ services.AddGeminiClient(options =>
     options.Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta");
     options.Model = "gemini-3-flash-preview";
     options.EmbeddingModel = "gemini-embedding-001";
-    options.ApiKey = builder.Configuration["Gemini:SubscriptionKey"];
+    options.ApiKey = Environment.GetEnvironmentVariable("GEMINI_SUBSCRIPTION_KEY");
     options.ApiKeyHeader = "Ocp-Apim-Subscription-Key"; // Sends only this header; x-goog-api-key is omitted
 });
 
@@ -161,6 +161,7 @@ Core behavior is covered by deterministic unit tests ([`tests/GeminiGatewayClien
 | **Non-2xx HTTP status** or **in-stream `{"error": ...}`** after HTTP 200 | `GeminiApiException` | Check `ex.IsTransient` (`408`, `429`, `500`, `502`, `503`, `504`, `RESOURCE_EXHAUSTED`, `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `INTERNAL`), `ex.StatusCode`, `ex.ErrorStatus`, and honor `ex.RetryAfter` when present. |
 | **Stalled response body or stream** (no bytes received within `StreamIdleTimeout`, default **2 min**) | `TimeoutException` | Thrown by `StreamIdleWatchdog` when an upstream proxy or connection hangs mid-stream after headers arrive. |
 | **Initial header timeout** (`Timeout`, default **5 min**) or **caller cancellation** | `OperationCanceledException` (`TaskCanceledException`) | Distinguish caller cancellation (`ct.IsCancellationRequested`) from `HttpClient.Timeout` expiration (`!ct.IsCancellationRequested`). |
+| **Connection lost** before the response, or while reading a successful response body or stream | `HttpRequestException` (`HttpRequestError` gives the failure category when known; `StatusCode` is set once headers arrived) | Safe to retry only if your request is idempotent and any partial stream output is discarded. Resilience handlers do not see failures after the headers because streaming bodies are read outside the handler pipeline. |
 | **Invalid request or options** (including `StreamGenerateContentAsync` before enumeration) | `ArgumentException` / `InvalidOperationException` | Validated eagerly before any network call is made. |
 
 ### Production Deployment Checklist

@@ -1404,4 +1404,417 @@ public sealed class AdversarialValidationAndToolConversionTests
     }
 
     #endregion
+
+    #region Inline data tolerates keys the API does not guarantee
+
+    private static GenerateContentResponse ParseResponse(string partsJson) => JsonSerializer.Deserialize(
+        $$$"""{"candidates":[{"content":{"role":"model","parts":[{{{partsJson}}}]}}]}""",
+        GeminiJsonContext.Default.GenerateContentResponse)!;
+
+    [Fact]
+    public void InlineData_WithoutMimeType_KeepsTheResponseAndFallsBackToOctetStream()
+    {
+        var response = ParseResponse("""{"text":"ok"},{"inlineData":{"data":"AQID"}}""");
+
+        var contents = ChatResponseMapper.ToChatResponse(response, Model).Messages[0].Contents;
+
+        Assert.Equal("ok", Assert.IsType<TextContent>(contents[0]).Text);
+        Assert.Equal(MimeTypes.ApplicationOctetStream, Assert.IsType<DataContent>(contents[1]).MediaType);
+    }
+
+    [Fact]
+    public void InlineData_WithoutData_KeepsTheRestOfTheResponse()
+    {
+        var response = ParseResponse("""{"text":"ok"},{"inlineData":{"mimeType":"image/png"}}""");
+
+        var content = Assert.Single(ChatResponseMapper.ToChatResponse(response, Model).Messages[0].Contents);
+
+        Assert.Equal("ok", Assert.IsType<TextContent>(content).Text);
+    }
+
+    [Fact]
+    public void InlineData_WithoutMimeType_CanBeReplayedOnTheNextTurn()
+    {
+        var message = ChatResponseMapper.ToChatResponse(ParseResponse("""{"inlineData":{"data":"AQID"}}"""), Model).Messages[0];
+
+        var request = MapMessages(message);
+        request.Validate();
+
+        var blob = request.Contents[0].Parts[0].InlineData!;
+        Assert.Equal(MimeTypes.ApplicationOctetStream, blob.MimeType);
+        Assert.Equal([1, 2, 3], blob.Data);
+    }
+
+    [Fact]
+    public void InlineData_WithMimeType_StillReusesTheRawPartOnReplay()
+    {
+        var message = ChatResponseMapper.ToChatResponse(ParseResponse("""{"inlineData":{"mimeType":"image/png","data":"AQID","custom":1}}"""), Model).Messages[0];
+
+        var blob = MapMessages(message).Contents[0].Parts[0].InlineData!;
+
+        Assert.True(blob.ExtensionData!.ContainsKey("custom"));
+    }
+
+    [Theory]
+    [InlineData("""{"inlineData":{"data":"AQID"}}""", ".InlineData.MimeType cannot be null or whitespace.")]
+    [InlineData("""{"inlineData":{"mimeType":"image/png"}}""", ".InlineData.Data cannot be null or empty.")]
+    [InlineData("""{"inlineData":{}}""", ".InlineData.MimeType cannot be null or whitespace.")]
+    public void InlineData_FromAPartialResponse_IsStillRejectedWhenSent(string partJson, string reason)
+    {
+        var part = ParseResponse(partJson).Candidates[0].Content!.Parts[0];
+
+        Assert.Equal(reason, part.GetValidationError());
+    }
+
+    [Fact]
+    public void InlineData_NullJsonValues_BecomeEmptyInsteadOfNull()
+    {
+        var blob = ParseResponse("""{"inlineData":{"mimeType":null,"data":null}}""").Candidates[0].Content!.Parts[0].InlineData!;
+
+        Assert.Equal(string.Empty, blob.MimeType);
+        Assert.Empty(blob.Data);
+    }
+
+    #endregion
+
+    #region URIs reach the wire exactly as supplied
+
+    private static GenerateContentRequest MapMessages(params ChatMessage[] messages)
+    {
+        using var client = new GeminiClient("key", Model);
+        return ChatRequestMapper.ToRequest(messages, null, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
+    }
+
+    [Theory]
+    [InlineData("https://example.com/a%20b.pdf")]
+    [InlineData("https://example.com/%E3%81%82.pdf")]
+    [InlineData("https://example.com/a%2Fb.pdf?x=1%262#f")]
+    [InlineData("gs://bucket/a%20b.pdf")]
+    [InlineData("files/abc123")]
+    public void UriContent_IsSentExactlyAsSupplied(string uri)
+    {
+        var content = new UriContent(new Uri(uri, UriKind.RelativeOrAbsolute), "application/pdf");
+
+        var request = MapMessages(new ChatMessage(ChatRole.User, [content]));
+
+        Assert.Equal(uri, request.Contents[0].Parts[0].FileData!.FileUri);
+    }
+
+    [Fact]
+    public void UriContent_ReplayedFromAResponse_ReusesTheRawPart()
+    {
+        var response = ParseResponse("""{"fileData":{"fileUri":"https://example.com/a%20b.pdf","mimeType":"application/pdf","custom":1}}""");
+        var message = ChatResponseMapper.ToChatResponse(response, Model).Messages[0];
+
+        var fileData = MapMessages(message).Contents[0].Parts[0].FileData!;
+
+        Assert.Equal("https://example.com/a%20b.pdf", fileData.FileUri);
+        Assert.True(fileData.ExtensionData!.ContainsKey("custom"));
+    }
+
+    [Fact]
+    public void UriContent_ChangedAfterMapping_IsNotMistakenForTheRawPart()
+    {
+        var response = ParseResponse("""{"fileData":{"fileUri":"https://example.com/a%20b.pdf","mimeType":"application/pdf"}}""");
+        var message = ChatResponseMapper.ToChatResponse(response, Model).Messages[0];
+        message.Contents[0] = new UriContent(new Uri("https://example.com/a%20c.pdf"), "application/pdf") { RawRepresentation = message.Contents[0].RawRepresentation };
+
+        Assert.Equal("https://example.com/a%20c.pdf", MapMessages(message).Contents[0].Parts[0].FileData!.FileUri);
+    }
+
+    [Fact]
+    public void ToResponseObject_UriValue_KeepsItsEscapes()
+    {
+        var converted = ToolJsonConverter.ToResponseObject(new Uri("https://example.com/a%20b"), new JsonSerializerOptions { TypeInfoResolver = GeminiJsonContext.Default });
+
+        Assert.Equal("https://example.com/a%20b", converted.GetProperty("result").GetString());
+    }
+
+    #endregion
+
+    #region Connection failures while reading a body surface as HttpRequestException
+
+    private sealed class FailingStream(byte[] prefix, Exception failure) : Stream
+    {
+        private int _position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (_position == prefix.Length)
+            {
+                throw failure;
+            }
+
+            var count = Math.Min(buffer.Length, prefix.Length - _position);
+            prefix.AsSpan(_position, count).CopyTo(buffer);
+            _position += count;
+            return count;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Read(buffer.Span));
+    }
+
+    private static GeminiClient ClientFailingAfter(
+        string prefix,
+        Exception failure,
+        HttpStatusCode status = HttpStatusCode.OK,
+        GeminiStreamingFormat format = GeminiStreamingFormat.ServerSentEvents,
+        TimeSpan? retryAfter = null)
+    {
+        var handler = new RecordingHandler((_, _) =>
+        {
+            var response = new HttpResponseMessage(status)
+            {
+                Content = new StreamContent(new FailingStream(Encoding.UTF8.GetBytes(prefix), failure))
+            };
+            if (retryAfter is { } delay)
+            {
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(delay);
+            }
+
+            return Task.FromResult(response);
+        });
+        return new GeminiClient(
+            new GeminiClientOptions { ApiKey = "key", Model = Model, EmbeddingModel = Model, StreamingFormat = format },
+            new HttpClient(handler));
+    }
+
+    public static TheoryData<Exception, HttpRequestError> BodyFailures() => new()
+    {
+        { new HttpIOException(HttpRequestError.ResponseEnded), HttpRequestError.ResponseEnded },
+        { new HttpIOException(HttpRequestError.InvalidResponse), HttpRequestError.InvalidResponse },
+        { new IOException("connection reset"), HttpRequestError.ResponseEnded }
+    };
+
+    [Theory]
+    [MemberData(nameof(BodyFailures))]
+    public async Task BufferedRead_ConnectionLostMidBody_ThrowsHttpRequestException(Exception failure, HttpRequestError expected)
+    {
+        using var client = ClientFailingAfter("""{"candidates":[""", failure);
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() => client.GenerateContentAsync("hello"));
+
+        Assert.Equal(expected, error.HttpRequestError);
+        Assert.Equal(HttpStatusCode.OK, error.StatusCode);
+        Assert.Same(failure, error.InnerException);
+    }
+
+    [Fact]
+    public async Task EmbeddingRead_ConnectionLostMidBody_ThrowsHttpRequestException()
+    {
+        using var client = ClientFailingAfter("""{"embedding":""", new IOException("reset"));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => client.EmbedContentAsync(EmbedContentRequest.FromText("x")));
+        await Assert.ThrowsAsync<HttpRequestException>(() => client.BatchEmbedContentsAsync(new BatchEmbedContentsRequest { Requests = [EmbedContentRequest.FromText("x")] }));
+    }
+
+    [Theory]
+    [InlineData(GeminiStreamingFormat.ServerSentEvents, "data: {\"responseId\":\"a\"}\r\n\r\n")]
+    [InlineData(GeminiStreamingFormat.JsonArray, "[{\"responseId\":\"a\"},")]
+    public async Task Stream_ConnectionLostAfterAChunk_YieldsItThenThrowsHttpRequestException(GeminiStreamingFormat format, string prefix)
+    {
+        var failure = new HttpIOException(HttpRequestError.ResponseEnded);
+        using var client = ClientFailingAfter(prefix, failure, format: format);
+        var received = new List<string?>();
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(async () =>
+        {
+            await foreach (var chunk in client.StreamGenerateContentAsync("hello"))
+            {
+                received.Add(chunk.ResponseId);
+            }
+        });
+
+        Assert.Same(failure, error.InnerException);
+        if (format == GeminiStreamingFormat.ServerSentEvents)
+        {
+            Assert.Equal(["a"], received);
+        }
+    }
+
+    [Fact]
+    public async Task ErrorBody_ConnectionLostWhileReading_KeepsTheStatusAndRetryAdvice()
+    {
+        using var client = ClientFailingAfter(
+            """{"error":{"message":"slow""",
+            new HttpIOException(HttpRequestError.ResponseEnded),
+            HttpStatusCode.TooManyRequests,
+            retryAfter: TimeSpan.FromSeconds(7));
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("hello"));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, error.StatusCode);
+        Assert.True(error.IsTransient);
+        Assert.Equal(TimeSpan.FromSeconds(7), error.RetryAfter);
+    }
+
+    [Fact]
+    public async Task ErrorBody_ConnectionLostBeforeAnyByte_StillReportsTheStatus()
+    {
+        using var client = ClientFailingAfter(string.Empty, new IOException("reset"), HttpStatusCode.ServiceUnavailable);
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("hello"));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task ErrorBody_ReadOnAStream_KeepsTheStatusToo()
+    {
+        using var client = ClientFailingAfter("{", new IOException("reset"), HttpStatusCode.ServiceUnavailable);
+
+        await Assert.ThrowsAsync<GeminiApiException>(async () =>
+        {
+            await foreach (var _ in client.StreamGenerateContentAsync("hello"))
+            {
+            }
+        });
+    }
+
+    [Fact]
+    public async Task BufferedRead_CancellationDuringRead_StaysOperationCanceled()
+    {
+        using var client = ClientFailingAfter("{", new OperationCanceledException());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GenerateContentAsync("hello"));
+    }
+
+    [Fact]
+    public async Task BufferedRead_NonIOFailure_IsNotRewrapped()
+    {
+        using var client = ClientFailingAfter("{", new InvalidDataException("not transport"));
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GenerateContentAsync("hello"));
+    }
+
+    #endregion
+
+    #region Parts without a chat mapping survive the IChatClient round trip
+
+    private const string ToolPartsJson = """{"toolCall":{"id":"1","toolType":"GOOGLE_SEARCH_WEB"}},{"toolResponse":{"id":"1","response":{"ok":true}}},{"text":"done"}""";
+
+    [Fact]
+    public void UnmappedParts_AreKeptInOrderAlongsideText()
+    {
+        var contents = ChatResponseMapper.ToChatResponse(ParseResponse(ToolPartsJson), Model).Messages[0].Contents;
+
+        Assert.Equal(3, contents.Count);
+        Assert.True(Assert.IsType<Part>(contents[0].RawRepresentation).ExtensionData!.ContainsKey("toolCall"));
+        Assert.True(Assert.IsType<Part>(contents[1].RawRepresentation).ExtensionData!.ContainsKey("toolResponse"));
+        Assert.Equal("done", Assert.IsType<TextContent>(contents[2]).Text);
+    }
+
+    [Fact]
+    public void UnmappedParts_ReplayInOrderAndPassValidation()
+    {
+        var message = ChatResponseMapper.ToChatResponse(ParseResponse(ToolPartsJson), Model).Messages[0];
+
+        var request = MapMessages(message);
+        request.Validate();
+
+        var parts = request.Contents[0].Parts;
+        Assert.Equal(3, parts.Count);
+        Assert.Equal("""{"id":"1","toolType":"GOOGLE_SEARCH_WEB"}""", Raw(parts[0].ExtensionData!["toolCall"]));
+        Assert.Equal("""{"id":"1","response":{"ok":true}}""", Raw(parts[1].ExtensionData!["toolResponse"]));
+        Assert.Equal("done", parts[2].Text);
+    }
+
+    [Fact]
+    public void UnmappedPart_WithSignature_StaysSeparateFromTheTextBeforeIt()
+    {
+        var response = ParseResponse("""{"text":"a"},{"toolCall":{"id":"1"},"thoughtSignature":"s"}""");
+        var message = ChatResponseMapper.ToChatResponse(response, Model).Messages[0];
+
+        var parts = MapMessages(message).Contents[0].Parts;
+
+        Assert.Equal(2, parts.Count);
+        Assert.Equal("a", parts[0].Text);
+        Assert.Null(parts[0].ThoughtSignature);
+        Assert.Equal("s", parts[1].ThoughtSignature);
+        Assert.True(parts[1].ExtensionData!.ContainsKey("toolCall"));
+    }
+
+    [Fact]
+    public void UnmappedPart_SharingASignatureWithTheTextBeforeIt_IsNotDropped()
+    {
+        var response = ParseResponse("""{"text":"a","thoughtSignature":"s"},{"thoughtSignature":"s","custom":1}""");
+        var message = ChatResponseMapper.ToChatResponse(response, Model).Messages[0];
+
+        var parts = MapMessages(message).Contents[0].Parts;
+
+        Assert.Equal(2, parts.Count);
+        Assert.True(parts[1].ExtensionData!.ContainsKey("custom"));
+    }
+
+    [Fact]
+    public void SignatureOnlyPart_WithoutExtensionData_KeepsItsExistingMapping()
+    {
+        var contents = ChatResponseMapper.ToChatResponse(ParseResponse("""{"thoughtSignature":"s"}"""), Model).Messages[0].Contents;
+
+        Assert.Equal("s", Assert.IsType<TextReasoningContent>(Assert.Single(contents)).ProtectedData);
+    }
+
+    [Theory]
+    [InlineData("""{"fileData":{"fileUri":""},"custom":1}""")]
+    [InlineData("""{"inlineData":{"mimeType":"a/b"},"custom":1}""")]
+    [InlineData("""{"inlineData":{},"custom":1}""")]
+    public void UnmappedPart_ThatCouldNotBeResent_IsIgnoredInsteadOfBreakingTheConversation(string partJson)
+    {
+        var response = ParseResponse(partJson + """,{"text":"ok"}""");
+        var message = ChatResponseMapper.ToChatResponse(response, Model).Messages[0];
+
+        Assert.Equal("ok", Assert.IsType<TextContent>(Assert.Single(message.Contents)).Text);
+        MapMessages(message).Validate();
+    }
+
+    [Fact]
+    public void UnmappedParts_DoNotAlterTextOrFinishReason()
+    {
+        var mapped = ChatResponseMapper.ToChatResponse(ParseResponse(ToolPartsJson), Model);
+
+        Assert.Equal("done", mapped.Text);
+        Assert.NotEqual(ChatFinishReason.ToolCalls, mapped.FinishReason);
+    }
+
+    [Fact]
+    public void UnmappedParts_AreKeptOnStreamingUpdates()
+    {
+        var update = ChatResponseMapper.ToChatResponseUpdate(ParseResponse(ToolPartsJson), Model);
+
+        Assert.Equal(3, update.Contents.Count);
+    }
+
+    [Fact]
+    public void ReplayedPartClone_DoesNotShareExtensionDataWithTheResponse()
+    {
+        var response = ParseResponse(ToolPartsJson);
+        var message = ChatResponseMapper.ToChatResponse(response, Model).Messages[0];
+
+        var part = MapMessages(message).Contents[0].Parts[0];
+        part.ExtensionData!.Clear();
+
+        Assert.NotEmpty(response.Candidates[0].Content!.Parts[0].ExtensionData!);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"text":""}""")]
+    public void EmptyParts_AreStillOmitted(string partJson)
+    {
+        Assert.Empty(ChatResponseMapper.ToChatResponse(ParseResponse(partJson), Model).Messages[0].Contents);
+    }
+
+    #endregion
 }

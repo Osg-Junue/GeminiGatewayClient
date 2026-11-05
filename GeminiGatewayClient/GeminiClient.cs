@@ -247,6 +247,10 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                 $"No data was received from the Gemini response within {watchdog.IdleTimeout} (GeminiClientOptions.StreamIdleTimeout).",
                 ex);
         }
+        catch (IOException ex)
+        {
+            throw CreateBodyReadException(ex, httpResponse.StatusCode);
+        }
     }
 
     private async IAsyncEnumerable<GenerateContentResponse> StreamCoreAsync(
@@ -291,6 +295,10 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                         throw new TimeoutException(
                             $"No data was received from the Gemini streaming response within {watchdog.IdleTimeout} (GeminiClientOptions.StreamIdleTimeout).",
                             ex);
+                    }
+                    catch (IOException ex)
+                    {
+                        throw CreateBodyReadException(ex, httpResponse.StatusCode);
                     }
 
                     yield return chunk;
@@ -495,6 +503,17 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Reports a connection lost after the response headers arrived the same way as one lost before them, because
+    /// <see cref="HttpClient"/> otherwise surfaces it as a bare <see cref="IOException"/> from the content stream.
+    /// </summary>
+    private static HttpRequestException CreateBodyReadException(IOException exception, System.Net.HttpStatusCode statusCode) =>
+        new(
+            exception is HttpIOException { HttpRequestError: var error } ? error : HttpRequestError.ResponseEnded,
+            "Failed to read the Gemini response body.",
+            exception,
+            statusCode);
 
     private static HttpClient CreateDefaultHttpClient(TimeSpan timeout) =>
         new(CreateDefaultHandler(), disposeHandler: true) { Timeout = timeout };

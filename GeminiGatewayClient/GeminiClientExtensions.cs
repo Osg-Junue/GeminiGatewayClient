@@ -33,7 +33,7 @@ public static class GeminiClientExtensions
         /// <exception cref="TimeoutException">
         /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
         /// </exception>
-        /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred before an HTTP response was received.</exception>
+        /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
         /// <exception cref="OperationCanceledException">
         /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
         /// </exception>
@@ -107,7 +107,7 @@ public static class GeminiClientExtensions
         /// <exception cref="TimeoutException">
         /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
         /// </exception>
-        /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred before an HTTP response was received.</exception>
+        /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
         /// <exception cref="OperationCanceledException">
         /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
         /// </exception>
