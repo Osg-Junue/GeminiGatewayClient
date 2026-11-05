@@ -19,11 +19,9 @@ public class ChatMapperBenchmarks
     private GenerateContentResponse _multiPartResponse = null!;
     private GenerateContentResponse _groundedResponse = null!;
     private GenerateContentResponse _hybridResponseForNormalization = null!;
-    [Params(1, 16, 64)]
-    public int MessageCount { get; set; }
+    private GenerateContentResponse _groundedJapaneseResponse = null!;
 
     private List<ChatMessage> _multiTurnMessages = null!;
-    private List<ChatMessage> _scaledMultiTurnMessages = null!;
     private List<ChatMessage> _systemAndToolMessages = null!;
     private List<ChatMessage> _replayedToolHistoryMessages = null!;
     private List<ChatMessage> _toolArgumentsSerializedMessages = null!;
@@ -159,6 +157,8 @@ public class ChatMapperBenchmarks
             ]
         };
 
+        _groundedJapaneseResponse = CreateGroundedJapaneseResponse();
+
         _hybridResponseForNormalization = new GenerateContentResponse
         {
             Candidates =
@@ -285,13 +285,6 @@ public class ChatMapperBenchmarks
             }
         };
 
-        _scaledMultiTurnMessages = new List<ChatMessage>(MessageCount);
-        for (var i = 0; i < MessageCount; i++)
-        {
-            var role = (i % 2 == 0) ? ChatRole.User : ChatRole.Assistant;
-            _scaledMultiTurnMessages.Add(new ChatMessage(role, $"Turn {i + 1}: Conversation turn payload with realistic text length for scaling benchmark."));
-        }
-
         var rawToolArgs = JsonDocument.Parse("""{"city":"Tokyo","metric":"temperature","units":"celsius","forecastDays":5}""").RootElement.Clone();
         var rawPartWithArgs = new Part
         {
@@ -303,19 +296,14 @@ public class ChatMapperBenchmarks
             }
         };
 
-        // Raw args reuse path: FunctionCallContent has matching RawRepresentation and identical dictionary args
+        // Raw args reuse path: replayed FunctionCallContent whose arguments are the JsonElement values produced by
+        // ChatResponseMapper. Plain CLR values would fail AreUnmodifiedArguments and silently measure re-serialization instead.
         _toolArgumentsRawReusedMessages =
         [
             new ChatMessage(ChatRole.User, "Check Tokyo weather forecast for 5 days."),
             new ChatMessage(ChatRole.Assistant,
             [
-                new FunctionCallContent("call-fair-1", "get_weather_forecast", new Dictionary<string, object?>
-                {
-                    ["city"] = "Tokyo",
-                    ["metric"] = "temperature",
-                    ["units"] = "celsius",
-                    ["forecastDays"] = 5
-                })
+                new FunctionCallContent("call-fair-1", "get_weather_forecast", ToolJsonConverter.ToDictionary(rawToolArgs))
                 {
                     RawRepresentation = rawPartWithArgs
                 }
@@ -346,6 +334,47 @@ public class ChatMapperBenchmarks
     [GlobalCleanup]
     public void Cleanup() => _geminiClient.Dispose();
 
+    /// <summary>
+    /// A ~1,000-character multi-byte answer with evenly spread supports, exercising the non-ASCII UTF-8 to UTF-16 offset conversion.
+    /// </summary>
+    private static GenerateContentResponse CreateGroundedJapaneseResponse()
+    {
+        const int sentenceCount = 32;
+        const string sentence = "東京と京都の今週の天気予報について詳しく説明します🌸。";
+        var sentenceBytes = System.Text.Encoding.UTF8.GetByteCount(sentence);
+
+        var supports = new List<GroundingSupport>(sentenceCount);
+        for (var i = 0; i < sentenceCount; i++)
+        {
+            supports.Add(new GroundingSupport
+            {
+                Segment = new GroundingSegment { PartIndex = 0, StartIndex = i * sentenceBytes, EndIndex = (i + 1) * sentenceBytes, Text = sentence },
+                GroundingChunkIndices = [i % 8]
+            });
+        }
+
+        var chunks = new List<GroundingChunk>(8);
+        for (var i = 0; i < 8; i++)
+        {
+            chunks.Add(new GroundingChunk { Web = new GroundingChunkWeb { Uri = $"https://weather.example.jp/{i}", Title = $"天気 {i}" } });
+        }
+
+        return new GenerateContentResponse
+        {
+            ResponseId = "resp-grounded-ja",
+            ModelVersion = ModelId,
+            Candidates =
+            [
+                new Candidate
+                {
+                    FinishReason = FinishReason.Stop,
+                    Content = new Content { Role = Role.Model, Parts = [Part.FromText(string.Concat(Enumerable.Repeat(sentence, sentenceCount)))] },
+                    GroundingMetadata = new GroundingMetadata { GroundingChunks = chunks, GroundingSupports = supports }
+                }
+            ]
+        };
+    }
+
     [Benchmark]
     public ChatResponse MapResponse_SinglePart() =>
         ChatResponseMapper.ToChatResponse(_singlePartResponse, ModelId);
@@ -363,8 +392,8 @@ public class ChatMapperBenchmarks
         ChatResponseMapper.ToChatResponse(_groundedResponse, ModelId);
 
     [Benchmark]
-    public GenerateContentRequest ToRequest_MultiTurn() =>
-        ChatRequestMapper.ToRequest(_scaledMultiTurnMessages, options: null, _chatClient, ModelId, _toolSerializerOptions);
+    public ChatResponse MapResponse_GroundingJapanese() =>
+        ChatResponseMapper.ToChatResponse(_groundedJapaneseResponse, ModelId);
 
     [Benchmark]
     public GenerateContentRequest ToRequest_MultiTurnNoSystem() =>

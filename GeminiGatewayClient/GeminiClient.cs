@@ -27,6 +27,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
     private const string EmbedContentOperation = "embedContent";
     private const string BatchEmbedContentsOperation = "batchEmbedContents";
     private const int MaxPreallocatedBufferBytes = 10 * 1024 * 1024;
+    private const int ReadChunkBytes = 4096;
     internal const int MaxBufferedResponseBytes = 64 * 1024 * 1024;
 
     private static readonly TimeSpan s_pooledConnectionLifetime = TimeSpan.FromMinutes(2);
@@ -199,8 +200,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
             await using (stream.ConfigureAwait(false))
             {
                 var initialCapacity = contentLength is > 0 and <= MaxPreallocatedBufferBytes and var length
-                    ? (int)Math.Max(length, 4096)
-                    : 4096;
+                    ? (int)length + ReadChunkBytes
+                    : ReadChunkBytes;
                 using var buffer = new PooledByteBufferWriter(initialCapacity);
                 while (true)
                 {
@@ -209,7 +210,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                     var readSucceeded = false;
                     try
                     {
-                        read = await stream.ReadAsync(buffer.GetMemory(4096), watchdog.Token).ConfigureAwait(false);
+                        read = await stream.ReadAsync(buffer.GetMemory(ReadChunkBytes), watchdog.Token).ConfigureAwait(false);
                         readSucceeded = true;
                     }
                     finally

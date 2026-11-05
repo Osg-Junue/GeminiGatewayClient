@@ -187,11 +187,15 @@ public sealed class Part
         return clone;
     }
 
-    internal void Validate(string pathPrefix, string paramName)
+    /// <summary>
+    /// Returns why this part is invalid as a message suffix for the caller's path, or <c>null</c> when it is valid.
+    /// Callers format the path only on failure, so validating a long history allocates nothing per part.
+    /// </summary>
+    internal string? GetValidationError()
     {
         if (IsEmpty)
         {
-            throw new ArgumentException($"{pathPrefix} must have at least one field set.", paramName);
+            return " must have at least one field set.";
         }
 
         var nonTextFieldsSet =
@@ -207,39 +211,37 @@ public sealed class Part
 
         if (dataFieldsSet > 1)
         {
-            throw new ArgumentException(
-                $"{pathPrefix} cannot set more than one primary data field (Text, InlineData, FileData, FunctionCall, FunctionResponse, ExecutableCode, CodeExecutionResult) on the same Part.",
-                paramName);
+            return " cannot set more than one primary data field (Text, InlineData, FileData, FunctionCall, FunctionResponse, ExecutableCode, CodeExecutionResult) on the same Part.";
         }
 
         if (InlineData is not null)
         {
             if (string.IsNullOrWhiteSpace(InlineData.MimeType))
             {
-                throw new ArgumentException($"{pathPrefix}.InlineData.MimeType cannot be null or whitespace.", paramName);
+                return ".InlineData.MimeType cannot be null or whitespace.";
             }
 
             if (InlineData.Data is null || InlineData.Data.Length == 0)
             {
-                throw new ArgumentException($"{pathPrefix}.InlineData.Data cannot be null or empty.", paramName);
+                return ".InlineData.Data cannot be null or empty.";
             }
         }
 
         if (FileData is not null && string.IsNullOrWhiteSpace(FileData.FileUri))
         {
-            throw new ArgumentException($"{pathPrefix}.FileData.FileUri cannot be null or whitespace.", paramName);
+            return ".FileData.FileUri cannot be null or whitespace.";
         }
 
         if (FunctionCall is not null)
         {
             if (string.IsNullOrWhiteSpace(FunctionCall.Name))
             {
-                throw new ArgumentException($"{pathPrefix}.FunctionCall.Name cannot be null or whitespace.", paramName);
+                return ".FunctionCall.Name cannot be null or whitespace.";
             }
 
             if (FunctionCall.Args is { ValueKind: JsonValueKind.Undefined })
             {
-                throw new ArgumentException($"{pathPrefix}.FunctionCall.Args cannot be JsonValueKind.Undefined.", paramName);
+                return ".FunctionCall.Args cannot be JsonValueKind.Undefined.";
             }
         }
 
@@ -247,13 +249,15 @@ public sealed class Part
         {
             if (string.IsNullOrWhiteSpace(FunctionResponse.Name))
             {
-                throw new ArgumentException($"{pathPrefix}.FunctionResponse.Name cannot be null or whitespace.", paramName);
+                return ".FunctionResponse.Name cannot be null or whitespace.";
             }
 
             if (FunctionResponse.Response is not { ValueKind: JsonValueKind.Object })
             {
-                throw new ArgumentException($"{pathPrefix}.FunctionResponse.Response must be a non-null JSON object (JsonValueKind.Object).", paramName);
+                return ".FunctionResponse.Response must be a non-null JSON object (JsonValueKind.Object).";
             }
         }
+
+        return null;
     }
 }

@@ -59,44 +59,36 @@ internal static class ToolJsonConverter
     /// </summary>
     public static JsonElement ToResponseObject(object? result, JsonSerializerOptions options)
     {
-        if (result is JsonObject jsonObject)
-        {
-            using var nodeBuffer = new PooledByteBufferWriter(256);
-            using (var writer = new Utf8JsonWriter(nodeBuffer))
-            {
-                jsonObject.WriteTo(writer);
-            }
-
-            return ParseBuffer(nodeBuffer.WrittenSpan);
-        }
-
         if (result is JsonElement { ValueKind: JsonValueKind.Object } objectElement)
         {
             return objectElement.Clone();
         }
 
-        if (TryWriteKeyValuePairsToElement(result, options, out var dictElement))
+        using var buffer = new PooledByteBufferWriter(256);
+        using var writer = new Utf8JsonWriter(buffer);
+        switch (result)
         {
-            return dictElement;
+            case JsonObject jsonObject:
+                jsonObject.WriteTo(writer);
+                break;
+
+            case not (string or JsonElement) when TryWriteKeyValuePairs(writer, result, options):
+                break;
+
+            case not (null or string or JsonElement or JsonNode)
+                when TrySerialize(result, options, out var serialized) && serialized.ValueKind == JsonValueKind.Object:
+                return serialized;
+
+            default:
+                writer.WriteStartObject();
+                writer.WritePropertyName(ResultPropertyName);
+                WriteValue(writer, result, options);
+                writer.WriteEndObject();
+                break;
         }
 
-        if (result is not null and not JsonElement and not JsonNode and not string &&
-            TrySerialize(result, options, out var serialized) &&
-            serialized.ValueKind == JsonValueKind.Object)
-        {
-            return serialized;
-        }
-
-        using var wrappedBuffer = new PooledByteBufferWriter(256);
-        using (var writer = new Utf8JsonWriter(wrappedBuffer))
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName(ResultPropertyName);
-            WriteValue(writer, result, options);
-            writer.WriteEndObject();
-        }
-
-        return ParseBuffer(wrappedBuffer.WrittenSpan);
+        writer.Flush();
+        return ParseBuffer(buffer.WrittenSpan);
     }
 
     /// <summary>
@@ -109,7 +101,7 @@ internal static class ToolJsonConverter
             return null;
         }
 
-        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var result = new Dictionary<string, object?>(element.GetPropertyCount(), StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
         {
             result[property.Name] = property.Value.Clone();
@@ -117,50 +109,6 @@ internal static class ToolJsonConverter
 
         return result;
     }
-
-    private static bool TryWriteKeyValuePairsToElement(object? value, JsonSerializerOptions options, out JsonElement element)
-    {
-        if (!IsKeyValueSequenceOrDictionary(value))
-        {
-            element = default;
-            return false;
-        }
-
-        using var dictBuffer = new PooledByteBufferWriter(256);
-        using (var writer = new Utf8JsonWriter(dictBuffer))
-        {
-            TryWriteKeyValuePairs(writer, value, options);
-        }
-
-        element = ParseBuffer(dictBuffer.WrittenSpan);
-        return true;
-    }
-
-    private static bool IsKeyValueSequenceOrDictionary(object? value) =>
-        value is IEnumerable<KeyValuePair<string, object?>>
-            or IEnumerable<KeyValuePair<string, string?>>
-            or IEnumerable<KeyValuePair<string, int>>
-            or IEnumerable<KeyValuePair<string, long>>
-            or IEnumerable<KeyValuePair<string, double>>
-            or IEnumerable<KeyValuePair<string, float>>
-            or IEnumerable<KeyValuePair<string, decimal>>
-            or IEnumerable<KeyValuePair<string, bool>>
-            or IEnumerable<KeyValuePair<string, byte>>
-            or IEnumerable<KeyValuePair<string, sbyte>>
-            or IEnumerable<KeyValuePair<string, short>>
-            or IEnumerable<KeyValuePair<string, ushort>>
-            or IEnumerable<KeyValuePair<string, uint>>
-            or IEnumerable<KeyValuePair<string, ulong>>
-            or IEnumerable<KeyValuePair<string, Guid>>
-            or IEnumerable<KeyValuePair<string, DateTime>>
-            or IEnumerable<KeyValuePair<string, DateTimeOffset>>
-            or IEnumerable<KeyValuePair<string, DateOnly>>
-            or IEnumerable<KeyValuePair<string, TimeOnly>>
-            or IEnumerable<KeyValuePair<string, TimeSpan>>
-            or IEnumerable<KeyValuePair<string, Uri?>>
-            or IEnumerable<KeyValuePair<string, JsonElement>>
-            or IEnumerable<KeyValuePair<string, JsonNode?>>
-            or IDictionary;
 
     private static bool TryWriteKeyValuePairs(Utf8JsonWriter writer, object? value, JsonSerializerOptions options)
     {

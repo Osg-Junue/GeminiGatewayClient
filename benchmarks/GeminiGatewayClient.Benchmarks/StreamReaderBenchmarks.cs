@@ -171,6 +171,24 @@ public class StreamReaderBenchmarks
         return count;
     }
 
+    /// <summary>
+    /// Same fragmented read as <see cref="ReadServerSentEvents_Fragmented_512B"/>, but with the idle watchdog armed as it is by
+    /// default in production, so the per-read timer cost is not hidden by <c>idleTimeout: null</c>.
+    /// </summary>
+    [Benchmark]
+    public async Task<int> ReadServerSentEvents_Fragmented_512B_DefaultIdleTimeout()
+    {
+        await using var stream = new ChunkedMemoryStream(_sseSimpleTextPayload, 512);
+        using var watchdog = new StreamIdleWatchdog(GeminiClientOptions.DefaultStreamIdleTimeout, CancellationToken.None);
+        var count = 0;
+        await foreach (var _ in GeminiStreamReader.ReadAsync(stream, GeminiStreamingFormat.ServerSentEvents, HttpStatusCode.OK, watchdog))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
     [Benchmark]
     public async Task<int> ReadJsonArray_SimpleText()
     {
@@ -197,49 +215,5 @@ public class StreamReaderBenchmarks
         }
 
         return count;
-    }
-
-    private sealed class ChunkedMemoryStream(ReadOnlyMemory<byte> payload, int packetSize) : Stream
-    {
-        private int _position;
-
-        public override bool CanRead => true;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => payload.Length;
-        public override long Position
-        {
-            get => _position;
-            set => throw new NotSupportedException();
-        }
-
-        public override void Flush() { }
-
-        public override int Read(byte[] buffer, int offset, int count) =>
-            Read(buffer.AsSpan(offset, count));
-
-        public override int Read(Span<byte> buffer)
-        {
-            if (_position >= payload.Length)
-            {
-                return 0;
-            }
-
-            var available = payload.Length - _position;
-            var toRead = Math.Min(Math.Min(buffer.Length, available), packetSize);
-            payload.Span.Slice(_position, toRead).CopyTo(buffer);
-            _position += toRead;
-            return toRead;
-        }
-
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(Read(buffer.Span));
-
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Read(buffer.AsSpan(offset, count)));
-
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

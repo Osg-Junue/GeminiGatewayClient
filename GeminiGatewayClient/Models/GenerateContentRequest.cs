@@ -181,12 +181,15 @@ public sealed class GenerateContentRequest
                 throw new ArgumentException($"GenerateContentRequest.Contents[{i}] cannot be null.", paramName);
             }
 
-            ValidateContentParts(content, $"GenerateContentRequest.Contents[{i}]", paramName);
+            if (content.GetValidationError() is { } error)
+            {
+                throw new ArgumentException($"GenerateContentRequest.Contents[{i}]{error}", paramName);
+            }
         }
 
-        if (SystemInstruction is not null)
+        if (SystemInstruction?.GetValidationError() is { } systemError)
         {
-            ValidateContentParts(SystemInstruction, "GenerateContentRequest.SystemInstruction", paramName);
+            throw new ArgumentException($"GenerateContentRequest.SystemInstruction{systemError}", paramName);
         }
 
         GenerationConfig?.Validate(paramName);
@@ -246,37 +249,6 @@ public sealed class GenerateContentRequest
 
                 declaration.Validate(paramName);
             }
-        }
-    }
-
-    private static void ValidateContentParts(Content content, string pathPrefix, string paramName)
-    {
-        if (content.Role is { } role && (role == Role.Unknown || !Enum.IsDefined(role)))
-        {
-            throw new ArgumentException($"{pathPrefix}.Role cannot be Role.Unknown.", paramName);
-        }
-
-        var parts = content.Parts;
-        if ((parts is null || parts.Count == 0) &&
-            (content.ExtensionData is null || content.ExtensionData.Count == 0))
-        {
-            throw new ArgumentException($"{pathPrefix}.Parts must contain at least one Part item.", paramName);
-        }
-
-        if (parts is null)
-        {
-            return;
-        }
-
-        for (var j = 0; j < parts.Count; j++)
-        {
-            var part = parts[j];
-            if (part is null)
-            {
-                throw new ArgumentException($"{pathPrefix}.Parts[{j}] cannot be null.", paramName);
-            }
-
-            part.Validate($"{pathPrefix}.Parts[{j}]", paramName);
         }
     }
 }

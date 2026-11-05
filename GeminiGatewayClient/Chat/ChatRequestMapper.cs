@@ -46,8 +46,8 @@ internal static class ChatRequestMapper
         }
 
         Dictionary<string, (string Name, string? ApiId)>? functionCalls = null;
-        ChatRole? lastMergedChatRole = templateContents is { Count: > 0 }
-            ? (templateContents[^1].Role == Role.Model ? ChatRole.Assistant : ChatRole.User)
+        ChatRole? lastMergedChatRole = contents.Count > 0
+            ? (contents[^1].Role == Role.Model ? ChatRole.Assistant : ChatRole.User)
             : null;
 
         foreach (var message in messages)
@@ -238,18 +238,7 @@ internal static class ChatRequestMapper
 
     private static bool AreUnmodifiedArguments(IDictionary<string, object?> arguments, JsonElement? rawArgs)
     {
-        if (rawArgs is not { ValueKind: JsonValueKind.Object } rawObj)
-        {
-            return false;
-        }
-
-        var propertyCount = 0;
-        foreach (var _ in rawObj.EnumerateObject())
-        {
-            propertyCount++;
-        }
-
-        if (propertyCount != arguments.Count)
+        if (rawArgs is not { ValueKind: JsonValueKind.Object } rawObj || rawObj.GetPropertyCount() != arguments.Count)
         {
             return false;
         }

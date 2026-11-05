@@ -203,9 +203,8 @@ public class PerformanceAllocationTests
     }
 
     [Fact]
-    public void ModelCollections_LazyInitializeWhenUnset_AndAvoidThrowawayListAllocationsWhenSet()
+    public void ModelCollections_LazilyInitializeNonNullEmptyListsOnGetterAccess_IncludingAfterNullAssignment()
     {
-        // 1. Default construction lazily initializes non-null empty lists on getter access, including after null assignment.
         var emptyContent = new Content();
         var clonedEmpty = emptyContent.Clone();
         Assert.Empty(emptyContent.Parts);
@@ -261,8 +260,11 @@ public class PerformanceAllocationTests
         Assert.Empty(support.GroundingChunkIndices);
         support.GroundingChunkIndices = null!;
         Assert.Empty(support.GroundingChunkIndices);
+    }
 
-        // 2. Assigning pre-allocated lists via object initializers should not allocate throwaway List<T> instances in constructors.
+    [Fact]
+    public void ModelCollections_AssignedViaObjectInitializer_DoNotAllocateThrowawayLists()
+    {
         IList<Part> preallocatedParts = [Part.FromText("hello")];
         IList<Content> preallocatedContents = [new Content { Role = Role.User, Parts = preallocatedParts }];
         IList<Candidate> preallocatedCandidates = [new Candidate()];
@@ -313,7 +315,77 @@ public class PerformanceAllocationTests
         }
 
         var allocatedPerIteration = (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
-        // 9 model object instances total 424 B on 64-bit Release (432 B in Debug), avoiding the 10 * 32 B = 320 B of throwaway List<T> allocations (which would total >= 744 B).
-        Assert.InRange(allocatedPerIteration, 400, 480);
+
+        // The 9 model instances are 424 B today; 10 throwaway List<T> instances would add 320 B, for at least 744 B.
+        // Only the upper bound is the contract, so adding a field to a model does not fail this test.
+        Assert.True(allocatedPerIteration < 744, $"Allocated {allocatedPerIteration} B per iteration.");
+    }
+
+    [Fact]
+    public void GenerateContentRequest_Validate_AllocationDoesNotGrowWithHistoryLength()
+    {
+        static GenerateContentRequest CreateHistory(int count)
+        {
+            var contents = new List<Content>(count);
+            for (var i = 0; i < count; i++)
+            {
+                contents.Add(new Content { Role = i % 2 == 0 ? Role.User : Role.Model, Parts = [Part.FromText("turn"), Part.FromText("more")] });
+            }
+
+            return new GenerateContentRequest { Contents = contents };
+        }
+
+        static long MeasureValidate(GenerateContentRequest request)
+        {
+            for (var i = 0; i < 50; i++)
+            {
+                request.Validate();
+            }
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+            {
+                request.Validate();
+            }
+
+            return (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
+        }
+
+        var shortHistory = MeasureValidate(CreateHistory(1));
+        var longHistory = MeasureValidate(CreateHistory(256));
+
+        Assert.True(longHistory <= shortHistory, $"1 turn allocated {shortHistory} B, 256 turns allocated {longHistory} B.");
+    }
+
+    [Fact]
+    public void BatchEmbedContentsRequest_Validate_AllocationDoesNotGrowWithBatchSize()
+    {
+        static long MeasureValidate(int count)
+        {
+            var requests = new List<EmbedContentRequest>(count);
+            for (var i = 0; i < count; i++)
+            {
+                requests.Add(EmbedContentRequest.FromText("document"));
+            }
+
+            var batch = new BatchEmbedContentsRequest { Requests = requests };
+            for (var i = 0; i < 50; i++)
+            {
+                batch.Validate();
+            }
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+            {
+                batch.Validate();
+            }
+
+            return (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
+        }
+
+        var single = MeasureValidate(1);
+        var large = MeasureValidate(256);
+
+        Assert.True(large <= single, $"1 item allocated {single} B, 256 items allocated {large} B.");
     }
 }
