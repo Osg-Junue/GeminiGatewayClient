@@ -100,13 +100,13 @@ public sealed class EmbedContentRequest
             throw new ArgumentException($"{pathPrefix}.Content.Role cannot be Role.Unknown.", paramName);
         }
 
-        if ((Content.RawParts is null || Content.RawParts.Count == 0) &&
+        if ((Content.Parts is null || Content.Parts.Count == 0) &&
             (Content.ExtensionData is null || Content.ExtensionData.Count == 0))
         {
             throw new ArgumentException($"{pathPrefix}.Content.Parts must contain at least one Part item.", paramName);
         }
 
-        if (Content.RawParts is { } parts)
+        if (Content.Parts is { } parts)
         {
             for (var i = 0; i < parts.Count; i++)
             {
@@ -148,7 +148,7 @@ public sealed class EmbedContentRequest
 /// </summary>
 public sealed class BatchEmbedContentsRequest
 {
-    private IList<EmbedContentRequest>? _requests;
+    private IList<EmbedContentRequest> _requests = [];
 
     /// <summary>
     /// Required. Individual embed requests for the batch.
@@ -156,11 +156,9 @@ public sealed class BatchEmbedContentsRequest
     [JsonPropertyName("requests")]
     public IList<EmbedContentRequest> Requests
     {
-        get => _requests ??= [];
-        set => _requests = value!;
+        get => _requests;
+        set => _requests = value ?? [];
     }
-
-    internal IList<EmbedContentRequest>? RawRequests => _requests;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -213,7 +211,7 @@ public sealed class EmbedContentResponse
 /// </summary>
 public sealed class BatchEmbedContentsResponse
 {
-    private IList<ContentEmbedding>? _embeddings;
+    private IList<ContentEmbedding> _embeddings = [];
 
     /// <summary>
     /// The embeddings for each request, in the same order as provided in the batch request.
@@ -221,11 +219,9 @@ public sealed class BatchEmbedContentsResponse
     [JsonPropertyName("embeddings")]
     public IList<ContentEmbedding> Embeddings
     {
-        get => _embeddings ??= [];
-        set => _embeddings = value!;
+        get => _embeddings;
+        set => _embeddings = value ?? [];
     }
-
-    internal IList<ContentEmbedding>? RawEmbeddings => _embeddings;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -240,7 +236,7 @@ public sealed class BatchEmbedContentsResponse
 /// </summary>
 public sealed class ContentEmbedding
 {
-    private IList<float>? _values;
+    private IList<float> _values = [];
 
     /// <summary>
     /// Floating-point vector values representing the embedding.
@@ -248,11 +244,9 @@ public sealed class ContentEmbedding
     [JsonPropertyName("values")]
     public IList<float> Values
     {
-        get => _values ??= [];
-        set => _values = value!;
+        get => _values;
+        set => _values = value ?? [];
     }
-
-    internal IList<float>? RawValues => _values;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

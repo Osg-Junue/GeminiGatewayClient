@@ -185,6 +185,20 @@ public class StreamReaderBenchmarks
         return count;
     }
 
+    [Benchmark]
+    public async Task<int> ReadJsonArray_Fragmented_512B()
+    {
+        await using var stream = new ChunkedMemoryStream(_jsonArraySimpleTextPayload, 512);
+        using var watchdog = new StreamIdleWatchdog(idleTimeout: null, CancellationToken.None);
+        var count = 0;
+        await foreach (var _ in GeminiStreamReader.ReadAsync(stream, GeminiStreamingFormat.JsonArray, HttpStatusCode.OK, watchdog))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
     private sealed class ChunkedMemoryStream(ReadOnlyMemory<byte> payload, int packetSize) : Stream
     {
         private int _position;

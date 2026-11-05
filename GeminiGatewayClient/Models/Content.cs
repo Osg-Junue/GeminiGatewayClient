@@ -29,10 +29,6 @@ public sealed class Content
         set => _parts = value ?? [];
     }
 
-    /// <summary>
-    /// Backing parts list, used on internal read-only mapping paths.
-    /// </summary>
-    internal IList<Part> RawParts => _parts;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

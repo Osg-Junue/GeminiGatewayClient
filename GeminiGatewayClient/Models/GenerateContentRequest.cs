@@ -30,10 +30,6 @@ public sealed class GenerateContentRequest
         set => _contents = value ?? [];
     }
 
-    /// <summary>
-    /// Backing contents list, used on internal read-only paths.
-    /// </summary>
-    internal IList<Content> RawContents => _contents;
 
     /// <summary>
     /// Optional. Developer-provided system instructions for the model. Only <see cref="Content.Parts"/> is used;
@@ -261,7 +257,7 @@ public sealed class GenerateContentRequest
             throw new ArgumentException($"{pathPrefix}.Role cannot be Role.Unknown.", paramName);
         }
 
-        var parts = content.RawParts;
+        var parts = content.Parts;
         if ((parts is null || parts.Count == 0) &&
             (content.ExtensionData is null || content.ExtensionData.Count == 0))
         {

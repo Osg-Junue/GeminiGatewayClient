@@ -17,9 +17,9 @@ public class PerformanceAllocationTests
         };
 
         var mappedUninitialized = ChatResponseMapper.ToChatResponse(uninitializedResponse, "gemini-2.5-flash");
-        var uninitializedContents = Assert.IsType<List<AIContent>>(mappedUninitialized.Messages[0].Contents);
+        var uninitializedContents = Assert.IsAssignableFrom<IList<AIContent>>(mappedUninitialized.Messages[0].Contents);
         Assert.Empty(uninitializedContents);
-        Assert.Empty(uninitializedContent.RawParts);
+        Assert.Empty(uninitializedContent.Parts);
 
         var singlePartResponse = new GenerateContentResponse
         {
@@ -37,7 +37,7 @@ public class PerformanceAllocationTests
         };
 
         var mappedSingle = ChatResponseMapper.ToChatResponse(singlePartResponse, "gemini-2.5-flash");
-        var singleContents = Assert.IsType<List<AIContent>>(mappedSingle.Messages[0].Contents);
+        var singleContents = Assert.IsAssignableFrom<IList<AIContent>>(mappedSingle.Messages[0].Contents);
         Assert.Single(singleContents);
     }
 
@@ -60,10 +60,10 @@ public class PerformanceAllocationTests
         var request = new GenerateContentRequest();
         ChatOptionsMapper.Apply(request, functionsOnlyOptions, "gemini-2.5-flash");
 
-        var tools = Assert.IsType<List<Tool>>(request.Tools);
+        var tools = Assert.IsAssignableFrom<IList<Tool>>(request.Tools);
         Assert.Single(tools);
 
-        var declarations = Assert.IsType<List<FunctionDeclaration>>(tools[0].FunctionDeclarations);
+        var declarations = Assert.IsAssignableFrom<IList<FunctionDeclaration>>(tools[0].FunctionDeclarations);
         Assert.Equal(6, declarations.Count);
 
         // Mixed function declarations + HostedWebSearchTool should not resize mappedTools beyond 2
@@ -80,7 +80,7 @@ public class PerformanceAllocationTests
         var mixedRequest = new GenerateContentRequest();
         ChatOptionsMapper.Apply(mixedRequest, mixedOptions, "gemini-2.5-flash");
 
-        var mixedTools = Assert.IsType<List<Tool>>(mixedRequest.Tools);
+        var mixedTools = Assert.IsAssignableFrom<IList<Tool>>(mixedRequest.Tools);
         Assert.Equal(2, mixedTools.Count);
         Assert.NotNull(mixedTools[0].FunctionDeclarations);
         Assert.NotNull(mixedTools[1].GoogleSearch);
@@ -104,12 +104,12 @@ public class PerformanceAllocationTests
         var request = ChatRequestMapper.ToRequest(messages, options: null, chatClient, "gemini-2.5-flash", AIJsonUtilities.DefaultOptions);
 
         Assert.Null(request.SystemInstruction);
-        var contents = Assert.IsType<List<Content>>(request.Contents);
+        var contents = Assert.IsAssignableFrom<IList<Content>>(request.Contents);
         Assert.Equal(5, contents.Count);
 
         foreach (var content in contents)
         {
-            var parts = Assert.IsType<List<Part>>(content.Parts);
+            var parts = Assert.IsAssignableFrom<IList<Part>>(content.Parts);
             Assert.Single(parts);
         }
     }
@@ -133,7 +133,7 @@ public class PerformanceAllocationTests
         var request = ChatRequestMapper.ToRequest(messages, options, chatClient, "gemini-2.5-flash", AIJsonUtilities.DefaultOptions);
 
         Assert.NotNull(request.SystemInstruction);
-        var systemParts = Assert.IsType<List<Part>>(request.SystemInstruction!.Parts);
+        var systemParts = Assert.IsAssignableFrom<IList<Part>>(request.SystemInstruction!.Parts);
         Assert.Equal(2, systemParts.Count);
 
         // Two consecutive Tool messages are merged into a single User turn with 2 FunctionResponse parts

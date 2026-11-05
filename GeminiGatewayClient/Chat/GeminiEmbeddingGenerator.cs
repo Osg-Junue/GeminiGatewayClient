@@ -66,7 +66,7 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
         {
             var singleRequest = BuildSingleRequest(inputList[0], explicitDimensions, defaultDimensions, rawTemplate as EmbedContentRequest);
             var response = await _client.EmbedContentAsync(singleRequest, model, cancellationToken).ConfigureAwait(false);
-            if (response.Embedding is not { RawValues: { Count: > 0 } } embedding)
+            if (response.Embedding is not { Values: { Count: > 0 } } embedding)
             {
                 throw new GeminiApiException(
                     "The Gemini embedding endpoint returned an empty or missing embedding vector.",
@@ -81,7 +81,7 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
 
         var batchRequest = BuildBatchRequest(inputList, explicitDimensions, defaultDimensions, rawTemplate);
         var batchResponse = await _client.BatchEmbedContentsAsync(batchRequest, model, cancellationToken).ConfigureAwait(false);
-        var embeddings = batchResponse.RawEmbeddings;
+        var embeddings = batchResponse.Embeddings;
         if (embeddings is null || embeddings.Count != inputList.Count)
         {
             throw new GeminiApiException(
@@ -92,7 +92,7 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
         var generated = new GeneratedEmbeddings<Embedding<float>>(embeddings.Count);
         for (var i = 0; i < embeddings.Count; i++)
         {
-            if (embeddings[i] is not { RawValues: { Count: > 0 } } item)
+            if (embeddings[i] is not { Values: { Count: > 0 } } item)
             {
                 throw new GeminiApiException(
                     $"The Gemini batch embedding endpoint returned an empty or null embedding at index {i}.",
@@ -206,7 +206,7 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
 
         for (var i = 0; i < inputs.Count; i++)
         {
-            var itemTemplate = batchTemplate?.RawRequests is { } batchItems && i < batchItems.Count
+            var itemTemplate = batchTemplate?.Requests is { } batchItems && i < batchItems.Count
                 ? batchItems[i]
                 : singleTemplate;
             requests.Add(BuildSingleRequest(inputs[i], explicitDimensions, defaultDimensions, itemTemplate));
@@ -223,7 +223,7 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
 
     private static Embedding<float> ToEmbedding(ContentEmbedding embedding, string? modelId)
     {
-        ReadOnlyMemory<float> vector = embedding.RawValues switch
+        ReadOnlyMemory<float> vector = embedding.Values switch
         {
             float[] array => array,
             List<float> list => list.ToArray(),
@@ -249,7 +249,7 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
             return singleModel.Trim();
         }
 
-        if (rawTemplate is BatchEmbedContentsRequest { RawRequests: { Count: > 0 } batchItems })
+        if (rawTemplate is BatchEmbedContentsRequest { Requests: { Count: > 0 } batchItems })
         {
             for (var i = 0; i < batchItems.Count; i++)
             {

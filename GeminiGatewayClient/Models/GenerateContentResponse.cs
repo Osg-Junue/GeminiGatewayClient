@@ -23,10 +23,6 @@ public sealed class GenerateContentResponse
         set => _candidates = value ?? [];
     }
 
-    /// <summary>
-    /// Backing candidates list, used on internal read-only paths.
-    /// </summary>
-    internal IList<Candidate> RawCandidates => _candidates;
 
     /// <summary>
     /// Optional. Content-filtering metadata and block reason for the input prompt.
@@ -73,7 +69,7 @@ public sealed class GenerateContentResponse
                 return null;
             }
 
-            var parts = candidates[0]?.Content?.RawParts;
+            var parts = candidates[0]?.Content?.Parts;
             if (parts is null || parts.Count == 0)
             {
                 return null;
@@ -120,7 +116,7 @@ public sealed class GenerateContentResponse
                 return [];
             }
 
-            var parts = candidates[0]?.Content?.RawParts;
+            var parts = candidates[0]?.Content?.Parts;
             if (parts is null || parts.Count == 0)
             {
                 return [];

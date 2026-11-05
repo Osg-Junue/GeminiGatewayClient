@@ -9,9 +9,9 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class GroundingMetadata
 {
-    private IList<string>? _webSearchQueries;
-    private IList<GroundingChunk>? _groundingChunks;
-    private IList<GroundingSupport>? _groundingSupports;
+    private IList<string> _webSearchQueries = [];
+    private IList<GroundingChunk> _groundingChunks = [];
+    private IList<GroundingSupport> _groundingSupports = [];
 
     /// <summary>
     /// Web search queries executed by the model to gather grounding context.
@@ -19,11 +19,9 @@ public sealed class GroundingMetadata
     [JsonPropertyName("webSearchQueries")]
     public IList<string> WebSearchQueries
     {
-        get => _webSearchQueries ??= [];
-        set => _webSearchQueries = value!;
+        get => _webSearchQueries;
+        set => _webSearchQueries = value ?? [];
     }
-
-    internal IList<string>? RawWebSearchQueries => _webSearchQueries;
 
     /// <summary>
     /// Optional Google Search entry point widget metadata (HTML/CSS and SDK blob) for rendering search suggestions.
@@ -37,11 +35,9 @@ public sealed class GroundingMetadata
     [JsonPropertyName("groundingChunks")]
     public IList<GroundingChunk> GroundingChunks
     {
-        get => _groundingChunks ??= [];
-        set => _groundingChunks = value!;
+        get => _groundingChunks;
+        set => _groundingChunks = value ?? [];
     }
-
-    internal IList<GroundingChunk>? RawGroundingChunks => _groundingChunks;
 
     /// <summary>
     /// Mappings from specific spans of the candidate response text to indices in <see cref="GroundingChunks"/>.
@@ -49,11 +45,9 @@ public sealed class GroundingMetadata
     [JsonPropertyName("groundingSupports")]
     public IList<GroundingSupport> GroundingSupports
     {
-        get => _groundingSupports ??= [];
-        set => _groundingSupports = value!;
+        get => _groundingSupports;
+        set => _groundingSupports = value ?? [];
     }
-
-    internal IList<GroundingSupport>? RawGroundingSupports => _groundingSupports;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -179,7 +173,7 @@ public sealed class GroundingChunkRetrievedContext
 /// </summary>
 public sealed class GroundingSupport
 {
-    private IList<int>? _groundingChunkIndices;
+    private IList<int> _groundingChunkIndices = [];
 
     /// <summary>
     /// The text segment in the candidate response backed by the referenced chunks.
@@ -193,11 +187,9 @@ public sealed class GroundingSupport
     [JsonPropertyName("groundingChunkIndices")]
     public IList<int> GroundingChunkIndices
     {
-        get => _groundingChunkIndices ??= [];
-        set => _groundingChunkIndices = value!;
+        get => _groundingChunkIndices;
+        set => _groundingChunkIndices = value ?? [];
     }
-
-    internal IList<int>? RawGroundingChunkIndices => _groundingChunkIndices;
 
     /// <summary>
     /// Confidence scores (<c>[0.0, 1.0]</c>) corresponding to <see cref="GroundingChunkIndices"/>.

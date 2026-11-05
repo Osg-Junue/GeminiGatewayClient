@@ -176,7 +176,7 @@ public static class GeminiClientExtensions
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        if (response.RawCandidates is [{ Content: { RawParts: { Count: > 0 } parts } candidateContent }, ..])
+        if (response.Candidates is [{ Content: { Parts: { Count: > 0 } parts } candidateContent }, ..])
         {
             var meaningfulCount = 0;
             var needsNormalization = false;
@@ -258,7 +258,7 @@ public static class GeminiClientExtensions
 
         foreach (var chunk in chunks)
         {
-            if (chunk?.RawCandidates is not [{ Content: { } content }, ..])
+            if (chunk?.Candidates is not [{ Content: { } content }, ..])
             {
                 continue;
             }
@@ -268,7 +268,7 @@ public static class GeminiClientExtensions
                 role = contentRole;
             }
 
-            if (content.RawParts is not { Count: > 0 } parts)
+            if (content.Parts is not { Count: > 0 } parts)
             {
                 continue;
             }
@@ -313,7 +313,7 @@ public static class GeminiClientExtensions
 
         await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (chunk?.RawCandidates is not [{ Content: { } content }, ..])
+            if (chunk?.Candidates is not [{ Content: { } content }, ..])
             {
                 continue;
             }
@@ -323,7 +323,7 @@ public static class GeminiClientExtensions
                 role = contentRole;
             }
 
-            if (content.RawParts is not { Count: > 0 } parts)
+            if (content.Parts is not { Count: > 0 } parts)
             {
                 continue;
             }

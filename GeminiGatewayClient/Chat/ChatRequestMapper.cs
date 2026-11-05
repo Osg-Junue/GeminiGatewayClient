@@ -23,9 +23,9 @@ internal static class ChatRequestMapper
         JsonSerializerOptions toolSerializerOptions)
     {
         var template = options?.RawRepresentationFactory?.Invoke(client) as GenerateContentRequest;
-        var templateContents = template?.RawContents;
-        var messageList = messages as IReadOnlyCollection<ChatMessage> ?? messages.ToList();
-        var contents = new List<Content>((templateContents?.Count ?? 0) + messageList.Count);
+        var templateContents = template?.Contents;
+        var initialCapacity = (templateContents?.Count ?? 0) + (messages.TryGetNonEnumeratedCount(out var count) && count > 0 ? count : 4);
+        var contents = new List<Content>(initialCapacity);
         if (templateContents is { Count: > 0 } existing)
         {
             for (var i = 0; i < existing.Count; i++)
@@ -45,12 +45,12 @@ internal static class ChatRequestMapper
             systemParts = new List<Part>(2) { Part.FromText(options.Instructions) };
         }
 
-        var calls = new FunctionCallRegistry();
+        Dictionary<string, (string Name, string? ApiId)>? functionCalls = null;
         ChatRole? lastMergedChatRole = templateContents is { Count: > 0 }
             ? (templateContents[^1].Role == Role.Model ? ChatRole.Assistant : ChatRole.User)
             : null;
 
-        foreach (var message in messageList)
+        foreach (var message in messages)
         {
             if (message.Role == ChatRole.System)
             {
@@ -85,10 +85,7 @@ internal static class ChatRequestMapper
                 if (prevParts.IsReadOnly)
                 {
                     var mutableList = new List<Part>(prevParts.Count + message.Contents.Count);
-                    for (var i = 0; i < prevParts.Count; i++)
-                    {
-                        mutableList.Add(prevParts[i]);
-                    }
+                    mutableList.AddRange(prevParts);
 
                     contents[^1].Parts = mutableList;
                     targetParts = mutableList;
@@ -105,7 +102,7 @@ internal static class ChatRequestMapper
 
             foreach (var item in message.Contents)
             {
-                AppendPart(targetParts, item, ref calls, toolSerializerOptions);
+                AppendPart(targetParts, item, ref functionCalls, toolSerializerOptions);
             }
 
             if (!isMerging)
@@ -141,7 +138,7 @@ internal static class ChatRequestMapper
         return request;
     }
 
-    private static void AppendPart(IList<Part> parts, AIContent item, ref FunctionCallRegistry calls, JsonSerializerOptions toolSerializerOptions)
+    private static void AppendPart(IList<Part> parts, AIContent item, ref Dictionary<string, (string Name, string? ApiId)>? functionCalls, JsonSerializerOptions toolSerializerOptions)
     {
         var rawPart = item.RawRepresentation as Part;
         var signature = GetStringProperty(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature)
@@ -194,7 +191,7 @@ internal static class ChatRequestMapper
                 break;
 
             case FunctionCallContent call:
-                var apiId = calls.Register(call);
+                var apiId = RegisterFunctionCall(ref functionCalls, call);
                 var rawCall = rawPart?.FunctionCall;
                 var args = call.Arguments is null
                     ? null
@@ -221,7 +218,7 @@ internal static class ChatRequestMapper
                 break;
 
             case FunctionResultContent result:
-                var (name, id) = calls.Resolve(result.CallId);
+                var (name, id) = ResolveFunctionCall(functionCalls, result.CallId);
                 parts.Add(new Part
                 {
                     FunctionResponse = new FunctionResponse
@@ -476,49 +473,33 @@ internal static class ChatRequestMapper
             _ => false
         };
 
-    /// <summary>
-    /// Correlates <see cref="FunctionResultContent"/> <c>CallId</c> values chronologically with the function name and
-    /// the server-assigned call ID (if any) of the most recent <see cref="FunctionCallContent"/> sharing that <c>CallId</c>.
-    /// </summary>
-    private struct FunctionCallRegistry
+    private static string? RegisterFunctionCall(ref Dictionary<string, (string Name, string? ApiId)>? calls, FunctionCallContent call)
     {
-        private Dictionary<string, (string Name, string? ApiId)>? _calls;
-
-        /// <summary>
-        /// Registers a <see cref="FunctionCallContent"/> encountered in the conversation history and returns
-        /// the ID to send in <see cref="FunctionCall.Id"/> (or <c>null</c> when the ID was generated locally).
-        /// </summary>
-        public string? Register(FunctionCallContent call)
+        var apiId = GetFunctionCallApiId(call);
+        if (!string.IsNullOrEmpty(call.CallId) && !string.IsNullOrEmpty(call.Name))
         {
-            var apiId = GetApiId(call);
-            if (!string.IsNullOrEmpty(call.CallId) && !string.IsNullOrEmpty(call.Name))
-            {
-                (_calls ??= new Dictionary<string, (string Name, string? ApiId)>(StringComparer.Ordinal))[call.CallId] =
-                    (call.Name, apiId);
-            }
-
-            return apiId;
+            (calls ??= new Dictionary<string, (string Name, string? ApiId)>(StringComparer.Ordinal))[call.CallId] =
+                (call.Name, apiId);
         }
 
-        /// <summary>
-        /// Returns the function name and API call ID for a result. Unknown call IDs fall back to using the ID as the name.
-        /// </summary>
-        public readonly (string Name, string? ApiId) Resolve(string callId) =>
-            !string.IsNullOrEmpty(callId) && _calls is not null && _calls.TryGetValue(callId, out var call) ? call : (callId, null);
+        return apiId;
+    }
 
-        private static string? GetApiId(FunctionCallContent call)
+    private static (string Name, string? ApiId) ResolveFunctionCall(Dictionary<string, (string Name, string? ApiId)>? calls, string callId) =>
+        !string.IsNullOrEmpty(callId) && calls is not null && calls.TryGetValue(callId, out var call) ? call : (callId, null);
+
+    private static string? GetFunctionCallApiId(FunctionCallContent call)
+    {
+        if (GetBooleanProperty(call.AdditionalProperties, GeminiChatPropertyNames.SynthesizedCallId))
         {
-            if (GetBooleanProperty(call.AdditionalProperties, GeminiChatPropertyNames.SynthesizedCallId))
-            {
-                return null;
-            }
-
-            if (call.RawRepresentation is Part { FunctionCall: { } rawCall } && string.IsNullOrEmpty(rawCall.Id))
-            {
-                return null;
-            }
-
-            return string.IsNullOrEmpty(call.CallId) ? null : call.CallId;
+            return null;
         }
+
+        if (call.RawRepresentation is Part { FunctionCall: { } rawCall } && string.IsNullOrEmpty(rawCall.Id))
+        {
+            return null;
+        }
+
+        return string.IsNullOrEmpty(call.CallId) ? null : call.CallId;
     }
 }

@@ -18,6 +18,7 @@ internal static class GeminiStreamReader
     internal const int MaxSseLineBytes = 64 * 1024 * 1024;
     private const int MaxNonSseBytes = GeminiErrorParser.MaxErrorBodyChars * 4;
     private static readonly SearchValues<byte> s_newlineSearchValues = SearchValues.Create([(byte)'\r', (byte)'\n']);
+    private static readonly SearchValues<byte> s_whitespaceSearchValues = SearchValues.Create(" \t\r\n"u8);
 
     /// <summary>
     /// Reads chunks from <paramref name="stream"/> in the specified <paramref name="format"/>.
@@ -492,7 +493,7 @@ internal static class GeminiStreamReader
             utf8Json = utf8Json[3..];
         }
 
-        var idx = utf8Json.IndexOfAnyExcept(" \t\r\n"u8);
+        var idx = utf8Json.IndexOfAnyExcept(s_whitespaceSearchValues);
         return idx >= 0 && utf8Json[idx] == (byte)'[';
     }
 

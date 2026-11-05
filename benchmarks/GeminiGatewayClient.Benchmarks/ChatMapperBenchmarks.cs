@@ -19,9 +19,15 @@ public class ChatMapperBenchmarks
     private GenerateContentResponse _multiPartResponse = null!;
     private GenerateContentResponse _groundedResponse = null!;
     private GenerateContentResponse _hybridResponseForNormalization = null!;
+    [Params(1, 16, 64)]
+    public int MessageCount { get; set; }
+
     private List<ChatMessage> _multiTurnMessages = null!;
+    private List<ChatMessage> _scaledMultiTurnMessages = null!;
     private List<ChatMessage> _systemAndToolMessages = null!;
     private List<ChatMessage> _replayedToolHistoryMessages = null!;
+    private List<ChatMessage> _toolArgumentsSerializedMessages = null!;
+    private List<ChatMessage> _toolArgumentsRawReusedMessages = null!;
     private ChatOptions _systemOptions = null!;
     private ChatOptions _toolOptions = null!;
     private GeminiClientOptions _clientOptionsWithHeaders = null!;
@@ -279,6 +285,61 @@ public class ChatMapperBenchmarks
             }
         };
 
+        _scaledMultiTurnMessages = new List<ChatMessage>(MessageCount);
+        for (var i = 0; i < MessageCount; i++)
+        {
+            var role = (i % 2 == 0) ? ChatRole.User : ChatRole.Assistant;
+            _scaledMultiTurnMessages.Add(new ChatMessage(role, $"Turn {i + 1}: Conversation turn payload with realistic text length for scaling benchmark."));
+        }
+
+        var rawToolArgs = JsonDocument.Parse("""{"city":"Tokyo","metric":"temperature","units":"celsius","forecastDays":5}""").RootElement.Clone();
+        var rawPartWithArgs = new Part
+        {
+            FunctionCall = new FunctionCall
+            {
+                Id = "call-fair-1",
+                Name = "get_weather_forecast",
+                Args = rawToolArgs
+            }
+        };
+
+        // Raw args reuse path: FunctionCallContent has matching RawRepresentation and identical dictionary args
+        _toolArgumentsRawReusedMessages =
+        [
+            new ChatMessage(ChatRole.User, "Check Tokyo weather forecast for 5 days."),
+            new ChatMessage(ChatRole.Assistant,
+            [
+                new FunctionCallContent("call-fair-1", "get_weather_forecast", new Dictionary<string, object?>
+                {
+                    ["city"] = "Tokyo",
+                    ["metric"] = "temperature",
+                    ["units"] = "celsius",
+                    ["forecastDays"] = 5
+                })
+                {
+                    RawRepresentation = rawPartWithArgs
+                }
+            ]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-fair-1", "20C sunny")])
+        ];
+
+        // Normal serialization path (Baseline): FunctionCallContent with dictionary args, no RawRepresentation
+        _toolArgumentsSerializedMessages =
+        [
+            new ChatMessage(ChatRole.User, "Check Tokyo weather forecast for 5 days."),
+            new ChatMessage(ChatRole.Assistant,
+            [
+                new FunctionCallContent("call-fair-1", "get_weather_forecast", new Dictionary<string, object?>
+                {
+                    ["city"] = "Tokyo",
+                    ["metric"] = "temperature",
+                    ["units"] = "celsius",
+                    ["forecastDays"] = 5
+                })
+            ]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-fair-1", "20C sunny")])
+        ];
+
         _requestHeaders = GeminiRequestHeaders.Create(_clientOptionsWithHeaders);
     }
 
@@ -302,6 +363,10 @@ public class ChatMapperBenchmarks
         ChatResponseMapper.ToChatResponse(_groundedResponse, ModelId);
 
     [Benchmark]
+    public GenerateContentRequest ToRequest_MultiTurn() =>
+        ChatRequestMapper.ToRequest(_scaledMultiTurnMessages, options: null, _chatClient, ModelId, _toolSerializerOptions);
+
+    [Benchmark]
     public GenerateContentRequest ToRequest_MultiTurnNoSystem() =>
         ChatRequestMapper.ToRequest(_multiTurnMessages, options: null, _chatClient, ModelId, _toolSerializerOptions);
 
@@ -312,6 +377,14 @@ public class ChatMapperBenchmarks
     [Benchmark]
     public GenerateContentRequest ToRequest_MultiTurnToolHistoryReplay() =>
         ChatRequestMapper.ToRequest(_replayedToolHistoryMessages, _systemOptions, _chatClient, ModelId, _toolSerializerOptions);
+
+    [Benchmark(Baseline = true)]
+    public GenerateContentRequest ToRequest_ToolArguments_DictionarySerialization() =>
+        ChatRequestMapper.ToRequest(_toolArgumentsSerializedMessages, options: null, _chatClient, ModelId, _toolSerializerOptions);
+
+    [Benchmark]
+    public GenerateContentRequest ToRequest_ToolArguments_RawArgsReuse() =>
+        ChatRequestMapper.ToRequest(_toolArgumentsRawReusedMessages, options: null, _chatClient, ModelId, _toolSerializerOptions);
 
     [Benchmark]
     public Content? TryGetModelContent_Clean() =>

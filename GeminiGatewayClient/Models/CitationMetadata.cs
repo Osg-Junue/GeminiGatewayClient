@@ -9,7 +9,7 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class CitationMetadata
 {
-    private IList<Citation>? _citations;
+    private IList<Citation> _citations = [];
 
     /// <summary>
     /// Citations to sources for a specific response.
@@ -17,11 +17,9 @@ public sealed class CitationMetadata
     [JsonPropertyName("citations")]
     public IList<Citation> Citations
     {
-        get => _citations ??= [];
-        set => _citations = value!;
+        get => _citations;
+        set => _citations = value ?? [];
     }
-
-    internal IList<Citation>? RawCitations => _citations;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

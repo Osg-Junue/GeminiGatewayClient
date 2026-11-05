@@ -117,7 +117,7 @@ internal static class ChatResponseMapper
             return [];
         }
 
-        var parts = candidate.Content?.RawParts;
+        var parts = candidate.Content?.Parts;
         var hasAnnotations = HasCandidateAnnotations(candidate);
         if (parts is not { Count: > 0 })
         {
@@ -222,9 +222,9 @@ internal static class ChatResponseMapper
     }
 
     private static bool HasCandidateAnnotations(Candidate candidate) =>
-        candidate.CitationMetadata?.RawCitations is { Count: > 0 } ||
-        candidate.GroundingMetadata?.RawGroundingChunks is { Count: > 0 } ||
-        candidate.GroundingMetadata?.RawGroundingSupports is { Count: > 0 };
+        candidate.CitationMetadata?.Citations is { Count: > 0 } ||
+        candidate.GroundingMetadata?.GroundingChunks is { Count: > 0 } ||
+        candidate.GroundingMetadata?.GroundingSupports is { Count: > 0 };
 
     private static void AttachCandidateAnnotations(
         Candidate candidate,
@@ -237,7 +237,7 @@ internal static class ChatResponseMapper
         var primaryText = FindPrimaryTextContent(contents, parts, streamedSegments, allowCreateEmpty: !isStreaming);
         List<AIAnnotation>? carrierAnnotations = needsRealtimeCarrier ? [] : null;
 
-        if (candidate.CitationMetadata?.RawCitations is { Count: > 0 } citations)
+        if (candidate.CitationMetadata?.Citations is { Count: > 0 } citations)
         {
             for (var i = 0; i < citations.Count; i++)
             {
@@ -280,8 +280,8 @@ internal static class ChatResponseMapper
 
         if (candidate.GroundingMetadata is { } grounding)
         {
-            var chunks = grounding.RawGroundingChunks;
-            var supports = grounding.RawGroundingSupports;
+            var chunks = grounding.GroundingChunks;
+            var supports = grounding.GroundingSupports;
             var chunkCount = chunks?.Count ?? 0;
 
             ulong referencedChunksMask = 0;
@@ -310,7 +310,7 @@ internal static class ChatResponseMapper
                             ? [(primaryText, (AnnotatedRegion?)null)]
                             : [];
 
-                    var indices = support.RawGroundingChunkIndices;
+                    var indices = support.GroundingChunkIndices;
                     var attachedToChunk = false;
                     if (indices is { Count: > 0 } && chunks is not null)
                     {
@@ -947,7 +947,7 @@ internal static class ChatResponseMapper
 
     private static AdditionalPropertiesDictionary? CreateResponseProperties(BlockReason? blockReason, GroundingMetadata? groundingMetadata)
     {
-        var queries = groundingMetadata?.RawWebSearchQueries;
+        var queries = groundingMetadata?.WebSearchQueries;
         if (blockReason is null && queries is not { Count: > 0 })
         {
             return null;

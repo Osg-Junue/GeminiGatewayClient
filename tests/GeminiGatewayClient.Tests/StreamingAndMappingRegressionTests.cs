@@ -2152,7 +2152,7 @@ public partial class ChatClientTests
         Assert.False(emptyResponse.TryGetModelContent(out _));
         _ = ChatResponseMapper.ToChatResponse(emptyResponse, "gemini-2.5-flash");
         _ = ChatResponseMapper.ToChatResponseUpdate(emptyResponse, "gemini-2.5-flash");
-        Assert.Empty(emptyResponse.RawCandidates);
+        Assert.Empty(emptyResponse.Candidates);
 
         var content = new Content { Role = Role.Model };
         var response = new GenerateContentResponse
@@ -2162,7 +2162,7 @@ public partial class ChatClientTests
 
         Assert.Null(response.Text);
         Assert.Empty(response.FunctionCalls);
-        Assert.Empty(content.RawParts);
+        Assert.Empty(content.Parts);
     }
 
     [Fact]
