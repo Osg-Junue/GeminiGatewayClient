@@ -123,9 +123,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         request.Validate(nameof(request));
 
         var effectiveModel = !string.IsNullOrWhiteSpace(model) ? model : request.Model;
-        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, EmbedContentOperation);
-        var targetResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(effectiveModel);
-        var wireRequest = NormalizeSingleEmbedRequestModel(request, targetResourcePath);
+        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, EmbedContentOperation, out var targetResourcePath);
+        var wireRequest = NormalizeSingleEmbedRequestModel(request, targetResourcePath, effectiveModel);
         return SendBufferedAsync(
             requestUri,
             wireRequest,
@@ -146,9 +145,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         request.Validate(nameof(request));
 
         var effectiveModel = ResolveEffectiveBatchModel(request, model);
-        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, BatchEmbedContentsOperation);
-        var targetResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(effectiveModel);
-        var wireRequest = NormalizeBatchRequestModels(request, targetResourcePath);
+        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, BatchEmbedContentsOperation, out var targetResourcePath);
+        var wireRequest = NormalizeBatchRequestModels(request, targetResourcePath, effectiveModel);
 
         return SendBufferedAsync(
             requestUri,
@@ -201,8 +199,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
             await using (stream.ConfigureAwait(false))
             {
                 var initialCapacity = contentLength is > 0 and <= MaxPreallocatedBufferBytes and var length
-                    ? (int)length
-                    : 1024;
+                    ? (int)Math.Max(length, 4096)
+                    : 4096;
                 using var buffer = new PooledByteBufferWriter(initialCapacity);
                 while (true)
                 {
@@ -330,17 +328,22 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 
     private static EmbedContentRequest NormalizeSingleEmbedRequestModel(
         EmbedContentRequest request,
-        string targetResourcePath)
+        string targetResourcePath,
+        string? validatedModel)
     {
-        if (!string.IsNullOrWhiteSpace(request.Model))
+        if (string.Equals(request.Model, targetResourcePath, StringComparison.Ordinal))
+        {
+            return request;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Model) &&
+            !string.Equals(request.Model, validatedModel, StringComparison.Ordinal))
         {
             // Validate request.Model even when overridden by the per-call model argument.
             _ = GeminiEndpoint.ToResourcePath(request.Model);
         }
 
-        return string.Equals(request.Model, targetResourcePath, StringComparison.Ordinal)
-            ? request
-            : request.Clone(modelOverride: targetResourcePath);
+        return request.Clone(modelOverride: targetResourcePath);
     }
 
     private static string? ResolveEffectiveBatchModel(BatchEmbedContentsRequest request, string? model)
@@ -364,14 +367,23 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 
     private static BatchEmbedContentsRequest NormalizeBatchRequestModels(
         BatchEmbedContentsRequest request,
-        string targetResourcePath)
+        string targetResourcePath,
+        string? validatedModel)
     {
         var items = request.Requests;
         var needsCopy = false;
+        var lastValidatedRawModel = validatedModel;
         for (var i = 0; i < items.Count; i++)
         {
             var itemModel = items[i].Model;
-            if (!string.IsNullOrWhiteSpace(itemModel))
+            if (string.Equals(itemModel, targetResourcePath, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            needsCopy = true;
+            if (!string.IsNullOrWhiteSpace(itemModel) &&
+                !string.Equals(itemModel, lastValidatedRawModel, StringComparison.Ordinal))
             {
                 var resolved = GeminiEndpoint.ToResourcePath(itemModel)!;
                 if (!string.Equals(resolved, targetResourcePath, StringComparison.Ordinal))
@@ -380,11 +392,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                         $"BatchEmbedContentsRequest.Requests[{i}].Model ('{itemModel}', resolved as '{resolved}') does not match the batch target model '{targetResourcePath}'. All items in a batch embedding request must target the same model.",
                         nameof(request));
                 }
-            }
 
-            if (!string.Equals(itemModel, targetResourcePath, StringComparison.Ordinal))
-            {
-                needsCopy = true;
+                lastValidatedRawModel = itemModel;
             }
         }
 

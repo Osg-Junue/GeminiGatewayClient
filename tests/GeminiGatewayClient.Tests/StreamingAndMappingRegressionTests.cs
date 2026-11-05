@@ -1792,4 +1792,649 @@ public partial class ChatClientTests
         {
         }
     }
+
+    [Fact]
+    public async Task GeminiStreamReader_SingleLineFastPath_PreservesBomBlankLineSplitCrlfAndMultilineBehavior()
+    {
+        // Chunk 1: UTF-8 BOM + single-line event (\n\n), empty data lines, multi-line data event,
+        // single-line data followed by comment (:keepalive) and id/event lines before blank line,
+        // and a single-line event whose blank-line \r\n is split across two stream reads right after \r.
+        var chunk1 =
+            "\uFEFFdata: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"bom-first\"}]}}]}\n\n" +
+            "data:\r\n\r\n" +
+            "data: \n\n" +
+            "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\n" +
+            "data: \"parts\":[{\"text\":\"multiline\"}]}}]}\n\n" +
+            "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"with-comment-and-id\"}]}}]}\n" +
+            ":keepalive\n" +
+            "id: 42\r\n" +
+            "event: message\n\n" +
+            "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"split-crlf\"}]}}]}\r\n\r";
+        var chunk2 =
+            "\ndata: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"after-split\"}]}}]}\r\n\r\n" +
+            "data: [DONE]\r\n\r\n";
+
+        await using var stream = new ChunkedMemoryStream(
+            System.Text.Encoding.UTF8.GetBytes(chunk1),
+            System.Text.Encoding.UTF8.GetBytes(chunk2));
+        using var watchdog = new StreamIdleWatchdog(Timeout.InfiniteTimeSpan, CancellationToken.None);
+
+        var results = new List<string?>();
+        await foreach (var response in GeminiStreamReader.ReadAsync(
+            stream,
+            GeminiStreamingFormat.ServerSentEvents,
+            System.Net.HttpStatusCode.OK,
+            watchdog))
+        {
+            results.Add(response.Text);
+        }
+
+        Assert.Equal(["bom-first", "multiline", "with-comment-and-id", "split-crlf", "after-split"], results);
+    }
+
+    [Fact]
+    public void ChatResponseMapper_GroundingCitations_DeduplicatesPrimaryAndMultiSegmentStreamingTargets()
+    {
+        const string text = "Alpha Beta Gamma Delta";
+        var chunk0 = new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/0", Title = "Zero" } };
+        var chunk1 = new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/1", Title = "One" } };
+        var chunkUnreferenced = new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/2", Title = "Two" } };
+
+        var response = new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content { Role = Role.Model, Parts = [Part.FromText(text)] },
+                    GroundingMetadata = new GroundingMetadata
+                    {
+                        GroundingChunks = [chunk0, chunk1, chunkUnreferenced],
+                        GroundingSupports =
+                        [
+                            new GroundingSupport
+                            {
+                                Segment = new GroundingSegment { StartIndex = 0, EndIndex = 5, Text = "Alpha" },
+                                GroundingChunkIndices = [0, 1]
+                            },
+                            new GroundingSupport
+                            {
+                                Segment = new GroundingSegment { StartIndex = 6, EndIndex = 10, Text = "Beta" },
+                                GroundingChunkIndices = [0]
+                            },
+                            new GroundingSupport
+                            {
+                                Segment = new GroundingSegment { StartIndex = 11, EndIndex = 16, Text = "Gamma" },
+                                GroundingChunkIndices = []
+                            }
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var chatResponse = ChatResponseMapper.ToChatResponse(response, "gemini-2.5-flash");
+        var textContent = Assert.Single(chatResponse.Messages[0].Contents.OfType<TextContent>());
+        Assert.NotNull(textContent.Annotations);
+
+        // 2 referenced chunks (deduplicated across supports) + 1 unattached support + 1 unreferenced chunk = 4 annotations
+        var citations = textContent.Annotations.OfType<CitationAnnotation>().ToList();
+        Assert.Equal(4, citations.Count);
+        Assert.Equal("Zero", citations[0].Title);
+        Assert.Equal("Alpha", citations[0].Snippet);
+        Assert.Equal(2, citations[0].AnnotatedRegions?.Count);
+        Assert.Equal("One", citations[1].Title);
+        Assert.Single(citations[1].AnnotatedRegions!);
+        Assert.Equal("Gamma", citations[2].Snippet);
+        Assert.Equal("Two", citations[3].Title);
+
+        // Also verify multi-segment streaming resolution (spanning 1 segment vs >=2 segments) + realtime carrier
+        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
+        var cumulativeBytes = 0;
+        _ = ChatResponseMapper.ToChatResponseUpdate(
+            new GenerateContentResponse
+            {
+                Candidates = [new Candidate { Content = new Content { Role = Role.Model, Parts = [Part.FromText("Alpha ")] } }]
+            },
+            "gemini-2.5-flash",
+            ref streamedSegments,
+            ref cumulativeBytes);
+        _ = ChatResponseMapper.ToChatResponseUpdate(
+            new GenerateContentResponse
+            {
+                Candidates = [new Candidate { Content = new Content { Role = Role.Model, Parts = [Part.FromText("Beta Gamma Delta")] } }]
+            },
+            "gemini-2.5-flash",
+            ref streamedSegments,
+            ref cumulativeBytes);
+        var finalUpdate = ChatResponseMapper.ToChatResponseUpdate(
+            new GenerateContentResponse
+            {
+                Candidates =
+                [
+                    new Candidate
+                    {
+                        Content = new Content { Role = Role.Model, Parts = [] },
+                        FinishReason = FinishReason.Stop,
+                        GroundingMetadata = new GroundingMetadata
+                        {
+                            GroundingChunks = [chunk0, chunk1, chunkUnreferenced],
+                            GroundingSupports =
+                            [
+                                // Spans both streamed segments (0..10 crosses segment 0 [0..6] and segment 1 [6..22])
+                                new GroundingSupport
+                                {
+                                    Segment = new GroundingSegment { StartIndex = 0, EndIndex = 10, Text = "Alpha Beta" },
+                                    GroundingChunkIndices = [0, 1]
+                                },
+                                // Spans single streamed segment (11..16 inside segment 1)
+                                new GroundingSupport
+                                {
+                                    Segment = new GroundingSegment { StartIndex = 11, EndIndex = 16, Text = "Gamma" },
+                                    GroundingChunkIndices = []
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            "gemini-2.5-flash",
+            ref streamedSegments,
+            ref cumulativeBytes);
+
+        var carrier = Assert.Single(finalUpdate.Contents, c => c is not TextContent && c.Annotations is { Count: > 0 });
+        Assert.Equal(4, carrier.Annotations!.Count);
+    }
+
+    [Fact]
+    public void ChatRequestMapper_FunctionCallReplay_ReusesArgsWhenUnmodified_AndReserializesOnMutation()
+    {
+        using var rawArgsDoc = System.Text.Json.JsonDocument.Parse("""{"city":"Tokyo","days":3}""");
+        var rawArgs = rawArgsDoc.RootElement.Clone();
+
+        var modelResponse = new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts =
+                        [
+                            new Part
+                            {
+                                ThoughtSignature = "sig-1",
+                                FunctionCall = new FunctionCall
+                                {
+                                    Name = "get_forecast",
+                                    Args = rawArgs
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var mappedChat = ChatResponseMapper.ToChatResponse(modelResponse, "gemini-2.5-flash");
+        var assistantMsg = mappedChat.Messages[0];
+        var fnCall = Assert.Single(assistantMsg.Contents.OfType<FunctionCallContent>());
+        var resultMsg = new ChatMessage(ChatRole.Tool, [new FunctionResultContent(fnCall.CallId, new Dictionary<string, object?> { ["temp"] = 22 })]);
+
+        // 1. Unmodified arguments: reuses rawCall.Args directly and still registers synthesized CallId for FunctionResultContent
+        var reqUnmodified = ChatRequestMapper.ToRequest(
+            [new ChatMessage(ChatRole.User, "Weather?"), assistantMsg, resultMsg],
+            options: null,
+            client: null!,
+            modelId: "gemini-2.5-flash",
+            System.Text.Json.JsonSerializerOptions.Default);
+
+        var replayedCall = reqUnmodified.Contents[1].Parts[0].FunctionCall!;
+        Assert.Null(replayedCall.Id);
+        Assert.Equal("get_forecast", replayedCall.Name);
+        Assert.Equal("sig-1", reqUnmodified.Contents[1].Parts[0].ThoughtSignature);
+        Assert.True(System.Text.Json.JsonElement.DeepEquals(rawArgs, replayedCall.Args!.Value));
+        Assert.Equal("get_forecast", reqUnmodified.Contents[2].Parts[0].FunctionResponse!.Name);
+        Assert.Null(reqUnmodified.Contents[2].Parts[0].FunctionResponse!.Id);
+
+        // 2. Reordered keys with identical values still reuse rawCall.Args via fallback check
+        fnCall.Arguments!.Remove("city");
+        fnCall.Arguments["city"] = rawArgs.GetProperty("city").Clone();
+        var reqReordered = ChatRequestMapper.ToRequest(
+            [assistantMsg],
+            options: null,
+            client: null!,
+            modelId: "gemini-2.5-flash",
+            System.Text.Json.JsonSerializerOptions.Default);
+        Assert.True(System.Text.Json.JsonElement.DeepEquals(rawArgs, reqReordered.Contents[0].Parts[0].FunctionCall!.Args!.Value));
+
+        // 3. Mutated argument value: re-serializes updated value
+        fnCall.Arguments!["city"] = "Osaka";
+        var reqMutatedValue = ChatRequestMapper.ToRequest(
+            [assistantMsg],
+            options: null,
+            client: null!,
+            modelId: "gemini-2.5-flash",
+            System.Text.Json.JsonSerializerOptions.Default);
+        Assert.Equal("Osaka", reqMutatedValue.Contents[0].Parts[0].FunctionCall!.Args!.Value.GetProperty("city").GetString());
+
+        // 4. Added argument key: re-serializes with extra key
+        fnCall.Arguments["city"] = rawArgs.GetProperty("city");
+        fnCall.Arguments["unit"] = "C";
+        var reqAddedKey = ChatRequestMapper.ToRequest(
+            [assistantMsg],
+            options: null,
+            client: null!,
+            modelId: "gemini-2.5-flash",
+            System.Text.Json.JsonSerializerOptions.Default);
+        Assert.Equal("C", reqAddedKey.Contents[0].Parts[0].FunctionCall!.Args!.Value.GetProperty("unit").GetString());
+
+        // 5. Removed argument key: re-serializes with remaining keys
+        fnCall.Arguments.Remove("unit");
+        fnCall.Arguments.Remove("days");
+        var reqRemovedKey = ChatRequestMapper.ToRequest(
+            [assistantMsg],
+            options: null,
+            client: null!,
+            modelId: "gemini-2.5-flash",
+            System.Text.Json.JsonSerializerOptions.Default);
+        Assert.False(reqRemovedKey.Contents[0].Parts[0].FunctionCall!.Args!.Value.TryGetProperty("days", out _));
+
+        // 6. Duplicate keys in raw wire JSON + caller adding a key must NOT false-positive match rawCall.Args
+        using var dupDoc = System.Text.Json.JsonDocument.Parse("""{"city":"Tokyo","city":"Tokyo"}""");
+        var dupResponse = new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts = [new Part { FunctionCall = new FunctionCall { Name = "dup_fn", Args = dupDoc.RootElement.Clone() } }]
+                    }
+                }
+            ]
+        };
+        var dupChatMsg = ChatResponseMapper.ToChatResponse(dupResponse, "gemini-2.5-flash").Messages[0];
+        var dupFnCall = Assert.Single(dupChatMsg.Contents.OfType<FunctionCallContent>());
+        dupFnCall.Arguments!["unit"] = "celsius";
+        var reqDupMutated = ChatRequestMapper.ToRequest(
+            [dupChatMsg],
+            options: null,
+            client: null!,
+            modelId: "gemini-2.5-flash",
+            System.Text.Json.JsonSerializerOptions.Default);
+        Assert.Equal("celsius", reqDupMutated.Contents[0].Parts[0].FunctionCall!.Args!.Value.GetProperty("unit").GetString());
+
+        // 7. Undefined or Null rawCall.Args with null Arguments normalizes FunctionCall.Args to null and passes Validate()
+        using var nullDoc = System.Text.Json.JsonDocument.Parse("null");
+        var undefinedAndNullResponse = new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts =
+                        [
+                            new Part { FunctionCall = new FunctionCall { Name = "undef_fn", Args = default } },
+                            new Part { FunctionCall = new FunctionCall { Name = "null_fn", Args = nullDoc.RootElement.Clone() } }
+                        ]
+                    }
+                }
+            ]
+        };
+        var undefNullMsg = ChatResponseMapper.ToChatResponse(undefinedAndNullResponse, "gemini-2.5-flash").Messages[0];
+        var reqUndefNull = ChatRequestMapper.ToRequest(
+            [undefNullMsg],
+            options: null,
+            client: null!,
+            modelId: "gemini-2.5-flash",
+            System.Text.Json.JsonSerializerOptions.Default);
+        reqUndefNull.Validate();
+        Assert.Null(reqUndefNull.Contents[0].Parts[0].FunctionCall!.Args);
+        Assert.Null(reqUndefNull.Contents[0].Parts[1].FunctionCall!.Args);
+    }
+
+    [Fact]
+    public void TryGetModelContent_NormalizesWithoutDoubleClone_AndPreservesExtensionData()
+    {
+        using var extDoc = System.Text.Json.JsonDocument.Parse("""{"custom":"meta"}""");
+        var originalContent = new Content
+        {
+            Role = Role.Model,
+            ExtensionData = new Dictionary<string, System.Text.Json.JsonElement>(StringComparer.Ordinal)
+            {
+                ["custom"] = extDoc.RootElement.GetProperty("custom").Clone()
+            },
+            Parts =
+            [
+                new Part { Text = "" },
+                new Part
+                {
+                    Text = "",
+                    FunctionCall = new FunctionCall { Name = "do_work" }
+                },
+                Part.FromText("done")
+            ]
+        };
+        var response = new GenerateContentResponse
+        {
+            Candidates = [new Candidate { Content = originalContent }]
+        };
+
+        Assert.True(response.TryGetModelContent(out var normalized));
+        Assert.NotSame(originalContent, normalized);
+        Assert.Equal(Role.Model, normalized!.Role);
+        Assert.Equal(2, normalized.Parts.Count);
+        Assert.Null(normalized.Parts[0].Text);
+        Assert.Equal("do_work", normalized.Parts[0].FunctionCall?.Name);
+        Assert.Equal("done", normalized.Parts[1].Text);
+        Assert.Equal("meta", normalized.ExtensionData?["custom"].GetString());
+
+        // Original content remains untouched
+        Assert.Equal(3, originalContent.Parts.Count);
+        Assert.Equal("", originalContent.Parts[1].Text);
+    }
+
+    [Fact]
+    public void GenerateContentResponse_TextAndFunctionCalls_DoNotAllocatePartsOrCandidatesListWhenUninitialized()
+    {
+        var emptyResponse = new GenerateContentResponse();
+        Assert.Null(emptyResponse.Text);
+        Assert.Empty(emptyResponse.FunctionCalls);
+        Assert.Null(emptyResponse.FinishReason);
+        Assert.False(emptyResponse.TryGetModelContent(out _));
+        _ = ChatResponseMapper.ToChatResponse(emptyResponse, "gemini-2.5-flash");
+        _ = ChatResponseMapper.ToChatResponseUpdate(emptyResponse, "gemini-2.5-flash");
+        Assert.Empty(emptyResponse.RawCandidates);
+
+        var content = new Content { Role = Role.Model };
+        var response = new GenerateContentResponse
+        {
+            Candidates = [new Candidate { Content = content }]
+        };
+
+        Assert.Null(response.Text);
+        Assert.Empty(response.FunctionCalls);
+        Assert.Empty(content.RawParts);
+    }
+
+    [Fact]
+    public async Task BatchEmbedContentsAndEmbeddingGenerator_ModelNormalizationAndMaterializeInputs_EdgeCases()
+    {
+        using var handler = new StubBatchEmbedHandler();
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(
+            new GeminiClientOptions
+            {
+                ApiKey = "test-key",
+                Model = "gemini-embedding-001"
+            },
+            httpClient);
+
+        // 1. Repeated bare model across items normalizes to resource path
+        var repeatedBareRequest = new BatchEmbedContentsRequest
+        {
+            Requests =
+            [
+                new EmbedContentRequest { Model = "gemini-embedding-001", Content = new Content { Parts = [Part.FromText("a")] } },
+                new EmbedContentRequest { Model = "gemini-embedding-001", Content = new Content { Parts = [Part.FromText("b")] } },
+                new EmbedContentRequest { Model = "models/gemini-embedding-001", Content = new Content { Parts = [Part.FromText("c")] } }
+            ]
+        };
+        var batchResult = await client.BatchEmbedContentsAsync(repeatedBareRequest);
+        Assert.Equal(3, batchResult.Embeddings?.Count);
+
+        // 2. Mismatched model at index 2 still throws ArgumentException after memoized index 0 and 1
+        var mismatchedRequest = new BatchEmbedContentsRequest
+        {
+            Requests =
+            [
+                new EmbedContentRequest { Model = "gemini-embedding-001", Content = new Content { Parts = [Part.FromText("a")] } },
+                new EmbedContentRequest { Model = "gemini-embedding-001", Content = new Content { Parts = [Part.FromText("b")] } },
+                new EmbedContentRequest { Model = "text-embedding-004", Content = new Content { Parts = [Part.FromText("c")] } }
+            ]
+        };
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => client.BatchEmbedContentsAsync(mismatchedRequest));
+        Assert.Contains("Requests[2]", ex.Message, StringComparison.Ordinal);
+
+        // 3. GeminiEmbeddingGenerator with non-IReadOnlyList<string> enumerable supporting TryGetNonEnumeratedCount (HashSet<string>)
+        var generator = client.AsIEmbeddingGenerator();
+        var hashSetInputs = new HashSet<string>(StringComparer.Ordinal) { "first", "second", "third" };
+        var generated = await generator.GenerateAsync(hashSetInputs);
+        Assert.Equal(3, generated.Count);
+    }
+
+    [Fact]
+    public void ChatResponseMapper_StreamingGrounding_ExplicitPartIndexZeroInMultiPartChunk_ResolvesToPartZero()
+    {
+        var part0 = Part.FromText("Part 0 text");
+        var part1 = Part.FromText("Part 1 text");
+        var chunk0 = new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/p0", Title = "Source P0" } };
+        var chunk1 = new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/p1", Title = "Source P1" } };
+
+        var response = new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts = [part0, part1]
+                    },
+                    GroundingMetadata = new GroundingMetadata
+                    {
+                        GroundingChunks = [chunk0, chunk1],
+                        GroundingSupports =
+                        [
+                            new GroundingSupport
+                            {
+                                Segment = new GroundingSegment { PartIndex = 0, StartIndex = 0, EndIndex = 6, Text = "Part 0" },
+                                GroundingChunkIndices = [0]
+                            },
+                            new GroundingSupport
+                            {
+                                Segment = new GroundingSegment { PartIndex = 1, StartIndex = 0, EndIndex = 6, Text = "Part 1" },
+                                GroundingChunkIndices = [1]
+                            }
+                        ]
+                    }
+                }
+            ]
+        };
+
+        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
+        var cumulativeBytes = 0;
+        var update = ChatResponseMapper.ToChatResponseUpdate(
+            response,
+            "gemini-2.5-flash",
+            ref streamedSegments,
+            ref cumulativeBytes);
+
+        var textContents = update.Contents.OfType<TextContent>().ToList();
+        Assert.Equal(2, textContents.Count);
+
+        var p0Citations = textContents[0].Annotations?.OfType<CitationAnnotation>().ToList();
+        Assert.NotNull(p0Citations);
+        var p0Citation = Assert.Single(p0Citations);
+        Assert.Equal("Source P0", p0Citation.Title);
+        var p0Region = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(p0Citation.AnnotatedRegions!));
+        Assert.Equal(0, p0Region.StartIndex);
+        Assert.Equal(6, p0Region.EndIndex);
+
+        var p1Citations = textContents[1].Annotations?.OfType<CitationAnnotation>().ToList();
+        Assert.NotNull(p1Citations);
+        var p1Citation = Assert.Single(p1Citations);
+        Assert.Equal("Source P1", p1Citation.Title);
+        var p1Region = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(p1Citation.AnnotatedRegions!));
+        Assert.Equal(0, p1Region.StartIndex);
+        Assert.Equal(6, p1Region.EndIndex);
+    }
+
+    [Fact]
+    public void ChatRequestMapper_ToRequest_MergedTurns_WithReadOnlyPartArray_MergesIntoSingleTurn()
+    {
+        using var geminiClient = new GeminiClient("test-key", "gemini-2.5-flash");
+        var chatClient = geminiClient.AsIChatClient();
+
+        Part[] fixedParts = [Part.FromText("Initial array part")];
+        var templateRequest = new GenerateContentRequest
+        {
+            Contents =
+            [
+                new Content
+                {
+                    Role = Role.User,
+                    Parts = fixedParts
+                }
+            ]
+        };
+
+        var options = new ChatOptions
+        {
+            RawRepresentationFactory = _ => templateRequest
+        };
+
+        ChatMessage[] messages =
+        [
+            new(ChatRole.User, "Appended message part 1"),
+            new(ChatRole.User, "Appended message part 2")
+        ];
+
+        var request = ChatRequestMapper.ToRequest(
+            messages,
+            options,
+            chatClient,
+            "gemini-2.5-flash",
+            System.Text.Json.JsonSerializerOptions.Default);
+
+        // Turn merging must merge into contents[^1] despite fixedParts being a read-only Part[] array,
+        // resulting in exactly 1 Content turn with 3 parts rather than 3 separate User turns.
+        Assert.Single(request.Contents);
+        Assert.Equal(Role.User, request.Contents[0].Role);
+        Assert.Equal(3, request.Contents[0].Parts.Count);
+        Assert.Equal("Initial array part", request.Contents[0].Parts[0].Text);
+        Assert.Equal("Appended message part 1", request.Contents[0].Parts[1].Text);
+        Assert.Equal("Appended message part 2", request.Contents[0].Parts[2].Text);
+    }
+
+    [Fact]
+    public async Task GeminiStreamReader_ReadAsync_StrictlyEnforcesMaxSseEventBytes_RegardlessOfArrayPoolRentSize()
+    {
+        // Even if ArrayPool rents a buffer of 256 or 4096 bytes, a maxSseEventBytes limit of 50
+        // must throw when 51 consecutive bytes without newline are encountered.
+        const int maxSseEventBytes = 50;
+        var exceedingLine = new string('x', maxSseEventBytes + 1); // 51 bytes
+        var bytes = Encoding.UTF8.GetBytes(exceedingLine);
+        using var stream = new MemoryStream(bytes);
+        using var watchdog = new StreamIdleWatchdog(Timeout.InfiniteTimeSpan, CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
+        {
+            await foreach (var _ in GeminiStreamReader.ReadAsync(
+                stream,
+                GeminiStreamingFormat.ServerSentEvents,
+                HttpStatusCode.OK,
+                watchdog,
+                maxSseEventBytes: maxSseEventBytes))
+            {
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, ex.StatusCode);
+        Assert.Contains("maximum allowed length", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        // Conversely, a valid event line within limit must succeed
+        var validPayload = "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}";
+        var validSse = $"data: {validPayload}\n\n";
+        using var validStream = new MemoryStream(Encoding.UTF8.GetBytes(validSse));
+        using var validWatchdog = new StreamIdleWatchdog(Timeout.InfiniteTimeSpan, CancellationToken.None);
+
+        var responses = new List<GenerateContentResponse>();
+        await foreach (var resp in GeminiStreamReader.ReadAsync(
+            validStream,
+            GeminiStreamingFormat.ServerSentEvents,
+            HttpStatusCode.OK,
+            validWatchdog,
+            maxSseEventBytes: 128))
+        {
+            responses.Add(resp);
+        }
+
+        Assert.Single(responses);
+        Assert.Equal("ok", responses[0].Text);
+    }
+
+    private sealed class StubBatchEmbedHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            const string json = """
+                {
+                  "embeddings": [
+                    { "values": [0.1, 0.2] },
+                    { "values": [0.3, 0.4] },
+                    { "values": [0.5, 0.6] }
+                  ]
+                }
+                """;
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class ChunkedMemoryStream(params byte[][] chunks) : Stream
+    {
+        private int _chunkIndex;
+        private int _offset;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            while (_chunkIndex < chunks.Length)
+            {
+                var current = chunks[_chunkIndex];
+                var remaining = current.Length - _offset;
+                if (remaining <= 0)
+                {
+                    _chunkIndex++;
+                    _offset = 0;
+                    continue;
+                }
+
+                var toCopy = Math.Min(buffer.Length, remaining);
+                current.AsMemory(_offset, toCopy).CopyTo(buffer);
+                _offset += toCopy;
+                if (_offset >= current.Length)
+                {
+                    _chunkIndex++;
+                    _offset = 0;
+                }
+
+                return ValueTask.FromResult(toCopy);
+            }
+
+            return ValueTask.FromResult(0);
+        }
+    }
 }

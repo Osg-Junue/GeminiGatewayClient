@@ -284,10 +284,8 @@ internal static class ChatResponseMapper
             var supports = grounding.RawGroundingSupports;
             var chunkCount = chunks?.Count ?? 0;
 
-            bool[]? chunkReferenced = chunkCount > 0 ? new bool[chunkCount] : null;
-            CitationAnnotation?[]? carrierChunkAnnotations = carrierAnnotations is not null && chunkCount > 0
-                ? new CitationAnnotation?[chunkCount]
-                : null;
+            ulong referencedChunksMask = 0;
+            HashSet<int>? extraReferencedChunks = null;
 
             if (supports is { Count: > 0 })
             {
@@ -325,12 +323,20 @@ internal static class ChatResponseMapper
                             }
 
                             attachedToChunk = true;
-                            chunkReferenced![chunkIndex] = true;
+                            if ((uint)chunkIndex < 64)
+                            {
+                                referencedChunksMask |= 1UL << chunkIndex;
+                            }
+                            else
+                            {
+                                (extraReferencedChunks ??= []).Add(chunkIndex);
+                            }
 
                             for (var t = 0; t < targets.Count; t++)
                             {
                                 var (target, regionToAdd) = targets[t];
                                 var annotation = GetOrAddChunkAnnotation(target, chunk);
+
                                 if (annotation.Snippet is null && !string.IsNullOrEmpty(segment?.Text))
                                 {
                                     annotation.Snippet = segment.Text;
@@ -344,14 +350,7 @@ internal static class ChatResponseMapper
 
                             if (carrierAnnotations is not null)
                             {
-                                var carrierAnnotation = carrierChunkAnnotations![chunkIndex];
-                                if (carrierAnnotation is null)
-                                {
-                                    carrierAnnotation = CreateChunkAnnotation(chunk);
-                                    carrierChunkAnnotations[chunkIndex] = carrierAnnotation;
-                                    carrierAnnotations.Add(carrierAnnotation);
-                                }
-
+                                var carrierAnnotation = GetOrAddCarrierChunkAnnotation(carrierAnnotations, chunk);
                                 if (carrierAnnotation.Snippet is null && !string.IsNullOrEmpty(segment?.Text))
                                 {
                                     carrierAnnotation.Snippet = segment.Text;
@@ -385,14 +384,14 @@ internal static class ChatResponseMapper
                             }
                         }
 
-                        if (carrierAnnotations is not null && (targets.Any(static x => x.Region is not null) || !string.IsNullOrEmpty(segment?.Text)))
+                        if (carrierAnnotations is not null && (HasAnyRegion(targets) || !string.IsNullOrEmpty(segment?.Text)))
                         {
-                            var carrierRegions = new List<AnnotatedRegion>();
+                            List<AnnotatedRegion>? carrierRegions = null;
                             for (var t = 0; t < targets.Count; t++)
                             {
                                 if (targets[t].Region is { } r)
                                 {
-                                    carrierRegions.Add(r);
+                                    (carrierRegions ??= new List<AnnotatedRegion>(targets.Count)).Add(r);
                                 }
                             }
 
@@ -400,7 +399,7 @@ internal static class ChatResponseMapper
                             {
                                 Snippet = segment?.Text,
                                 RawRepresentation = support,
-                                AnnotatedRegions = carrierRegions.Count > 0 ? carrierRegions : null
+                                AnnotatedRegions = carrierRegions
                             });
                         }
                     }
@@ -411,7 +410,11 @@ internal static class ChatResponseMapper
             {
                 for (var i = 0; i < chunkCount; i++)
                 {
-                    if (chunkReferenced![i] || chunks[i] is not { } chunk)
+                    var isReferenced = i < 64
+                        ? (referencedChunksMask & (1UL << i)) != 0
+                        : extraReferencedChunks?.Contains(i) == true;
+
+                    if (isReferenced || chunks[i] is not { } chunk)
                     {
                         continue;
                     }
@@ -489,6 +492,34 @@ internal static class ChatResponseMapper
         return created;
     }
 
+    private static CitationAnnotation GetOrAddCarrierChunkAnnotation(List<AIAnnotation> carrierAnnotations, GroundingChunk chunk)
+    {
+        for (var i = 0; i < carrierAnnotations.Count; i++)
+        {
+            if (carrierAnnotations[i] is CitationAnnotation existing && ReferenceEquals(existing.RawRepresentation, chunk))
+            {
+                return existing;
+            }
+        }
+
+        var created = CreateChunkAnnotation(chunk);
+        carrierAnnotations.Add(created);
+        return created;
+    }
+
+    private static bool HasAnyRegion(IReadOnlyList<(TextContent Target, AnnotatedRegion? Region)> targets)
+    {
+        for (var i = 0; i < targets.Count; i++)
+        {
+            if (targets[i].Region is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static CitationAnnotation CreateChunkAnnotation(GroundingChunk chunk)
     {
         if (chunk.Web is { } web)
@@ -540,7 +571,7 @@ internal static class ChatResponseMapper
             : null;
     }
 
-    private static List<(TextContent Target, AnnotatedRegion? Region)> ResolveTargetsAndRegions(
+    private static IReadOnlyList<(TextContent Target, AnnotatedRegion? Region)> ResolveTargetsAndRegions(
         List<AIContent> contents,
         IList<Part>? parts,
         List<StreamedTextSegment>? streamedSegments,
@@ -549,10 +580,11 @@ internal static class ChatResponseMapper
         int? startByte,
         int? endByte)
     {
-        if (partIndex is > 0 and var explicitIdx &&
+        if (partIndex is >= 0 and var explicitIdx &&
             parts is not null &&
             explicitIdx < parts.Count &&
-            parts[explicitIdx] is { } explicitPart)
+            parts[explicitIdx] is { } explicitPart &&
+            (streamedSegments is not { Count: > 1 } || parts.Count > 1))
         {
             for (var i = 0; i < contents.Count; i++)
             {
@@ -595,11 +627,11 @@ internal static class ChatResponseMapper
                                 ? Math.Min(ebVal, seg.EndByte) - seg.StartByte
                                 : null;
                             AnnotatedRegion? region = TryCreateRegion(seg.Content.Text, localStart, localEnd, out var r) ? r : null;
-                            (matched ??= new List<(TextContent, AnnotatedRegion?)>(2)).Add((seg.Content, region));
+                            (matched ??= new List<(TextContent Target, AnnotatedRegion? Region)>(2)).Add((seg.Content, region));
                         }
                     }
 
-                    if (matched is { Count: > 0 })
+                    if (matched is not null)
                     {
                         return matched;
                     }

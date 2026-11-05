@@ -155,7 +155,9 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
             return readOnlyList;
         }
 
-        var list = new List<string>();
+        var list = values.TryGetNonEnumeratedCount(out var count)
+            ? new List<string>(count)
+            : new List<string>();
         var index = 0;
         foreach (var value in values)
         {

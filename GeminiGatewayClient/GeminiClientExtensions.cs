@@ -176,9 +176,9 @@ public static class GeminiClientExtensions
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        if (response.Candidates is [{ Content: { RawParts: { Count: > 0 } parts } candidateContent }, ..])
+        if (response.RawCandidates is [{ Content: { RawParts: { Count: > 0 } parts } candidateContent }, ..])
         {
-            var hasMeaningfulPart = false;
+            var meaningfulCount = 0;
             var needsNormalization = false;
             for (var i = 0; i < parts.Count; i++)
             {
@@ -188,14 +188,14 @@ public static class GeminiClientExtensions
                     continue;
                 }
 
-                hasMeaningfulPart = true;
+                meaningfulCount++;
                 if (string.IsNullOrEmpty(part.Text) && HasNonTextPrimaryDataField(part))
                 {
                     needsNormalization = true;
                 }
             }
 
-            if (hasMeaningfulPart)
+            if (meaningfulCount > 0)
             {
                 if (!needsNormalization)
                 {
@@ -203,8 +203,7 @@ public static class GeminiClientExtensions
                     return true;
                 }
 
-                var normalized = candidateContent.Clone();
-                var normalizedParts = new List<Part>(parts.Count);
+                var normalizedParts = new List<Part>(meaningfulCount);
                 for (var i = 0; i < parts.Count; i++)
                 {
                     if (parts[i] is not { } part || IsPureEmptyTextPart(part))
@@ -221,8 +220,14 @@ public static class GeminiClientExtensions
                     normalizedParts.Add(clonedPart);
                 }
 
-                normalized.Parts = normalizedParts;
-                content = normalized;
+                content = new Content
+                {
+                    Role = candidateContent.Role,
+                    Parts = normalizedParts,
+                    ExtensionData = candidateContent.ExtensionData is not null
+                        ? new Dictionary<string, JsonElement>(candidateContent.ExtensionData, StringComparer.Ordinal)
+                        : null
+                };
                 return true;
             }
         }
@@ -253,7 +258,7 @@ public static class GeminiClientExtensions
 
         foreach (var chunk in chunks)
         {
-            if (chunk?.Candidates is not [{ Content: { } content }, ..])
+            if (chunk?.RawCandidates is not [{ Content: { } content }, ..])
             {
                 continue;
             }
@@ -308,7 +313,7 @@ public static class GeminiClientExtensions
 
         await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (chunk?.Candidates is not [{ Content: { } content }, ..])
+            if (chunk?.RawCandidates is not [{ Content: { } content }, ..])
             {
                 continue;
             }

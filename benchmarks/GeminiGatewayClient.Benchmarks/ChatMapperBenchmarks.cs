@@ -17,11 +17,15 @@ public class ChatMapperBenchmarks
     private JsonSerializerOptions _toolSerializerOptions = null!;
     private GenerateContentResponse _singlePartResponse = null!;
     private GenerateContentResponse _multiPartResponse = null!;
+    private GenerateContentResponse _groundedResponse = null!;
+    private GenerateContentResponse _hybridResponseForNormalization = null!;
     private List<ChatMessage> _multiTurnMessages = null!;
     private List<ChatMessage> _systemAndToolMessages = null!;
+    private List<ChatMessage> _replayedToolHistoryMessages = null!;
     private ChatOptions _systemOptions = null!;
     private ChatOptions _toolOptions = null!;
     private GeminiClientOptions _clientOptionsWithHeaders = null!;
+    private GeminiRequestHeaders _requestHeaders = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -81,6 +85,95 @@ public class ChatMapperBenchmarks
             ]
         };
 
+        const string candidateText = "Tokyo and Kyoto weather forecast for the week ahead with detailed temperature and precipitation data.";
+
+        var groundingChunks = new List<GroundingChunk>(8);
+        for (var i = 0; i < 8; i++)
+        {
+            groundingChunks.Add(new GroundingChunk
+            {
+                Web = new GroundingChunkWeb
+                {
+                    Uri = $"https://weather.example.com/source-{i}",
+                    Title = $"Weather Source {i}"
+                }
+            });
+        }
+
+        (int start, int length)[] segments =
+        [
+            (0, 5),   // "Tokyo"
+            (10, 5),  // "Kyoto"
+            (16, 16), // "weather forecast"
+            (37, 14), // "the week ahead"
+            (57, 20), // "detailed temperature"
+            (82, 18), // "precipitation data"
+            (0, 32),  // "Tokyo and Kyoto weather forecast"
+            (66, 11)  // "temperature"
+        ];
+
+        var groundingSupports = new List<GroundingSupport>(16);
+        for (var i = 0; i < 16; i++)
+        {
+            var (start, len) = segments[i % segments.Length];
+            groundingSupports.Add(new GroundingSupport
+            {
+                Segment = new GroundingSegment
+                {
+                    PartIndex = 0,
+                    StartIndex = start,
+                    EndIndex = start + len,
+                    Text = candidateText.Substring(start, len)
+                },
+                GroundingChunkIndices = [i % 8, (i + 1) % 8]
+            });
+        }
+
+        _groundedResponse = new GenerateContentResponse
+        {
+            ResponseId = "resp-grounded",
+            ModelVersion = ModelId,
+            Candidates =
+            [
+                new Candidate
+                {
+                    FinishReason = FinishReason.Stop,
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts = [Part.FromText(candidateText)]
+                    },
+                    GroundingMetadata = new GroundingMetadata
+                    {
+                        WebSearchQueries = ["tokyo weather", "kyoto weather"],
+                        GroundingChunks = groundingChunks,
+                        GroundingSupports = groundingSupports
+                    }
+                }
+            ]
+        };
+
+        _hybridResponseForNormalization = new GenerateContentResponse
+        {
+            Candidates =
+            [
+                new Candidate
+                {
+                    FinishReason = FinishReason.Stop,
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts =
+                        [
+                            new Part { Text = "Thinking...", Thought = true, ThoughtSignature = "sig-t" },
+                            new Part { Text = string.Empty, FunctionCall = new FunctionCall { Id = "call-1", Name = "get_weather", Args = callArgs }, ThoughtSignature = "sig-fc" },
+                            new Part { Text = string.Empty }
+                        ]
+                    }
+                }
+            ]
+        };
+
         _multiTurnMessages =
         [
             new ChatMessage(ChatRole.User, "Hello, can you help me plan a trip to Japan?"),
@@ -111,6 +204,54 @@ public class ChatMapperBenchmarks
             new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-2", "16C")])
         ];
 
+        var callArgsTurn2 = JsonDocument.Parse("""{"city":"Osaka","unit":"celsius"}""").RootElement.Clone();
+        var multiPartResponseTurn2 = new GenerateContentResponse
+        {
+            ResponseId = "resp-multi-2",
+            ModelVersion = ModelId,
+            Candidates =
+            [
+                new Candidate
+                {
+                    FinishReason = FinishReason.Stop,
+                    Content = new Content
+                    {
+                        Role = Role.Model,
+                        Parts =
+                        [
+                            new Part { Text = "Checking tomorrow's weather across cities...", Thought = true, ThoughtSignature = "sig-thought-2" },
+                            new Part { FunctionCall = new FunctionCall { Id = "call-5", Name = "get_weather", Args = callArgsTurn2 }, ThoughtSignature = "sig-call-5" },
+                            new Part { FunctionCall = new FunctionCall { Id = "call-6", Name = "get_weather", Args = callArgsTurn2 } },
+                            new Part { FunctionCall = new FunctionCall { Id = "call-7", Name = "get_weather", Args = callArgsTurn2 } },
+                            new Part { FunctionCall = new FunctionCall { Id = "call-8", Name = "get_weather", Args = callArgsTurn2 } },
+                            Part.FromText("Fetching tomorrow's results now.")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var mappedAssistantToolTurn1 = ChatResponseMapper.ToChatResponse(_multiPartResponse, ModelId).Messages[0];
+        var mappedAssistantToolTurn2 = ChatResponseMapper.ToChatResponse(multiPartResponseTurn2, ModelId).Messages[0];
+
+        _replayedToolHistoryMessages =
+        [
+            new ChatMessage(ChatRole.System, "Always use metric units."),
+            new ChatMessage(ChatRole.User, "Check weather across cities."),
+            mappedAssistantToolTurn1,
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-1", "18C")]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-2", "16C")]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-3", "20C")]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-4", "14C")]),
+            new ChatMessage(ChatRole.User, "Check again for tomorrow."),
+            mappedAssistantToolTurn2,
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-5", "19C")]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-6", "17C")]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-7", "21C")]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-8", "15C")]),
+            new ChatMessage(ChatRole.User, "Summarize the 2-day trend.")
+        ];
+
         _toolOptions = new ChatOptions
         {
             Tools =
@@ -137,6 +278,8 @@ public class ChatMapperBenchmarks
                 ["X-Correlation-Id"] = "corr-12345"
             }
         };
+
+        _requestHeaders = GeminiRequestHeaders.Create(_clientOptionsWithHeaders);
     }
 
     [GlobalCleanup]
@@ -155,12 +298,28 @@ public class ChatMapperBenchmarks
         ChatResponseMapper.ToChatResponse(_multiPartResponse, ModelId);
 
     [Benchmark]
+    public ChatResponse MapResponse_GroundingWithCitations() =>
+        ChatResponseMapper.ToChatResponse(_groundedResponse, ModelId);
+
+    [Benchmark]
     public GenerateContentRequest ToRequest_MultiTurnNoSystem() =>
         ChatRequestMapper.ToRequest(_multiTurnMessages, options: null, _chatClient, ModelId, _toolSerializerOptions);
 
     [Benchmark]
     public GenerateContentRequest ToRequest_SystemAndMergedToolTurns() =>
         ChatRequestMapper.ToRequest(_systemAndToolMessages, _systemOptions, _chatClient, ModelId, _toolSerializerOptions);
+
+    [Benchmark]
+    public GenerateContentRequest ToRequest_MultiTurnToolHistoryReplay() =>
+        ChatRequestMapper.ToRequest(_replayedToolHistoryMessages, _systemOptions, _chatClient, ModelId, _toolSerializerOptions);
+
+    [Benchmark]
+    public Content? TryGetModelContent_Clean() =>
+        _singlePartResponse.TryGetModelContent(out var content) ? content : null;
+
+    [Benchmark]
+    public Content? TryGetModelContent_Normalized() =>
+        _hybridResponseForNormalization.TryGetModelContent(out var content) ? content : null;
 
     [Benchmark]
     public GenerateContentRequest ApplyTools_MultipleFunctionsAndWebSearch()
@@ -171,6 +330,9 @@ public class ChatMapperBenchmarks
     }
 
     [Benchmark]
-    public object CreateRequestHeaders() =>
-        GeminiRequestHeaders.Create(_clientOptionsWithHeaders);
+    public async ValueTask ApplyHeaders_PerRequest()
+    {
+        using var requestMessage = new HttpRequestMessage();
+        await _requestHeaders.ApplyAsync(requestMessage, CancellationToken.None);
+    }
 }

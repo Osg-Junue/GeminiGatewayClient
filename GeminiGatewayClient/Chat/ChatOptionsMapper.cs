@@ -545,9 +545,9 @@ internal static class ChatOptionsMapper
                     hasExistingCodeExecution = true;
                 }
 
-                if (existingFunctionTool is null && existingTool.FunctionDeclarations is not null)
+                if (existingTool.FunctionDeclarations is not null)
                 {
-                    existingFunctionTool = existingTool;
+                    existingFunctionTool ??= existingTool;
                 }
             }
         }

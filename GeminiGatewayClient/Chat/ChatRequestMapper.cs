@@ -23,9 +23,10 @@ internal static class ChatRequestMapper
         JsonSerializerOptions toolSerializerOptions)
     {
         var template = options?.RawRepresentationFactory?.Invoke(client) as GenerateContentRequest;
+        var templateContents = template?.RawContents;
         var messageList = messages as IReadOnlyCollection<ChatMessage> ?? messages.ToList();
-        var contents = new List<Content>((template?.Contents?.Count ?? 0) + messageList.Count);
-        if (template?.Contents is { Count: > 0 } existing)
+        var contents = new List<Content>((templateContents?.Count ?? 0) + messageList.Count);
+        if (templateContents is { Count: > 0 } existing)
         {
             for (var i = 0; i < existing.Count; i++)
             {
@@ -45,7 +46,9 @@ internal static class ChatRequestMapper
         }
 
         var calls = new FunctionCallRegistry();
-        ChatRole? lastMergedChatRole = null;
+        ChatRole? lastMergedChatRole = templateContents is { Count: > 0 }
+            ? (templateContents[^1].Role == Role.Model ? ChatRole.Assistant : ChatRole.User)
+            : null;
 
         foreach (var message in messageList)
         {
@@ -71,38 +74,51 @@ internal static class ChatRequestMapper
             }
 
             var targetRole = message.Role == ChatRole.Assistant ? Role.Model : Role.User;
-            var parts = new List<Part>(message.Contents.Count);
-            foreach (var item in message.Contents)
-            {
-                AppendPart(parts, item, ref calls, toolSerializerOptions);
-            }
+            var isMerging = contents.Count > 0 &&
+                            contents[^1].Role == targetRole &&
+                            lastMergedChatRole == message.Role;
 
-            if (parts.Count == 0)
+            IList<Part> targetParts;
+            if (isMerging)
             {
-                continue;
-            }
-
-            if (contents.Count > 0 && contents[^1].Role == targetRole && lastMergedChatRole == message.Role)
-            {
-                var previousParts = contents[^1].Parts;
-                if (previousParts is List<Part> previousList)
+                var prevParts = contents[^1].Parts;
+                if (prevParts.IsReadOnly)
                 {
-                    previousList.AddRange(parts);
+                    var mutableList = new List<Part>(prevParts.Count + message.Contents.Count);
+                    for (var i = 0; i < prevParts.Count; i++)
+                    {
+                        mutableList.Add(prevParts[i]);
+                    }
+
+                    contents[^1].Parts = mutableList;
+                    targetParts = mutableList;
                 }
                 else
                 {
-                    foreach (var part in parts)
-                    {
-                        previousParts.Add(part);
-                    }
+                    targetParts = prevParts;
                 }
             }
             else
             {
+                targetParts = new List<Part>(message.Contents.Count);
+            }
+
+            foreach (var item in message.Contents)
+            {
+                AppendPart(targetParts, item, ref calls, toolSerializerOptions);
+            }
+
+            if (!isMerging)
+            {
+                if (targetParts.Count == 0)
+                {
+                    continue;
+                }
+
                 contents.Add(new Content
                 {
                     Role = targetRole,
-                    Parts = parts
+                    Parts = targetParts
                 });
                 lastMergedChatRole = message.Role;
             }
@@ -125,7 +141,7 @@ internal static class ChatRequestMapper
         return request;
     }
 
-    private static void AppendPart(List<Part> parts, AIContent item, ref FunctionCallRegistry calls, JsonSerializerOptions toolSerializerOptions)
+    private static void AppendPart(IList<Part> parts, AIContent item, ref FunctionCallRegistry calls, JsonSerializerOptions toolSerializerOptions)
     {
         var rawPart = item.RawRepresentation as Part;
         var signature = GetStringProperty(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature)
@@ -179,6 +195,12 @@ internal static class ChatRequestMapper
 
             case FunctionCallContent call:
                 var apiId = calls.Register(call);
+                var rawCall = rawPart?.FunctionCall;
+                var args = call.Arguments is null
+                    ? null
+                    : rawCall is not null && AreUnmodifiedArguments(call.Arguments, rawCall.Args)
+                        ? rawCall.Args
+                        : ToolJsonConverter.ToArguments(call.Arguments, toolSerializerOptions);
                 parts.Add(new Part
                 {
                     ThoughtSignature = signature,
@@ -190,9 +212,9 @@ internal static class ChatRequestMapper
                     {
                         Id = apiId,
                         Name = call.Name,
-                        Args = ToolJsonConverter.ToArguments(call.Arguments, toolSerializerOptions),
-                        ExtensionData = rawPart?.FunctionCall?.ExtensionData is not null
-                            ? new Dictionary<string, JsonElement>(rawPart.FunctionCall.ExtensionData, StringComparer.Ordinal)
+                        Args = args,
+                        ExtensionData = rawCall?.ExtensionData is not null
+                            ? new Dictionary<string, JsonElement>(rawCall.ExtensionData, StringComparer.Ordinal)
                             : null
                     }
                 });
@@ -215,6 +237,37 @@ internal static class ChatRequestMapper
                 AppendCodeExecutionParts(parts, item.AdditionalProperties, signature, rawPart);
                 break;
         }
+    }
+
+    private static bool AreUnmodifiedArguments(IDictionary<string, object?> arguments, JsonElement? rawArgs)
+    {
+        if (rawArgs is not { ValueKind: JsonValueKind.Object } rawObj)
+        {
+            return false;
+        }
+
+        var propertyCount = 0;
+        foreach (var _ in rawObj.EnumerateObject())
+        {
+            propertyCount++;
+        }
+
+        if (propertyCount != arguments.Count)
+        {
+            return false;
+        }
+
+        foreach (var (key, value) in arguments)
+        {
+            if (value is not JsonElement element ||
+                !rawObj.TryGetProperty(key, out var rawProp) ||
+                !JsonElement.DeepEquals(element, rawProp))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsUnmodifiedRawPart(AIContent item, Part rawPart, string? signature)
@@ -302,7 +355,7 @@ internal static class ChatRequestMapper
     }
 
     private static void AppendCodeExecutionParts(
-        List<Part> parts,
+        IList<Part> parts,
         AdditionalPropertiesDictionary? properties,
         string? signature,
         Part? rawPart)
@@ -365,7 +418,7 @@ internal static class ChatRequestMapper
         return false;
     }
 
-    private static void AppendReasoningPart(List<Part> parts, TextReasoningContent reasoning, Part? rawPart)
+    private static void AppendReasoningPart(IList<Part> parts, TextReasoningContent reasoning, Part? rawPart)
     {
         var hasText = !string.IsNullOrEmpty(reasoning.Text);
         var signature = !string.IsNullOrEmpty(reasoning.ProtectedData)

@@ -9,7 +9,7 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class Content
 {
-    private IList<Part>? _parts;
+    private IList<Part> _parts = [];
 
     /// <summary>
     /// Producer of the content (<see cref="Models.Role.User"/> or <see cref="Models.Role.Model"/>).
@@ -25,14 +25,14 @@ public sealed class Content
     [JsonPropertyName("parts")]
     public IList<Part> Parts
     {
-        get => _parts ??= [];
-        set => _parts = value!;
+        get => _parts;
+        set => _parts = value ?? [];
     }
 
     /// <summary>
-    /// Backing parts list without lazy initialization, used on internal read-only mapping paths to avoid allocating an empty list.
+    /// Backing parts list, used on internal read-only mapping paths.
     /// </summary>
-    internal IList<Part>? RawParts => _parts;
+    internal IList<Part> RawParts => _parts;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -72,20 +72,39 @@ public sealed class Content
 
     internal Content Clone()
     {
-        var sourceParts = Parts;
-        var clonedParts = new List<Part>(sourceParts.Count);
-        for (var i = 0; i < sourceParts.Count; i++)
+        IList<Part> clonedParts;
+        if (_parts is Part[] array)
         {
-            if (sourceParts[i] is { } part)
+            var newArr = new Part[array.Length];
+            for (var i = 0; i < array.Length; i++)
             {
-                clonedParts.Add(part.Clone());
+                newArr[i] = array[i]?.Clone()!;
             }
+
+            clonedParts = newArr;
+        }
+        else if (_parts is { Count: > 0 } sourceParts)
+        {
+            var list = new List<Part>(sourceParts.Count);
+            for (var i = 0; i < sourceParts.Count; i++)
+            {
+                if (sourceParts[i] is { } part)
+                {
+                    list.Add(part.Clone());
+                }
+            }
+
+            clonedParts = list;
+        }
+        else
+        {
+            clonedParts = [];
         }
 
         return new Content
         {
             Role = Role,
-            Parts = clonedParts,
+            _parts = clonedParts,
             ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
         };
     }

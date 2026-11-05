@@ -9,6 +9,8 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class GenerateContentRequest
 {
+    private IList<Content> _contents = [];
+
     /// <summary>
     /// Optional. Resource name of cached context content to prepend to the conversation.
     /// Format: <c>cachedContents/{cachedContent}</c> or <c>projects/{project}/locations/{location}/cachedContents/{cachedContent}</c>.
@@ -24,9 +26,14 @@ public sealed class GenerateContentRequest
     [JsonPropertyName("contents")]
     public IList<Content> Contents
     {
-        get => field ??= [];
-        set => field = value!;
-    } = null!;
+        get => _contents;
+        set => _contents = value ?? [];
+    }
+
+    /// <summary>
+    /// Backing contents list, used on internal read-only paths.
+    /// </summary>
+    internal IList<Content> RawContents => _contents;
 
     /// <summary>
     /// Optional. Developer-provided system instructions for the model. Only <see cref="Content.Parts"/> is used;
@@ -165,14 +172,15 @@ public sealed class GenerateContentRequest
     /// <exception cref="ArgumentException">The request is invalid.</exception>
     internal void Validate(string paramName = "request")
     {
-        if (Contents is null || Contents.Count == 0)
+        var contents = _contents;
+        if (contents is null || contents.Count == 0)
         {
             throw new ArgumentException("GenerateContentRequest.Contents must contain at least one Content item.", paramName);
         }
 
-        for (var i = 0; i < Contents.Count; i++)
+        for (var i = 0; i < contents.Count; i++)
         {
-            var content = Contents[i];
+            var content = contents[i];
             if (content is null)
             {
                 throw new ArgumentException($"GenerateContentRequest.Contents[{i}] cannot be null.", paramName);
@@ -253,20 +261,21 @@ public sealed class GenerateContentRequest
             throw new ArgumentException($"{pathPrefix}.Role cannot be Role.Unknown.", paramName);
         }
 
-        if ((content.Parts is null || content.Parts.Count == 0) &&
+        var parts = content.RawParts;
+        if ((parts is null || parts.Count == 0) &&
             (content.ExtensionData is null || content.ExtensionData.Count == 0))
         {
             throw new ArgumentException($"{pathPrefix}.Parts must contain at least one Part item.", paramName);
         }
 
-        if (content.Parts is null)
+        if (parts is null)
         {
             return;
         }
 
-        for (var j = 0; j < content.Parts.Count; j++)
+        for (var j = 0; j < parts.Count; j++)
         {
-            var part = content.Parts[j];
+            var part = parts[j];
             if (part is null)
             {
                 throw new ArgumentException($"{pathPrefix}.Parts[{j}] cannot be null.", paramName);

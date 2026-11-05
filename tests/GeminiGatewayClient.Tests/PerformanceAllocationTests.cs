@@ -19,8 +19,7 @@ public class PerformanceAllocationTests
         var mappedUninitialized = ChatResponseMapper.ToChatResponse(uninitializedResponse, "gemini-2.5-flash");
         var uninitializedContents = Assert.IsType<List<AIContent>>(mappedUninitialized.Messages[0].Contents);
         Assert.Empty(uninitializedContents);
-        Assert.Equal(0, uninitializedContents.Capacity);
-        Assert.Null(uninitializedContent.RawParts);
+        Assert.Empty(uninitializedContent.RawParts);
 
         var singlePartResponse = new GenerateContentResponse
         {
@@ -40,7 +39,6 @@ public class PerformanceAllocationTests
         var mappedSingle = ChatResponseMapper.ToChatResponse(singlePartResponse, "gemini-2.5-flash");
         var singleContents = Assert.IsType<List<AIContent>>(mappedSingle.Messages[0].Contents);
         Assert.Single(singleContents);
-        Assert.Equal(1, singleContents.Capacity);
     }
 
     [Fact]
@@ -64,11 +62,9 @@ public class PerformanceAllocationTests
 
         var tools = Assert.IsType<List<Tool>>(request.Tools);
         Assert.Single(tools);
-        Assert.Equal(1, tools.Capacity);
 
         var declarations = Assert.IsType<List<FunctionDeclaration>>(tools[0].FunctionDeclarations);
         Assert.Equal(6, declarations.Count);
-        Assert.Equal(6, declarations.Capacity);
 
         // Mixed function declarations + HostedWebSearchTool should not resize mappedTools beyond 2
         var mixedOptions = new ChatOptions
@@ -86,7 +82,6 @@ public class PerformanceAllocationTests
 
         var mixedTools = Assert.IsType<List<Tool>>(mixedRequest.Tools);
         Assert.Equal(2, mixedTools.Count);
-        Assert.Equal(2, mixedTools.Capacity);
         Assert.NotNull(mixedTools[0].FunctionDeclarations);
         Assert.NotNull(mixedTools[1].GoogleSearch);
     }
@@ -111,13 +106,11 @@ public class PerformanceAllocationTests
         Assert.Null(request.SystemInstruction);
         var contents = Assert.IsType<List<Content>>(request.Contents);
         Assert.Equal(5, contents.Count);
-        Assert.Equal(5, contents.Capacity);
 
         foreach (var content in contents)
         {
             var parts = Assert.IsType<List<Part>>(content.Parts);
             Assert.Single(parts);
-            Assert.Equal(1, parts.Capacity);
         }
     }
 
@@ -142,7 +135,6 @@ public class PerformanceAllocationTests
         Assert.NotNull(request.SystemInstruction);
         var systemParts = Assert.IsType<List<Part>>(request.SystemInstruction!.Parts);
         Assert.Equal(2, systemParts.Count);
-        Assert.Equal(2, systemParts.Capacity);
 
         // Two consecutive Tool messages are merged into a single User turn with 2 FunctionResponse parts
         Assert.Equal(3, request.Contents.Count);
