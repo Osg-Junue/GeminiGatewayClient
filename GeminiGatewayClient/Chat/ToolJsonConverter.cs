@@ -2,6 +2,7 @@ using System.Collections;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using GeminiGatewayClient.Http;
 
 namespace GeminiGatewayClient.Chat;
@@ -59,44 +60,43 @@ internal static class ToolJsonConverter
     /// </summary>
     public static JsonElement ToResponseObject(object? result, JsonSerializerOptions options)
     {
-        if (result is JsonObject jsonObject)
-        {
-            using var nodeBuffer = new PooledByteBufferWriter(256);
-            using (var writer = new Utf8JsonWriter(nodeBuffer))
-            {
-                jsonObject.WriteTo(writer);
-            }
-
-            return ParseBuffer(nodeBuffer.WrittenSpan);
-        }
-
         if (result is JsonElement { ValueKind: JsonValueKind.Object } objectElement)
         {
             return objectElement.Clone();
         }
 
-        if (TryWriteKeyValuePairsToElement(result, options, out var dictElement))
-        {
-            return dictElement;
-        }
-
-        if (result is not null and not JsonElement and not JsonNode and not string &&
+        // Every key/value shape is an IEnumerable, so any other value can serialize without renting a writer.
+        if (result is not (null or JsonElement or JsonNode or IEnumerable) &&
             TrySerialize(result, options, out var serialized) &&
             serialized.ValueKind == JsonValueKind.Object)
         {
             return serialized;
         }
 
-        using var wrappedBuffer = new PooledByteBufferWriter(256);
-        using (var writer = new Utf8JsonWriter(wrappedBuffer))
+        using var buffer = new PooledByteBufferWriter(256);
+        using var writer = new Utf8JsonWriter(buffer);
+        switch (result)
         {
-            writer.WriteStartObject();
-            writer.WritePropertyName(ResultPropertyName);
-            WriteValue(writer, result, options);
-            writer.WriteEndObject();
+            case JsonObject jsonObject:
+                jsonObject.WriteTo(writer);
+                break;
+
+            case IEnumerable and not (string or JsonNode) when TryWriteKeyValuePairs(writer, result, options):
+                break;
+
+            case IEnumerable and not (string or JsonNode) when TrySerializeSequenceAsObject(result, options, out var sequence):
+                return sequence;
+
+            default:
+                writer.WriteStartObject();
+                writer.WritePropertyName(ResultPropertyName);
+                WriteValue(writer, result, options);
+                writer.WriteEndObject();
+                break;
         }
 
-        return ParseBuffer(wrappedBuffer.WrittenSpan);
+        writer.Flush();
+        return ParseBuffer(buffer.WrittenSpan);
     }
 
     /// <summary>
@@ -109,7 +109,7 @@ internal static class ToolJsonConverter
             return null;
         }
 
-        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var result = new Dictionary<string, object?>(element.GetPropertyCount(), StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
         {
             result[property.Name] = property.Value.Clone();
@@ -117,50 +117,6 @@ internal static class ToolJsonConverter
 
         return result;
     }
-
-    private static bool TryWriteKeyValuePairsToElement(object? value, JsonSerializerOptions options, out JsonElement element)
-    {
-        if (!IsKeyValueSequenceOrDictionary(value))
-        {
-            element = default;
-            return false;
-        }
-
-        using var dictBuffer = new PooledByteBufferWriter(256);
-        using (var writer = new Utf8JsonWriter(dictBuffer))
-        {
-            TryWriteKeyValuePairs(writer, value, options);
-        }
-
-        element = ParseBuffer(dictBuffer.WrittenSpan);
-        return true;
-    }
-
-    private static bool IsKeyValueSequenceOrDictionary(object? value) =>
-        value is IEnumerable<KeyValuePair<string, object?>>
-            or IEnumerable<KeyValuePair<string, string?>>
-            or IEnumerable<KeyValuePair<string, int>>
-            or IEnumerable<KeyValuePair<string, long>>
-            or IEnumerable<KeyValuePair<string, double>>
-            or IEnumerable<KeyValuePair<string, float>>
-            or IEnumerable<KeyValuePair<string, decimal>>
-            or IEnumerable<KeyValuePair<string, bool>>
-            or IEnumerable<KeyValuePair<string, byte>>
-            or IEnumerable<KeyValuePair<string, sbyte>>
-            or IEnumerable<KeyValuePair<string, short>>
-            or IEnumerable<KeyValuePair<string, ushort>>
-            or IEnumerable<KeyValuePair<string, uint>>
-            or IEnumerable<KeyValuePair<string, ulong>>
-            or IEnumerable<KeyValuePair<string, Guid>>
-            or IEnumerable<KeyValuePair<string, DateTime>>
-            or IEnumerable<KeyValuePair<string, DateTimeOffset>>
-            or IEnumerable<KeyValuePair<string, DateOnly>>
-            or IEnumerable<KeyValuePair<string, TimeOnly>>
-            or IEnumerable<KeyValuePair<string, TimeSpan>>
-            or IEnumerable<KeyValuePair<string, Uri?>>
-            or IEnumerable<KeyValuePair<string, JsonElement>>
-            or IEnumerable<KeyValuePair<string, JsonNode?>>
-            or IDictionary;
 
     private static bool TryWriteKeyValuePairs(Utf8JsonWriter writer, object? value, JsonSerializerOptions options)
     {
@@ -250,7 +206,7 @@ internal static class ToolJsonConverter
             case DateOnly date: writer.WriteStringValue(date.ToString("O", CultureInfo.InvariantCulture)); break;
             case TimeOnly time: writer.WriteStringValue(time.ToString("O", CultureInfo.InvariantCulture)); break;
             case TimeSpan span: writer.WriteStringValue(span.ToString("c", CultureInfo.InvariantCulture)); break;
-            case Uri uri: writer.WriteStringValue(uri.ToString()); break;
+            case Uri uri: writer.WriteStringValue(uri.OriginalString); break;
             case Enum enumValue:
                 if (TrySerialize(enumValue, options, out var serializedEnum))
                 {
@@ -266,9 +222,9 @@ internal static class ToolJsonConverter
             case ReadOnlyMemory<byte> memory: writer.WriteBase64StringValue(memory.Span); break;
             case not null when TryWriteKeyValuePairs(writer, value, options): break;
             case IEnumerable sequence:
-                if (TrySerialize(value, options, out var serializedObject) && serializedObject.ValueKind == JsonValueKind.Object)
+                if (TrySerializeSequenceAsObject(value, options, out var serializedSequence))
                 {
-                    serializedObject.WriteTo(writer);
+                    serializedSequence.WriteTo(writer);
                     break;
                 }
 
@@ -292,6 +248,25 @@ internal static class ToolJsonConverter
                 serialized.WriteTo(writer);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Serializes a sequence only when its contract can produce an object, such as a custom converter or reference metadata.
+    /// A plain enumerable contract always yields an array, so it is left to the caller's hand-written loop: a single-use
+    /// sequence must not be enumerated twice.
+    /// </summary>
+    private static bool TrySerializeSequenceAsObject(object sequence, JsonSerializerOptions options, out JsonElement element)
+    {
+        if (options.TypeInfoResolver is not null &&
+            options.TryGetTypeInfo(sequence.GetType(), out var typeInfo) &&
+            (typeInfo.Kind != JsonTypeInfoKind.Enumerable || options.ReferenceHandler is not null))
+        {
+            element = JsonSerializer.SerializeToElement(sequence, typeInfo);
+            return element.ValueKind == JsonValueKind.Object;
+        }
+
+        element = default;
+        return false;
     }
 
     private static bool TrySerialize(object value, JsonSerializerOptions options, out JsonElement element)

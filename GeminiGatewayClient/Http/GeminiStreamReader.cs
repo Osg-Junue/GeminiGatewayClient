@@ -17,6 +17,8 @@ internal static class GeminiStreamReader
     private const int InitialReadBufferBytes = 4096;
     internal const int MaxSseLineBytes = 64 * 1024 * 1024;
     private const int MaxNonSseBytes = GeminiErrorParser.MaxErrorBodyChars * 4;
+    private static readonly SearchValues<byte> s_newlineSearchValues = SearchValues.Create([(byte)'\r', (byte)'\n']);
+    private static readonly SearchValues<byte> s_whitespaceSearchValues = SearchValues.Create(" \t\r\n"u8);
 
     /// <summary>
     /// Reads chunks from <paramref name="stream"/> in the specified <paramref name="format"/>.
@@ -37,7 +39,7 @@ internal static class GeminiStreamReader
         StreamIdleWatchdog watchdog,
         int maxSseEventBytes)
     {
-        using var dataBuffer = new PooledByteBufferWriter(1024);
+        PooledByteBufferWriter? dataBuffer = null;
         PooledByteBufferWriter? nonSseBuffer = null;
         var sawSseEvent = false;
         var isFirstLine = true;
@@ -65,26 +67,27 @@ internal static class GeminiStreamReader
                     start = 0;
                 }
 
+                if (buffered >= maxSseEventBytes + 1)
+                {
+                    throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
+                }
+
                 if (buffered == buffer.Length)
                 {
-                    if (buffer.Length >= maxSseEventBytes)
-                    {
-                        throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
-                    }
-
-                    var newCapacity = (int)Math.Min((long)buffer.Length * 2, maxSseEventBytes);
+                    var newCapacity = (int)Math.Min((long)buffer.Length * 2, (long)maxSseEventBytes + 1);
                     var larger = ArrayPool<byte>.Shared.Rent(newCapacity);
                     buffer.AsSpan(0, buffered).CopyTo(larger);
                     ArrayPool<byte>.Shared.Return(buffer);
                     buffer = larger;
                 }
 
+                var maxBytesToRead = Math.Min(buffer.Length - buffered, (maxSseEventBytes + 1) - buffered);
                 int bytesRead;
                 watchdog.BeforeRead();
                 var readSucceeded = false;
                 try
                 {
-                    bytesRead = await stream.ReadAsync(buffer.AsMemory(buffered), watchdog.Token).ConfigureAwait(false);
+                    bytesRead = await stream.ReadAsync(buffer.AsMemory(buffered, maxBytesToRead), watchdog.Token).ConfigureAwait(false);
                     readSucceeded = true;
                 }
                 finally
@@ -97,11 +100,6 @@ internal static class GeminiStreamReader
                     if (buffered > start)
                     {
                         var tailLine = buffer.AsSpan(start, buffered - start);
-                        if (skipLeadingLf && !tailLine.IsEmpty && tailLine[0] == (byte)'\n')
-                        {
-                            tailLine = tailLine[1..];
-                        }
-
                         if (tailLine.Length > maxSseEventBytes)
                         {
                             throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
@@ -109,11 +107,11 @@ internal static class GeminiStreamReader
 
                         if (!tailLine.IsEmpty)
                         {
-                            ProcessSseLine(tailLine, statusCode, maxSseEventBytes, ref isFirstLine, ref sawSseEvent, dataBuffer, ref nonSseBuffer);
+                            ProcessSseLine(tailLine, statusCode, maxSseEventBytes, ref isFirstLine, ref sawSseEvent, ref dataBuffer, ref nonSseBuffer);
                         }
                     }
 
-                    if (dataBuffer.WrittenCount > 0)
+                    if (dataBuffer is { WrittenCount: > 0 })
                     {
                         sawSseEvent = true;
                         var response = DeserializeUtf8Chunk(dataBuffer.WrittenSpan, statusCode);
@@ -148,62 +146,98 @@ internal static class GeminiStreamReader
                     skipLeadingLf = false;
                 }
 
-                while (searchStart < buffered)
+                while (TryReadBufferedSseChunk(
+                    buffer,
+                    buffered,
+                    ref start,
+                    ref searchStart,
+                    ref skipLeadingLf,
+                    ref isFirstLine,
+                    ref sawSseEvent,
+                    ref dataBuffer,
+                    ref nonSseBuffer,
+                    statusCode,
+                    maxSseEventBytes,
+                    out var response))
                 {
-                    var unsearched = buffer.AsSpan(searchStart, buffered - searchStart);
-                    var relativeNewlineIdx = unsearched.IndexOfAny((byte)'\r', (byte)'\n');
-                    if (relativeNewlineIdx < 0)
-                    {
-                        if (buffered - start > maxSseEventBytes)
-                        {
-                            throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
-                        }
-
-                        searchStart = buffered;
-                        break;
-                    }
-
-                    var newlineIdx = searchStart + relativeNewlineIdx;
-                    var line = buffer.AsSpan(start, newlineIdx - start);
-                    if (line.Length > maxSseEventBytes)
-                    {
-                        throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
-                    }
-
-                    var delimiter = buffer[newlineIdx];
-                    start = newlineIdx + 1;
-
-                    if (delimiter == (byte)'\r')
-                    {
-                        if (start < buffered)
-                        {
-                            if (buffer[start] == (byte)'\n')
-                            {
-                                start++;
-                            }
-                        }
-                        else
-                        {
-                            skipLeadingLf = true;
-                        }
-                    }
-
-                    searchStart = start;
-
-                    if (ProcessSseLine(line, statusCode, maxSseEventBytes, ref isFirstLine, ref sawSseEvent, dataBuffer, ref nonSseBuffer))
-                    {
-                        var response = DeserializeUtf8Chunk(dataBuffer.WrittenSpan, statusCode);
-                        dataBuffer.Clear();
-                        yield return response;
-                    }
+                    yield return response;
                 }
             }
         }
         finally
         {
+            dataBuffer?.Dispose();
             nonSseBuffer?.Dispose();
             ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
+
+    private static bool TryReadBufferedSseChunk(
+        byte[] buffer,
+        int buffered,
+        ref int start,
+        ref int searchStart,
+        ref bool skipLeadingLf,
+        ref bool isFirstLine,
+        ref bool sawSseEvent,
+        ref PooledByteBufferWriter? dataBuffer,
+        ref PooledByteBufferWriter? nonSseBuffer,
+        HttpStatusCode statusCode,
+        int maxSseEventBytes,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out GenerateContentResponse? response)
+    {
+        while (searchStart < buffered)
+        {
+            var unsearched = buffer.AsSpan(searchStart, buffered - searchStart);
+            var relativeNewlineIdx = unsearched.IndexOfAny(s_newlineSearchValues);
+            if (relativeNewlineIdx < 0)
+            {
+                if (buffered - start > maxSseEventBytes)
+                {
+                    throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
+                }
+
+                searchStart = buffered;
+                break;
+            }
+
+            var newlineIdx = searchStart + relativeNewlineIdx;
+            ReadOnlySpan<byte> line = buffer.AsSpan(start, newlineIdx - start);
+            if (line.Length > maxSseEventBytes)
+            {
+                throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
+            }
+
+            var delimiter = buffer[newlineIdx];
+            start = newlineIdx + 1;
+
+            if (delimiter == (byte)'\r')
+            {
+                if (start < buffered)
+                {
+                    if (buffer[start] == (byte)'\n')
+                    {
+                        start++;
+                    }
+                }
+                else
+                {
+                    skipLeadingLf = true;
+                }
+            }
+
+            searchStart = start;
+
+            if (ProcessSseLine(line, statusCode, maxSseEventBytes, ref isFirstLine, ref sawSseEvent, ref dataBuffer, ref nonSseBuffer))
+            {
+                response = DeserializeUtf8Chunk(dataBuffer!.WrittenSpan, statusCode);
+                dataBuffer.Clear();
+                return true;
+            }
+        }
+
+        response = null;
+        return false;
     }
 
     /// <summary>
@@ -215,7 +249,7 @@ internal static class GeminiStreamReader
         int maxSseEventBytes,
         ref bool isFirstLine,
         ref bool sawSseEvent,
-        PooledByteBufferWriter dataBuffer,
+        ref PooledByteBufferWriter? dataBuffer,
         ref PooledByteBufferWriter? nonSseBuffer)
     {
         if (isFirstLine)
@@ -227,9 +261,47 @@ internal static class GeminiStreamReader
             }
         }
 
+        if (line.StartsWith("data:"u8))
+        {
+            sawSseEvent = true;
+            var payload = line[5..];
+            if (!payload.IsEmpty && payload[0] == (byte)' ')
+            {
+                payload = payload[1..];
+            }
+
+            if (payload.SequenceEqual("[DONE]"u8))
+            {
+                return false;
+            }
+
+            var currentWritten = dataBuffer?.WrittenCount ?? 0;
+            if (payload.IsEmpty && currentWritten == 0)
+            {
+                return false;
+            }
+
+            var separatorBytes = currentWritten > 0 ? 1 : 0;
+            if ((long)currentWritten + separatorBytes + payload.Length > maxSseEventBytes)
+            {
+                throw new GeminiApiException("An SSE event exceeded the maximum allowed length.", statusCode);
+            }
+
+            dataBuffer ??= new PooledByteBufferWriter(1024);
+            if (separatorBytes > 0)
+            {
+                dataBuffer.GetSpan(1)[0] = (byte)'\n';
+                dataBuffer.Advance(1);
+            }
+
+            payload.CopyTo(dataBuffer.GetSpan(payload.Length));
+            dataBuffer.Advance(payload.Length);
+            return false;
+        }
+
         if (line.IsEmpty)
         {
-            if (dataBuffer.WrittenCount > 0)
+            if (dataBuffer is { WrittenCount: > 0 })
             {
                 sawSseEvent = true;
                 return true;
@@ -245,64 +317,33 @@ internal static class GeminiStreamReader
             return false;
         }
 
-        if (!line.StartsWith("data:"u8))
+        if (line.SequenceEqual("data"u8))
         {
-            if (line.SequenceEqual("data"u8))
-            {
-                sawSseEvent = true;
-                return false;
-            }
-
-            if (line.StartsWith("event:"u8) || line.SequenceEqual("event"u8) ||
-                line.StartsWith("id:"u8) || line.SequenceEqual("id"u8) ||
-                line.StartsWith("retry:"u8) || line.SequenceEqual("retry"u8))
-            {
-                return false;
-            }
-
-            // A proxy or upstream server may return a raw JSON error payload with HTTP 200 instead of SSE framing.
-            // Cap buffered non-SSE bytes at MaxNonSseBytes to prevent unbounded memory growth on unexpected responses.
-            if (!sawSseEvent)
-            {
-                nonSseBuffer ??= new PooledByteBufferWriter(256);
-                var remaining = MaxNonSseBytes - nonSseBuffer.WrittenCount;
-                if (remaining > 0)
-                {
-                    var slice = line.Length > remaining ? line[..remaining] : line;
-                    slice.CopyTo(nonSseBuffer.GetSpan(slice.Length));
-                    nonSseBuffer.Advance(slice.Length);
-                }
-            }
-
+            sawSseEvent = true;
             return false;
         }
 
-        sawSseEvent = true;
-        var payload = line[5..];
-        if (!payload.IsEmpty && payload[0] == (byte)' ')
-        {
-            payload = payload[1..];
-        }
-
-        if (payload.SequenceEqual("[DONE]"u8))
+        if (line.StartsWith("event:"u8) || line.SequenceEqual("event"u8) ||
+            line.StartsWith("id:"u8) || line.SequenceEqual("id"u8) ||
+            line.StartsWith("retry:"u8) || line.SequenceEqual("retry"u8))
         {
             return false;
         }
 
-        var separatorBytes = dataBuffer.WrittenCount > 0 ? 1 : 0;
-        if ((long)dataBuffer.WrittenCount + separatorBytes + payload.Length > maxSseEventBytes)
+        // A proxy or upstream server may return a raw JSON error payload with HTTP 200 instead of SSE framing.
+        // Cap buffered non-SSE bytes at MaxNonSseBytes to prevent unbounded memory growth on unexpected responses.
+        if (!sawSseEvent)
         {
-            throw new GeminiApiException("An SSE event exceeded the maximum allowed length.", statusCode);
+            nonSseBuffer ??= new PooledByteBufferWriter(256);
+            var remaining = MaxNonSseBytes - nonSseBuffer.WrittenCount;
+            if (remaining > 0)
+            {
+                var slice = line.Length > remaining ? line[..remaining] : line;
+                slice.CopyTo(nonSseBuffer.GetSpan(slice.Length));
+                nonSseBuffer.Advance(slice.Length);
+            }
         }
 
-        if (separatorBytes > 0)
-        {
-            dataBuffer.GetSpan(1)[0] = (byte)'\n';
-            dataBuffer.Advance(1);
-        }
-
-        payload.CopyTo(dataBuffer.GetSpan(payload.Length));
-        dataBuffer.Advance(payload.Length);
         return false;
     }
 
@@ -331,6 +372,11 @@ internal static class GeminiStreamReader
         string? errorStreamMessage = null)
         where TResponse : class
     {
+        if (utf8Json.StartsWith("\uFEFF"u8))
+        {
+            utf8Json = utf8Json[3..];
+        }
+
         try
         {
             if (StartsWithJsonArray(utf8Json))
@@ -373,12 +419,7 @@ internal static class GeminiStreamReader
 
     private static bool StartsWithJsonArray(ReadOnlySpan<byte> utf8Json)
     {
-        if (utf8Json.StartsWith("\uFEFF"u8))
-        {
-            utf8Json = utf8Json[3..];
-        }
-
-        var idx = utf8Json.IndexOfAnyExcept(" \t\r\n"u8);
+        var idx = utf8Json.IndexOfAnyExcept(s_whitespaceSearchValues);
         return idx >= 0 && utf8Json[idx] == (byte)'[';
     }
 
@@ -533,7 +574,8 @@ internal static class GeminiStreamReader
     /// <summary>
     /// Captures the initial bytes read from a JSON-array stream so non-array error objects (<c>{"error": ...}</c>)
     /// or gateway HTML pages returned with HTTP 200 can be diagnosed if <see cref="JsonSerializer.DeserializeAsyncEnumerable{TValue}(Stream, System.Text.Json.Serialization.Metadata.JsonTypeInfo{TValue}, CancellationToken)"/>
-    /// rejects the root token, while also enforcing the per-element byte limit.
+    /// rejects the root token, while also bounding the bytes read per element. The bound is approximate: it counts read
+    /// buffers between yields rather than tracking element boundaries, so it can differ from an element's size by up to one read.
     /// </summary>
     private sealed class PrefixRecordingStream(
         Stream inner,

@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace GeminiGatewayClient.Http;
 
 /// <summary>
@@ -131,16 +133,12 @@ internal sealed class GeminiRequestHeaders
         }
     }
 
-    private static bool ContainsInvalidControlChars(string value, bool allowHorizontalTab)
-    {
-        foreach (var ch in value.AsSpan())
-        {
-            if ((ch < 0x20 && (!allowHorizontalTab || ch != '\t')) || ch == 0x7F)
-            {
-                return true;
-            }
-        }
+    private static readonly SearchValues<char> s_invalidControlCharsWithoutTab =
+        SearchValues.Create(Enumerable.Range(0, 32).Append(127).Select(c => (char)c).ToArray());
 
-        return false;
-    }
+    private static readonly SearchValues<char> s_invalidControlCharsWithTab =
+        SearchValues.Create(Enumerable.Range(0, 32).Where(c => c != '\t').Append(127).Select(c => (char)c).ToArray());
+
+    private static bool ContainsInvalidControlChars(string value, bool allowHorizontalTab) =>
+        value.AsSpan().ContainsAny(allowHorizontalTab ? s_invalidControlCharsWithTab : s_invalidControlCharsWithoutTab);
 }

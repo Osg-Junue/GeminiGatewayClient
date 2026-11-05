@@ -88,48 +88,11 @@ public sealed class EmbedContentRequest
         ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
     };
 
-    internal void Validate(string paramName = "request", string pathPrefix = "EmbedContentRequest")
+    internal void Validate(string paramName = "request", int? batchIndex = null)
     {
-        if (Content is null)
+        if (GetValidationError() is { } error)
         {
-            throw new ArgumentException($"{pathPrefix}.Content cannot be null.", paramName);
-        }
-
-        if (Content.Role is { } role && (role == Role.Unknown || !Enum.IsDefined(role)))
-        {
-            throw new ArgumentException($"{pathPrefix}.Content.Role cannot be Role.Unknown.", paramName);
-        }
-
-        if ((Content.RawParts is null || Content.RawParts.Count == 0) &&
-            (Content.ExtensionData is null || Content.ExtensionData.Count == 0))
-        {
-            throw new ArgumentException($"{pathPrefix}.Content.Parts must contain at least one Part item.", paramName);
-        }
-
-        if (Content.RawParts is { } parts)
-        {
-            for (var i = 0; i < parts.Count; i++)
-            {
-                var part = parts[i];
-                if (part is null)
-                {
-                    throw new ArgumentException($"{pathPrefix}.Content.Parts[{i}] cannot be null.", paramName);
-                }
-
-                part.Validate($"{pathPrefix}.Content.Parts[{i}]", paramName);
-            }
-        }
-
-        if (TaskType == Models.TaskType.Unknown)
-        {
-            throw new ArgumentException($"{pathPrefix}.TaskType cannot be TaskType.Unknown.", paramName);
-        }
-
-        if (!string.IsNullOrEmpty(Title) && TaskType is not null and not Models.TaskType.RetrievalDocument)
-        {
-            throw new ArgumentException(
-                $"{pathPrefix}.Title can only be specified when TaskType is TaskType.RetrievalDocument.",
-                paramName);
+            throw new ArgumentException($"{FormatPath(batchIndex)}{error}", paramName);
         }
 
         if (OutputDimensionality is <= 0)
@@ -137,9 +100,34 @@ public sealed class EmbedContentRequest
             throw new ArgumentOutOfRangeException(
                 paramName,
                 OutputDimensionality,
-                $"{pathPrefix}.OutputDimensionality must be greater than zero.");
+                $"{FormatPath(batchIndex)}.OutputDimensionality must be greater than zero.");
         }
     }
+
+    private string? GetValidationError()
+    {
+        if (Content is null)
+        {
+            return ".Content cannot be null.";
+        }
+
+        if (Content.GetValidationError() is { } contentError)
+        {
+            return $".Content{contentError}";
+        }
+
+        if (TaskType == Models.TaskType.Unknown)
+        {
+            return ".TaskType cannot be TaskType.Unknown.";
+        }
+
+        return !string.IsNullOrEmpty(Title) && TaskType is not null and not Models.TaskType.RetrievalDocument
+            ? ".Title can only be specified when TaskType is TaskType.RetrievalDocument."
+            : null;
+    }
+
+    private static string FormatPath(int? batchIndex) =>
+        batchIndex is { } index ? $"BatchEmbedContentsRequest.Requests[{index}]" : "EmbedContentRequest";
 }
 
 /// <summary>
@@ -157,10 +145,8 @@ public sealed class BatchEmbedContentsRequest
     public IList<EmbedContentRequest> Requests
     {
         get => _requests ??= [];
-        set => _requests = value!;
+        set => _requests = value;
     }
-
-    internal IList<EmbedContentRequest>? RawRequests => _requests;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -183,7 +169,7 @@ public sealed class BatchEmbedContentsRequest
                 throw new ArgumentException($"BatchEmbedContentsRequest.Requests[{i}] cannot be null.", paramName);
             }
 
-            item.Validate(paramName, $"BatchEmbedContentsRequest.Requests[{i}]");
+            item.Validate(paramName, i);
         }
     }
 }
@@ -222,10 +208,8 @@ public sealed class BatchEmbedContentsResponse
     public IList<ContentEmbedding> Embeddings
     {
         get => _embeddings ??= [];
-        set => _embeddings = value!;
+        set => _embeddings = value;
     }
-
-    internal IList<ContentEmbedding>? RawEmbeddings => _embeddings;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -249,10 +233,8 @@ public sealed class ContentEmbedding
     public IList<float> Values
     {
         get => _values ??= [];
-        set => _values = value!;
+        set => _values = value;
     }
-
-    internal IList<float>? RawValues => _values;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

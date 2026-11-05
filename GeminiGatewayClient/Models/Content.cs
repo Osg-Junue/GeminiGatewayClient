@@ -26,13 +26,8 @@ public sealed class Content
     public IList<Part> Parts
     {
         get => _parts ??= [];
-        set => _parts = value!;
+        set => _parts = value;
     }
-
-    /// <summary>
-    /// Backing parts list without lazy initialization, used on internal read-only mapping paths to avoid allocating an empty list.
-    /// </summary>
-    internal IList<Part>? RawParts => _parts;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -70,22 +65,54 @@ public sealed class Content
         return new Content { Role = role, Parts = list };
     }
 
+    /// <summary>
+    /// Returns why this content is invalid as a message suffix for the caller's path, or <c>null</c> when it is valid.
+    /// </summary>
+    internal string? GetValidationError()
+    {
+        if (Role is { } role && (role == Models.Role.Unknown || !Enum.IsDefined(role)))
+        {
+            return ".Role cannot be Role.Unknown.";
+        }
+
+        if (_parts is not { Count: > 0 } parts)
+        {
+            return ExtensionData is { Count: > 0 } ? null : ".Parts must contain at least one Part item.";
+        }
+
+        for (var i = 0; i < parts.Count; i++)
+        {
+            if (parts[i] is not { } part)
+            {
+                return $".Parts[{i}] cannot be null.";
+            }
+
+            if (part.GetValidationError() is { } error)
+            {
+                return $".Parts[{i}]{error}";
+            }
+        }
+
+        return null;
+    }
+
     internal Content Clone()
     {
-        var sourceParts = Parts;
-        var clonedParts = new List<Part>(sourceParts.Count);
-        for (var i = 0; i < sourceParts.Count; i++)
+        // Null elements are kept so request validation reports them instead of the clone silently dropping them.
+        List<Part>? clonedParts = null;
+        if (_parts is { Count: > 0 } sourceParts)
         {
-            if (sourceParts[i] is { } part)
+            clonedParts = new List<Part>(sourceParts.Count);
+            for (var i = 0; i < sourceParts.Count; i++)
             {
-                clonedParts.Add(part.Clone());
+                clonedParts.Add(sourceParts[i]?.Clone()!);
             }
         }
 
         return new Content
         {
             Role = Role,
-            Parts = clonedParts,
+            _parts = clonedParts,
             ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
         };
     }

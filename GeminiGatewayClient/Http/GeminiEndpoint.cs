@@ -124,11 +124,20 @@ internal sealed class GeminiEndpoint
     /// Builds the URI for an embedding <paramref name="operation"/> on <paramref name="model"/> (or <see cref="DefaultEmbeddingModel"/>).
     /// </summary>
     /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultEmbeddingModel"/> is set.</exception>
-    public Uri GetEmbeddingOperationUri(string? model, string operation)
+    public Uri GetEmbeddingOperationUri(string? model, string operation) =>
+        GetEmbeddingOperationUri(model, operation, out _);
+
+    /// <summary>
+    /// Builds the URI for an embedding <paramref name="operation"/> on <paramref name="model"/> (or <see cref="DefaultEmbeddingModel"/>)
+    /// and outputs the canonical <paramref name="resourcePath"/>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultEmbeddingModel"/> is set.</exception>
+    public Uri GetEmbeddingOperationUri(string? model, string operation, out string resourcePath)
     {
         if ((string.IsNullOrWhiteSpace(model) || string.Equals(model, DefaultEmbeddingModel, StringComparison.Ordinal)) &&
             _defaultEmbedContentUri is not null)
         {
+            resourcePath = _defaultEmbeddingResourcePath!;
             if (string.Equals(operation, "embedContent", StringComparison.Ordinal))
             {
                 return _defaultEmbedContentUri;
@@ -140,7 +149,7 @@ internal sealed class GeminiEndpoint
             }
         }
 
-        var resourcePath = ResolveEmbeddingResourcePath(model);
+        resourcePath = ResolveEmbeddingResourcePath(model);
         return BuildOperationUri(_baseUri, resourcePath, operation, serverSentEvents: false);
     }
 

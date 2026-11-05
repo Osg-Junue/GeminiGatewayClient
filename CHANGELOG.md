@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [3.0.0] - 2026-11-05
+
+### Changed (Breaking)
+- **Null elements in `ChatOptions.RawRepresentationFactory` templates now fail validation**: a `null` in a template's `Contents`, `Content.Parts`, `Tools`, `Tool.FunctionDeclarations`, `SafetySettings`, or `Schema.AnyOf` now throws `ArgumentException` before anything is sent, matching a `null` passed directly on a request. Except for array-backed `Parts`, these elements were previously removed silently while cloning the template. `null` values in server responses are still tolerated.
+- **Lost connections while reading a response body no longer surface as a bare `IOException`** (`HttpIOException`), which contradicted the documented exception contract. Successful responses and streams now throw `HttpRequestException`, with the original failure in `InnerException` and the status in `StatusCode`. Non-2xx responses still throw `GeminiApiException`, built from whatever part of the error body could be decoded, so `StatusCode`, `IsTransient`, and `RetryAfter` are kept. Code catching `IOException` must change.
+- **Exception types for cyclic or very deep tool values**: self-referencing or deeply nested collections in tool results and arguments can now surface as `InvalidOperationException` or `JsonReaderException` instead of `JsonException`, unless `JsonSerializerOptions.ReferenceHandler` is set.
+
+### Changed
+- **Request bodies keep non-ASCII text as UTF-8**: text in the Basic Multilingual Plane is no longer written as `\uXXXX` escapes, which reduces Japanese conversation bodies by about 40%. The JSON is semantically unchanged, HTML-sensitive ASCII such as `<` and `&` stays escaped, and supplementary characters such as emoji stay escaped.
+- **`Blob.MimeType` and `Blob.Data` are no longer `required`**: a response omitting either key used to fail the whole response, including its valid parts. Requests are still validated, and through `IChatClient` a replayed part without a MIME type is sent as `application/octet-stream`.
+- **Request mapping and validation**:
+  - Request validation no longer allocates a path string per content or part, and formats paths only on failure. `Schema` validation follows the same approach but still allocates for its visited set and enumerators.
+  - Replayed function-call arguments are compared by raw bytes before falling back to `JsonElement.DeepEquals`, which removes most of the cost of re-sending large arguments on every turn.
+  - `ToolJsonConverter.ToDictionary` pre-sizes its result, and plain sequences in tool values skip a redundant serializer pass.
+- **Response handling**:
+  - Bodies with a known `Content-Length` no longer grow and copy the buffer for the final read.
+  - `GeminiStreamReader` now uses a single SSE line-processing path and `SearchValues<byte>` newline scanning.
+  - Grounding chunk tracking uses a 64-bit mask, and model collections are allocated lazily.
+
+### Fixed
+- `UriContent` and `Uri` tool values were sent unescaped (`a%20b` became `a b`), which also prevented replaying the original `fileData` part. They are now sent exactly as supplied.
+- Parts without a chat mapping, such as `toolCall` and `toolResponse`, were dropped by `IChatClient`. They are now kept as `AIContent` and replayed on the next turn.
+- Single-use sequences returned as tool results were serialized as an empty array, because they were enumerated more than once. They are now enumerated once.
+- A `FunctionResultContent` with a `Part` attached as `RawRepresentation` re-sent the attached response even after `Result` changed. It now sends the current result while keeping the attached name, id, and metadata.
+- `ChatRequestMapper` threw `NullReferenceException` for a template whose `Contents` ended with `null`.
+- Buffered responses starting with a UTF-8 byte order mark failed to parse, which also hid the details of error bodies.
+- Explicit citation resolution ignored `partIndex == 0`.
+
 ## [2.1.0] - 2026-11-04
 
 ### Added

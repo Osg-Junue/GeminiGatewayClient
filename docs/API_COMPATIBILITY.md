@@ -195,7 +195,7 @@ Reference: [`Embeddings`](https://ai.google.dev/api/embeddings)
 
 To prevent deserialization crashes when Google adds new fields or enum values to the Gemini API:
 
-1. **`[JsonExtensionData]` on every DTO**: All request and response model classes include `IDictionary<string, JsonElement>? ExtensionData`, ensuring unknown JSON properties survive round-trip serialization.
+1. **`[JsonExtensionData]` on every DTO**: All request and response model classes include `IDictionary<string, JsonElement>? ExtensionData`, ensuring unknown JSON properties survive round-trip serialization. Through `IChatClient`, a `Part` with such properties that maps to no other chat content (for example `toolCall` or `toolResponse`) is surfaced as a plain `AIContent` whose `RawRepresentation` is the part, and is replayed unchanged on the next turn. A part that would fail request validation is ignored instead. `RawRepresentation` is not serialized, so these parts, including any `thoughtSignature` they carry, do not survive persisting chat history as JSON.
 2. **`LenientStringEnumConverter<TEnum>` on all 16 wire enums**:
    - `FinishReason`, `BlockReason`, `HarmCategory`, `HarmProbability`, `HarmSeverity`, `HarmBlockThreshold`, `HarmBlockMethod`, `Role`, `SchemaType`, `ThinkingLevel`, `MediaResolution`, `FunctionCallingMode`, `CodeExecutionLanguage`, `CodeExecutionOutcome`, `UrlRetrievalStatus`, and `TaskType`.
    - Known members use official Google Protobuf enum numbers (`Unspecified = 0` where defined); unrecognized string or integer tokens deserialize to `Unknown` (`-1`) instead of throwing `JsonException`.

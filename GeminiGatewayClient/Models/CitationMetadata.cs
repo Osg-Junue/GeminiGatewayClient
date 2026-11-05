@@ -18,10 +18,8 @@ public sealed class CitationMetadata
     public IList<Citation> Citations
     {
         get => _citations ??= [];
-        set => _citations = value!;
+        set => _citations = value;
     }
-
-    internal IList<Citation>? RawCitations => _citations;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

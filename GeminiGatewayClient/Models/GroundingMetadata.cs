@@ -20,10 +20,8 @@ public sealed class GroundingMetadata
     public IList<string> WebSearchQueries
     {
         get => _webSearchQueries ??= [];
-        set => _webSearchQueries = value!;
+        set => _webSearchQueries = value;
     }
-
-    internal IList<string>? RawWebSearchQueries => _webSearchQueries;
 
     /// <summary>
     /// Optional Google Search entry point widget metadata (HTML/CSS and SDK blob) for rendering search suggestions.
@@ -38,10 +36,8 @@ public sealed class GroundingMetadata
     public IList<GroundingChunk> GroundingChunks
     {
         get => _groundingChunks ??= [];
-        set => _groundingChunks = value!;
+        set => _groundingChunks = value;
     }
-
-    internal IList<GroundingChunk>? RawGroundingChunks => _groundingChunks;
 
     /// <summary>
     /// Mappings from specific spans of the candidate response text to indices in <see cref="GroundingChunks"/>.
@@ -50,10 +46,8 @@ public sealed class GroundingMetadata
     public IList<GroundingSupport> GroundingSupports
     {
         get => _groundingSupports ??= [];
-        set => _groundingSupports = value!;
+        set => _groundingSupports = value;
     }
-
-    internal IList<GroundingSupport>? RawGroundingSupports => _groundingSupports;
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -194,10 +188,8 @@ public sealed class GroundingSupport
     public IList<int> GroundingChunkIndices
     {
         get => _groundingChunkIndices ??= [];
-        set => _groundingChunkIndices = value!;
+        set => _groundingChunkIndices = value;
     }
-
-    internal IList<int>? RawGroundingChunkIndices => _groundingChunkIndices;
 
     /// <summary>
     /// Confidence scores (<c>[0.0, 1.0]</c>) corresponding to <see cref="GroundingChunkIndices"/>.

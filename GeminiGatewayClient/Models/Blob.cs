@@ -10,20 +10,22 @@ namespace GeminiGatewayClient.Models;
 public sealed class Blob
 {
     /// <summary>
-    /// Required. IANA MIME type of the media data (see <see cref="MimeTypes"/> for common constants).
+    /// IANA MIME type of the media data (see <see cref="MimeTypes"/> for common constants).
+    /// Must be set on requests; a response may omit it, in which case it is empty.
     /// </summary>
     [JsonPropertyName("mimeType")]
-    public required string MimeType
+    public string MimeType
     {
         get;
         set => field = value ?? "";
     } = "";
 
     /// <summary>
-    /// Required. Raw bytes of the media payload (Base64-encoded in JSON).
+    /// Raw bytes of the media payload (Base64-encoded in JSON).
+    /// Must be set on requests; a response may omit it, in which case it is empty.
     /// </summary>
     [JsonPropertyName("data")]
-    public required byte[] Data
+    public byte[] Data
     {
         get;
         set => field = value ?? [];

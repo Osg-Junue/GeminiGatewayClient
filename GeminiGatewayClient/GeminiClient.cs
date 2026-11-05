@@ -27,6 +27,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
     private const string EmbedContentOperation = "embedContent";
     private const string BatchEmbedContentsOperation = "batchEmbedContents";
     private const int MaxPreallocatedBufferBytes = 10 * 1024 * 1024;
+    private const int ReadChunkBytes = 4096;
     internal const int MaxBufferedResponseBytes = 64 * 1024 * 1024;
 
     private static readonly TimeSpan s_pooledConnectionLifetime = TimeSpan.FromMinutes(2);
@@ -94,7 +95,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         return SendBufferedAsync(
             requestUri,
             request,
-            GeminiJsonContext.Default.GenerateContentRequest,
+            GeminiJsonContext.Wire.GenerateContentRequest,
             GeminiJsonContext.Default.GenerateContentResponse,
             static r => r.ExtensionData,
             cancellationToken);
@@ -123,13 +124,12 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         request.Validate(nameof(request));
 
         var effectiveModel = !string.IsNullOrWhiteSpace(model) ? model : request.Model;
-        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, EmbedContentOperation);
-        var targetResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(effectiveModel);
-        var wireRequest = NormalizeSingleEmbedRequestModel(request, targetResourcePath);
+        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, EmbedContentOperation, out var targetResourcePath);
+        var wireRequest = NormalizeSingleEmbedRequestModel(request, targetResourcePath, effectiveModel);
         return SendBufferedAsync(
             requestUri,
             wireRequest,
-            GeminiJsonContext.Default.EmbedContentRequest,
+            GeminiJsonContext.Wire.EmbedContentRequest,
             GeminiJsonContext.Default.EmbedContentResponse,
             static r => r.ExtensionData,
             cancellationToken);
@@ -146,14 +146,13 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         request.Validate(nameof(request));
 
         var effectiveModel = ResolveEffectiveBatchModel(request, model);
-        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, BatchEmbedContentsOperation);
-        var targetResourcePath = _settings.Endpoint.ResolveEmbeddingResourcePath(effectiveModel);
-        var wireRequest = NormalizeBatchRequestModels(request, targetResourcePath);
+        var requestUri = _settings.Endpoint.GetEmbeddingOperationUri(effectiveModel, BatchEmbedContentsOperation, out var targetResourcePath);
+        var wireRequest = NormalizeBatchRequestModels(request, targetResourcePath, effectiveModel);
 
         return SendBufferedAsync(
             requestUri,
             wireRequest,
-            GeminiJsonContext.Default.BatchEmbedContentsRequest,
+            GeminiJsonContext.Wire.BatchEmbedContentsRequest,
             GeminiJsonContext.Default.BatchEmbedContentsResponse,
             static r => r.ExtensionData,
             cancellationToken);
@@ -201,8 +200,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
             await using (stream.ConfigureAwait(false))
             {
                 var initialCapacity = contentLength is > 0 and <= MaxPreallocatedBufferBytes and var length
-                    ? (int)length
-                    : 1024;
+                    ? (int)length + ReadChunkBytes
+                    : ReadChunkBytes;
                 using var buffer = new PooledByteBufferWriter(initialCapacity);
                 while (true)
                 {
@@ -211,7 +210,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                     var readSucceeded = false;
                     try
                     {
-                        read = await stream.ReadAsync(buffer.GetMemory(4096), watchdog.Token).ConfigureAwait(false);
+                        read = await stream.ReadAsync(buffer.GetMemory(ReadChunkBytes), watchdog.Token).ConfigureAwait(false);
                         readSucceeded = true;
                     }
                     finally
@@ -248,6 +247,10 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                 $"No data was received from the Gemini response within {watchdog.IdleTimeout} (GeminiClientOptions.StreamIdleTimeout).",
                 ex);
         }
+        catch (IOException ex)
+        {
+            throw CreateBodyReadException(ex, httpResponse.StatusCode);
+        }
     }
 
     private async IAsyncEnumerable<GenerateContentResponse> StreamCoreAsync(
@@ -261,7 +264,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         using var httpRequest = await CreateRequestMessageAsync(
             requestUri,
             request,
-            GeminiJsonContext.Default.GenerateContentRequest,
+            GeminiJsonContext.Wire.GenerateContentRequest,
             serverSentEvents,
             cancellationToken).ConfigureAwait(false);
         using var httpResponse = await SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
@@ -292,6 +295,10 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                         throw new TimeoutException(
                             $"No data was received from the Gemini streaming response within {watchdog.IdleTimeout} (GeminiClientOptions.StreamIdleTimeout).",
                             ex);
+                    }
+                    catch (IOException ex)
+                    {
+                        throw CreateBodyReadException(ex, httpResponse.StatusCode);
                     }
 
                     yield return chunk;
@@ -330,17 +337,22 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 
     private static EmbedContentRequest NormalizeSingleEmbedRequestModel(
         EmbedContentRequest request,
-        string targetResourcePath)
+        string targetResourcePath,
+        string? validatedModel)
     {
-        if (!string.IsNullOrWhiteSpace(request.Model))
+        if (string.Equals(request.Model, targetResourcePath, StringComparison.Ordinal))
+        {
+            return request;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Model) &&
+            !string.Equals(request.Model, validatedModel, StringComparison.Ordinal))
         {
             // Validate request.Model even when overridden by the per-call model argument.
             _ = GeminiEndpoint.ToResourcePath(request.Model);
         }
 
-        return string.Equals(request.Model, targetResourcePath, StringComparison.Ordinal)
-            ? request
-            : request.Clone(modelOverride: targetResourcePath);
+        return request.Clone(modelOverride: targetResourcePath);
     }
 
     private static string? ResolveEffectiveBatchModel(BatchEmbedContentsRequest request, string? model)
@@ -364,14 +376,23 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 
     private static BatchEmbedContentsRequest NormalizeBatchRequestModels(
         BatchEmbedContentsRequest request,
-        string targetResourcePath)
+        string targetResourcePath,
+        string? validatedModel)
     {
         var items = request.Requests;
         var needsCopy = false;
+        var lastValidatedRawModel = validatedModel;
         for (var i = 0; i < items.Count; i++)
         {
             var itemModel = items[i].Model;
-            if (!string.IsNullOrWhiteSpace(itemModel))
+            if (string.Equals(itemModel, targetResourcePath, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            needsCopy = true;
+            if (!string.IsNullOrWhiteSpace(itemModel) &&
+                !string.Equals(itemModel, lastValidatedRawModel, StringComparison.Ordinal))
             {
                 var resolved = GeminiEndpoint.ToResourcePath(itemModel)!;
                 if (!string.Equals(resolved, targetResourcePath, StringComparison.Ordinal))
@@ -380,11 +401,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                         $"BatchEmbedContentsRequest.Requests[{i}].Model ('{itemModel}', resolved as '{resolved}') does not match the batch target model '{targetResourcePath}'. All items in a batch embedding request must target the same model.",
                         nameof(request));
                 }
-            }
 
-            if (!string.Equals(itemModel, targetResourcePath, StringComparison.Ordinal))
-            {
-                needsCopy = true;
+                lastValidatedRawModel = itemModel;
             }
         }
 
@@ -485,6 +503,17 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Reports a connection lost after the response headers arrived the same way as one lost before them, because
+    /// <see cref="HttpClient"/> otherwise surfaces it as a bare <see cref="IOException"/> from the content stream.
+    /// </summary>
+    private static HttpRequestException CreateBodyReadException(IOException exception, System.Net.HttpStatusCode statusCode) =>
+        new(
+            exception is HttpIOException { HttpRequestError: var error } ? error : HttpRequestError.ResponseEnded,
+            "Failed to read the Gemini response body.",
+            exception,
+            statusCode);
 
     private static HttpClient CreateDefaultHttpClient(TimeSpan timeout) =>
         new(CreateDefaultHandler(), disposeHandler: true) { Timeout = timeout };

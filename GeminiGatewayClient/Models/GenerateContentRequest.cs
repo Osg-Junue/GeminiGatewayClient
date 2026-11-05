@@ -9,6 +9,8 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class GenerateContentRequest
 {
+    private IList<Content>? _contents;
+
     /// <summary>
     /// Optional. Resource name of cached context content to prepend to the conversation.
     /// Format: <c>cachedContents/{cachedContent}</c> or <c>projects/{project}/locations/{location}/cachedContents/{cachedContent}</c>.
@@ -24,9 +26,9 @@ public sealed class GenerateContentRequest
     [JsonPropertyName("contents")]
     public IList<Content> Contents
     {
-        get => field ??= [];
-        set => field = value!;
-    } = null!;
+        get => _contents ??= [];
+        set => _contents = value;
+    }
 
     /// <summary>
     /// Optional. Developer-provided system instructions for the model. Only <see cref="Content.Parts"/> is used;
@@ -108,7 +110,8 @@ public sealed class GenerateContentRequest
 
     /// <summary>
     /// Creates a copy of this request that uses <paramref name="contents"/> as its conversation turns
-    /// with isolated top-level collection and configuration containers.
+    /// with isolated top-level collection and configuration containers. Null elements are kept so <see cref="Validate"/>
+    /// reports them instead of a clone silently hiding them.
     /// </summary>
     internal GenerateContentRequest CloneWithContents(IList<Content> contents)
     {
@@ -122,10 +125,7 @@ public sealed class GenerateContentRequest
             var clonedTools = new List<Tool>(Tools.Count);
             for (var i = 0; i < Tools.Count; i++)
             {
-                if (Tools[i] is { } tool)
-                {
-                    clonedTools.Add(tool.Clone());
-                }
+                clonedTools.Add(Tools[i]?.Clone()!);
             }
 
             clone.Tools = clonedTools;
@@ -136,10 +136,7 @@ public sealed class GenerateContentRequest
             var clonedSettings = new List<SafetySetting>(SafetySettings.Count);
             for (var i = 0; i < SafetySettings.Count; i++)
             {
-                if (SafetySettings[i] is { } setting)
-                {
-                    clonedSettings.Add(setting.Clone());
-                }
+                clonedSettings.Add(SafetySettings[i]?.Clone()!);
             }
 
             clone.SafetySettings = clonedSettings;
@@ -165,25 +162,29 @@ public sealed class GenerateContentRequest
     /// <exception cref="ArgumentException">The request is invalid.</exception>
     internal void Validate(string paramName = "request")
     {
-        if (Contents is null || Contents.Count == 0)
+        var contents = _contents;
+        if (contents is null || contents.Count == 0)
         {
             throw new ArgumentException("GenerateContentRequest.Contents must contain at least one Content item.", paramName);
         }
 
-        for (var i = 0; i < Contents.Count; i++)
+        for (var i = 0; i < contents.Count; i++)
         {
-            var content = Contents[i];
+            var content = contents[i];
             if (content is null)
             {
                 throw new ArgumentException($"GenerateContentRequest.Contents[{i}] cannot be null.", paramName);
             }
 
-            ValidateContentParts(content, $"GenerateContentRequest.Contents[{i}]", paramName);
+            if (content.GetValidationError() is { } error)
+            {
+                throw new ArgumentException($"GenerateContentRequest.Contents[{i}]{error}", paramName);
+            }
         }
 
-        if (SystemInstruction is not null)
+        if (SystemInstruction?.GetValidationError() is { } systemError)
         {
-            ValidateContentParts(SystemInstruction, "GenerateContentRequest.SystemInstruction", paramName);
+            throw new ArgumentException($"GenerateContentRequest.SystemInstruction{systemError}", paramName);
         }
 
         GenerationConfig?.Validate(paramName);
@@ -243,36 +244,6 @@ public sealed class GenerateContentRequest
 
                 declaration.Validate(paramName);
             }
-        }
-    }
-
-    private static void ValidateContentParts(Content content, string pathPrefix, string paramName)
-    {
-        if (content.Role is { } role && (role == Role.Unknown || !Enum.IsDefined(role)))
-        {
-            throw new ArgumentException($"{pathPrefix}.Role cannot be Role.Unknown.", paramName);
-        }
-
-        if ((content.Parts is null || content.Parts.Count == 0) &&
-            (content.ExtensionData is null || content.ExtensionData.Count == 0))
-        {
-            throw new ArgumentException($"{pathPrefix}.Parts must contain at least one Part item.", paramName);
-        }
-
-        if (content.Parts is null)
-        {
-            return;
-        }
-
-        for (var j = 0; j < content.Parts.Count; j++)
-        {
-            var part = content.Parts[j];
-            if (part is null)
-            {
-                throw new ArgumentException($"{pathPrefix}.Parts[{j}] cannot be null.", paramName);
-            }
-
-            part.Validate($"{pathPrefix}.Parts[{j}]", paramName);
         }
     }
 }

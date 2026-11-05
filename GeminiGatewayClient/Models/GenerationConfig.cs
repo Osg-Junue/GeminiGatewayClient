@@ -206,7 +206,10 @@ public sealed class GenerationConfig
             throw new ArgumentException("GenerationConfig.ResponseJsonSchema cannot be JsonValueKind.Undefined.", paramName);
         }
 
-        ResponseSchema?.Validate("GenerationConfig.ResponseSchema", paramName);
+        if (ResponseSchema?.GetValidationError() is { } schemaError)
+        {
+            throw new ArgumentException($"GenerationConfig.ResponseSchema{schemaError}", paramName);
+        }
 
         if (MediaResolution == Models.MediaResolution.Unknown)
         {

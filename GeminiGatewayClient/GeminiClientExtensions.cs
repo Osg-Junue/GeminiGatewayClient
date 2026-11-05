@@ -33,7 +33,7 @@ public static class GeminiClientExtensions
         /// <exception cref="TimeoutException">
         /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
         /// </exception>
-        /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred before an HTTP response was received.</exception>
+        /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
         /// <exception cref="OperationCanceledException">
         /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
         /// </exception>
@@ -107,7 +107,7 @@ public static class GeminiClientExtensions
         /// <exception cref="TimeoutException">
         /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
         /// </exception>
-        /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred before an HTTP response was received.</exception>
+        /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
         /// <exception cref="OperationCanceledException">
         /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
         /// </exception>
@@ -176,9 +176,9 @@ public static class GeminiClientExtensions
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        if (response.Candidates is [{ Content: { RawParts: { Count: > 0 } parts } candidateContent }, ..])
+        if (response.Candidates is [{ Content: { Parts: { Count: > 0 } parts } candidateContent }, ..])
         {
-            var hasMeaningfulPart = false;
+            var meaningfulCount = 0;
             var needsNormalization = false;
             for (var i = 0; i < parts.Count; i++)
             {
@@ -188,14 +188,14 @@ public static class GeminiClientExtensions
                     continue;
                 }
 
-                hasMeaningfulPart = true;
+                meaningfulCount++;
                 if (string.IsNullOrEmpty(part.Text) && HasNonTextPrimaryDataField(part))
                 {
                     needsNormalization = true;
                 }
             }
 
-            if (hasMeaningfulPart)
+            if (meaningfulCount > 0)
             {
                 if (!needsNormalization)
                 {
@@ -203,8 +203,7 @@ public static class GeminiClientExtensions
                     return true;
                 }
 
-                var normalized = candidateContent.Clone();
-                var normalizedParts = new List<Part>(parts.Count);
+                var normalizedParts = new List<Part>(meaningfulCount);
                 for (var i = 0; i < parts.Count; i++)
                 {
                     if (parts[i] is not { } part || IsPureEmptyTextPart(part))
@@ -221,8 +220,14 @@ public static class GeminiClientExtensions
                     normalizedParts.Add(clonedPart);
                 }
 
-                normalized.Parts = normalizedParts;
-                content = normalized;
+                content = new Content
+                {
+                    Role = candidateContent.Role,
+                    Parts = normalizedParts,
+                    ExtensionData = candidateContent.ExtensionData is not null
+                        ? new Dictionary<string, JsonElement>(candidateContent.ExtensionData, StringComparer.Ordinal)
+                        : null
+                };
                 return true;
             }
         }
@@ -263,7 +268,7 @@ public static class GeminiClientExtensions
                 role = contentRole;
             }
 
-            if (content.RawParts is not { Count: > 0 } parts)
+            if (content.Parts is not { Count: > 0 } parts)
             {
                 continue;
             }
@@ -318,7 +323,7 @@ public static class GeminiClientExtensions
                 role = contentRole;
             }
 
-            if (content.RawParts is not { Count: > 0 } parts)
+            if (content.Parts is not { Count: > 0 } parts)
             {
                 continue;
             }
