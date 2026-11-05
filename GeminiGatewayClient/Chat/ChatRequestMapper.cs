@@ -1,6 +1,5 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
 
@@ -9,7 +8,7 @@ namespace GeminiGatewayClient.Chat;
 /// <summary>
 /// Converts <c>Microsoft.Extensions.AI</c> chat messages and options into a <see cref="GenerateContentRequest"/>.
 /// </summary>
-internal static class ChatRequestMapper
+internal static partial class ChatRequestMapper
 {
     /// <summary>
     /// Builds a request from <paramref name="messages"/> and <paramref name="options"/>.
@@ -152,12 +151,7 @@ internal static class ChatRequestMapper
                 break;
 
             case DataContent data:
-                var dataPart = MemoryMarshal.TryGetArray(data.Data, out var segment) &&
-                               segment.Array is not null &&
-                               segment.Offset == 0 &&
-                               segment.Count == segment.Array.Length
-                    ? Part.FromBytes(segment.Array, data.MediaType)
-                    : Part.FromBytes(data.Data.Span, data.MediaType);
+                var dataPart = Part.FromBytes(data.Data.Span, data.MediaType);
                 dataPart.ThoughtSignature = signature;
                 dataPart.VideoMetadata = rawPart?.VideoMetadata?.Clone();
                 parts.Add(dataPart);
@@ -223,6 +217,10 @@ internal static class ChatRequestMapper
                 });
                 break;
 
+            case HostedFileContent file:
+                throw new NotSupportedException(
+                    $"HostedFileContent ('{file.FileId}') cannot be sent to Gemini. Use UriContent with the uploaded file's URI and media type.");
+
             default:
                 AppendCodeExecutionParts(parts, item.AdditionalProperties, signature, rawPart);
                 break;
@@ -240,7 +238,7 @@ internal static class ChatRequestMapper
         {
             if (value is not JsonElement element ||
                 !rawObj.TryGetProperty(key, out var rawProp) ||
-                !IsSameJson(element, rawProp))
+                !JsonElement.DeepEquals(element, rawProp))
             {
                 return false;
             }
@@ -248,18 +246,6 @@ internal static class ChatRequestMapper
 
         return true;
     }
-
-    /// <summary>
-    /// Replayed arguments are byte-identical to the wire, so the vectorized compare settles nearly every call;
-    /// <see cref="JsonElement.DeepEquals"/> stays as the fallback for values that are equal but formatted differently.
-    /// </summary>
-    /// <remarks>
-    /// Kept out of line: inlined, it stops the JIT from stack-allocating the caller's boxed dictionary enumerator (56 B per call).
-    /// </remarks>
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static bool IsSameJson(JsonElement left, JsonElement right) =>
-        JsonMarshal.GetRawUtf8Value(left).SequenceEqual(JsonMarshal.GetRawUtf8Value(right)) ||
-        JsonElement.DeepEquals(left, right);
 
     private static bool IsUnmodifiedRawPart(AIContent item, Part rawPart, string? signature)
     {
@@ -417,7 +403,9 @@ internal static class ChatRequestMapper
 
         // A signature-only companion of the preceding part (text + signature split on receive) must not be sent twice,
         // and when multi-chunk TextContent coalescing dropped the signature from the preceding text part, re-attach it.
-        if (!hasText && !string.IsNullOrEmpty(signature) && parts.Count > 0)
+        // A standalone signature part stays separate: Gemini forbids merging a signed part with an unsigned one.
+        if (!hasText && !string.IsNullOrEmpty(signature) && parts.Count > 0 &&
+            GetBooleanProperty(reasoning.AdditionalProperties, GeminiChatPropertyNames.SignatureCompanion))
         {
             if (string.Equals(parts[^1]?.ThoughtSignature, signature, StringComparison.Ordinal))
             {
@@ -438,7 +426,7 @@ internal static class ChatRequestMapper
 
         parts.Add(new Part
         {
-            Text = hasText ? reasoning.Text : null,
+            Text = hasText ? reasoning.Text : rawPart?.Text,
             Thought = hasText ? true : null,
             ThoughtSignature = string.IsNullOrEmpty(signature) ? null : signature,
             VideoMetadata = rawPart?.VideoMetadata?.Clone(),
@@ -479,7 +467,15 @@ internal static class ChatRequestMapper
     }
 
     private static (string Name, string? ApiId) ResolveFunctionCall(Dictionary<string, (string Name, string? ApiId)>? calls, string callId) =>
-        !string.IsNullOrEmpty(callId) && calls is not null && calls.TryGetValue(callId, out var call) ? call : (callId, null);
+        !string.IsNullOrEmpty(callId) && calls is not null && calls.TryGetValue(callId, out var call)
+            ? call
+            : (SynthesizedCallIdPattern().Match(callId) is { Success: true } match ? match.Groups[1].Value : callId, null);
+
+    /// <summary>
+    /// Matches the ids <see cref="ChatResponseMapper"/> creates, so a result whose call was trimmed from the history keeps its function name.
+    /// </summary>
+    [GeneratedRegex("^(.+)_call_[0-9]+_[0-9a-f]{32}$")]
+    private static partial Regex SynthesizedCallIdPattern();
 
     private static string? GetFunctionCallApiId(FunctionCallContent call)
     {

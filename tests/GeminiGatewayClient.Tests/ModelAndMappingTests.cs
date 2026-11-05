@@ -6,7 +6,7 @@ using Microsoft.Extensions.AI;
 
 namespace GeminiGatewayClient.Tests;
 
-public class PerformanceAllocationTests
+public class ModelAndMappingTests
 {
     [Fact]
     public void ChatResponseMapper_EmptyOrSinglePart_MapsExpectedContents()
@@ -166,44 +166,6 @@ public class PerformanceAllocationTests
     }
 
     [Fact]
-    public void ChatResponseMapper_WarmPath_AllocatesWithinExpectedBudget()
-    {
-        var chunk = new GenerateContentResponse
-        {
-            ResponseId = "r1",
-            ModelVersion = "gemini-2.5-flash",
-            Candidates =
-            [
-                new Candidate
-                {
-                    Content = new Content
-                    {
-                        Role = Role.Model,
-                        Parts = [Part.FromText("chunk")]
-                    }
-                }
-            ]
-        };
-
-        // Warmup JIT
-        for (var i = 0; i < 50; i++)
-        {
-            _ = ChatResponseMapper.ToChatResponseUpdate(chunk, "gemini-2.5-flash");
-        }
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 100; i++)
-        {
-            _ = ChatResponseMapper.ToChatResponseUpdate(chunk, "gemini-2.5-flash");
-        }
-
-        var allocatedPerCall = (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
-
-        // ~296 B in 64-bit Release; allow up to 400 B for Debug/coverage/PGO instrumentation headroom.
-        Assert.InRange(allocatedPerCall, 1, 400);
-    }
-
-    [Fact]
     public void ModelCollections_LazilyInitializeNonNullEmptyListsOnGetterAccess_IncludingAfterNullAssignment()
     {
         var emptyContent = new Content();
@@ -263,130 +225,4 @@ public class PerformanceAllocationTests
         Assert.Empty(support.GroundingChunkIndices);
     }
 
-    [Theory]
-    [InlineData(typeof(Content))]
-    [InlineData(typeof(GenerateContentRequest))]
-    [InlineData(typeof(GenerateContentResponse))]
-    [InlineData(typeof(CitationMetadata))]
-    [InlineData(typeof(BatchEmbedContentsRequest))]
-    [InlineData(typeof(BatchEmbedContentsResponse))]
-    [InlineData(typeof(ContentEmbedding))]
-    [InlineData(typeof(GroundingMetadata))]
-    [InlineData(typeof(GroundingSupport))]
-    public void ModelCollections_AreNotAllocatedByTheConstructor(Type modelType)
-    {
-        var model = Activator.CreateInstance(modelType)!;
-
-        var collectionFields = modelType
-            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
-            .Where(field => field.FieldType != typeof(string) && typeof(System.Collections.IEnumerable).IsAssignableFrom(field.FieldType))
-            .ToList();
-
-        Assert.NotEmpty(collectionFields);
-        Assert.All(collectionFields, field => Assert.Null(field.GetValue(model)));
-    }
-
-    [Fact]
-    public void GenerateContentRequest_Validate_AllocationDoesNotGrowWithHistoryLength()
-    {
-        static GenerateContentRequest CreateHistory(int count)
-        {
-            var contents = new List<Content>(count);
-            for (var i = 0; i < count; i++)
-            {
-                contents.Add(new Content { Role = i % 2 == 0 ? Role.User : Role.Model, Parts = [Part.FromText("turn"), Part.FromText("more")] });
-            }
-
-            return new GenerateContentRequest { Contents = contents };
-        }
-
-        static long MeasureValidate(GenerateContentRequest request)
-        {
-            for (var i = 0; i < 50; i++)
-            {
-                request.Validate();
-            }
-
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < 100; i++)
-            {
-                request.Validate();
-            }
-
-            return (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
-        }
-
-        const int turns = 256;
-        var shortHistory = MeasureValidate(CreateHistory(1));
-        var longHistory = MeasureValidate(CreateHistory(turns));
-
-        // Under one byte per turn: a per-turn string costs hundreds, while a stray one-off runtime allocation can land in the window.
-        Assert.True(longHistory - shortHistory < turns, $"1 turn allocated {shortHistory} B, {turns} turns allocated {longHistory} B.");
-    }
-
-    [Fact]
-    public void BatchEmbedContentsRequest_Validate_AllocationDoesNotGrowWithBatchSize()
-    {
-        static long MeasureValidate(int count)
-        {
-            var requests = new List<EmbedContentRequest>(count);
-            for (var i = 0; i < count; i++)
-            {
-                requests.Add(EmbedContentRequest.FromText("document"));
-            }
-
-            var batch = new BatchEmbedContentsRequest { Requests = requests };
-            for (var i = 0; i < 50; i++)
-            {
-                batch.Validate();
-            }
-
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < 100; i++)
-            {
-                batch.Validate();
-            }
-
-            return (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
-        }
-
-        const int items = 256;
-        var single = MeasureValidate(1);
-        var large = MeasureValidate(items);
-
-        Assert.True(large - single < items, $"1 item allocated {single} B, {items} items allocated {large} B.");
-    }
-
-    [Fact]
-    public void Schema_Validate_AllocationDoesNotGrowWithPropertyCount()
-    {
-        static long MeasureValidate(int propertyCount)
-        {
-            var properties = new Dictionary<string, Schema>(propertyCount);
-            for (var i = 0; i < propertyCount; i++)
-            {
-                properties[$"property{i}"] = new Schema { Type = SchemaType.String };
-            }
-
-            var config = new GenerationConfig { ResponseSchema = new Schema { Type = SchemaType.Object, Properties = properties } };
-            for (var i = 0; i < 50; i++)
-            {
-                config.Validate();
-            }
-
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < 100; i++)
-            {
-                config.Validate();
-            }
-
-            return (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
-        }
-
-        const int properties = 256;
-        var single = MeasureValidate(1);
-        var large = MeasureValidate(properties);
-
-        Assert.True(large - single < properties, $"1 property allocated {single} B, {properties} properties allocated {large} B.");
-    }
 }

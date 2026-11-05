@@ -273,11 +273,12 @@ public partial class ChatClientTests
         Assert.NotNull(handler.LastRequestBody);
         using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
         var assistantParts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
-        Assert.Equal(2, assistantParts.GetArrayLength());
+        Assert.Equal(3, assistantParts.GetArrayLength());
         Assert.True(assistantParts[0].GetProperty("thought").GetBoolean());
         Assert.Equal("sig-thought", assistantParts[0].GetProperty("thoughtSignature").GetString());
         Assert.Equal("Final answer.", assistantParts[1].GetProperty("text").GetString());
-        Assert.Equal("sig-trailing", assistantParts[1].GetProperty("thoughtSignature").GetString());
+        Assert.False(assistantParts[1].TryGetProperty("thoughtSignature", out _));
+        Assert.Equal("sig-trailing", assistantParts[2].GetProperty("thoughtSignature").GetString());
     }
 
     [Fact]
@@ -930,7 +931,7 @@ public partial class ChatClientTests
     }
 
     [Fact]
-    public async Task EmbedContent_NormalizesSingleRequestBareModel_AndCachesDefaultEmbeddingEndpointUris()
+    public async Task EmbedContent_NormalizesSingleRequestBareModel_AndResolvesDefaultEmbeddingEndpointUris()
     {
         var endpoint = GeminiGatewayClient.Http.GeminiEndpoint.Create(
             GeminiClientOptions.DefaultEndpoint,
@@ -940,12 +941,12 @@ public partial class ChatClientTests
 
         var uri1 = endpoint.GetEmbeddingOperationUri(null, "embedContent");
         var uri2 = endpoint.GetEmbeddingOperationUri("gemini-embedding-001", "embedContent");
-        Assert.Same(uri1, uri2);
+        Assert.Equal(uri1, uri2);
         Assert.Equal("https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent", uri1.ToString());
 
         var batchUri1 = endpoint.GetEmbeddingOperationUri(null, "batchEmbedContents");
         var batchUri2 = endpoint.GetEmbeddingOperationUri("gemini-embedding-001", "batchEmbedContents");
-        Assert.Same(batchUri1, batchUri2);
+        Assert.Equal(batchUri1, batchUri2);
 
         const string embedJson = """{ "embedding": { "values": [0.5, 0.25] } }""";
         using var handler = new RecordingHandler(embedJson);

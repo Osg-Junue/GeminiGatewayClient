@@ -235,7 +235,7 @@ public sealed class AdversarialValidationAndToolConversionTests
         { new Dictionary<string, int> { ["a"] = 1 }, """{"a":1}""" },
         { new Dictionary<int, string> { [7] = "x" }, """{"7":"x"}""" },
         { new Hashtable { ["a"] = 1 }, """{"a":1}""" },
-        { new List<KeyValuePair<string, int>> { new("a", 1), new("a", 2) }, """{"a":1,"a":2}""" },
+        { new List<KeyValuePair<string, int>> { new("a", 1) }, """{"result":[{"key":"a","value":1}]}""" },
         { new Dictionary<string, Report> { ["r"] = new("Tokyo", 18) }, """{"r":{"city":"Tokyo","temperature":18}}""" },
         { new Report("Tokyo", 18), """{"city":"Tokyo","temperature":18}""" },
         { new List<int> { 1, 2 }, """{"result":[1,2]}""" },
@@ -876,11 +876,10 @@ public sealed class AdversarialValidationAndToolConversionTests
 
     public static TheoryData<object, string> CollectionShapes() => new()
     {
-        { new List<TimeOnly> { new(1, 2, 3) }, """{"result":["01:02:03.0000000"]}""" },
+        { new List<TimeOnly> { new(1, 2, 3) }, """{"result":["01:02:03"]}""" },
         { new List<Uri> { new("https://example.com/a") }, """{"result":["https://example.com/a"]}""" },
-        { new List<List<KeyValuePair<string, int>>> { new() { new("a", 1), new("a", 2) } }, """{"result":[{"a":1,"a":2}]}""" },
-        { new[] { new TimeOnly(1, 2, 3) }, """{"result":["01:02:03.0000000"]}""" },
-        { new HashSet<TimeOnly> { new(1, 2, 3) }, """{"result":["01:02:03.0000000"]}""" }
+        { new[] { new TimeOnly(1, 2, 3) }, """{"result":["01:02:03"]}""" },
+        { new HashSet<TimeOnly> { new(1, 2, 3) }, """{"result":["01:02:03"]}""" }
     };
 
     [Theory]
@@ -893,15 +892,15 @@ public sealed class AdversarialValidationAndToolConversionTests
     {
         var arguments = new Dictionary<string, object?> { ["times"] = new List<TimeOnly> { new(1, 2, 3) } };
 
-        Assert.Equal("""{"times":["01:02:03.0000000"]}""", Raw(ToolJsonConverter.ToArguments(arguments, AIJsonUtilities.DefaultOptions)!.Value));
+        Assert.Equal("""{"times":["01:02:03"]}""", Raw(ToolJsonConverter.ToArguments(arguments, AIJsonUtilities.DefaultOptions)!.Value));
     }
 
     [Fact]
-    public void ToResponseObject_CollectionOptions_DoNotChangeHandWrittenNumbers()
+    public void ToResponseObject_HonorsTheCallersNumberHandling()
     {
         var options = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions) { NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.WriteAsString };
 
-        Assert.Equal("""{"result":[1,2]}""", Raw(ToolJsonConverter.ToResponseObject(new List<int> { 1, 2 }, options)));
+        Assert.Equal("""{"result":["1","2"]}""", Raw(ToolJsonConverter.ToResponseObject(new List<int> { 1, 2 }, options)));
     }
 
     public sealed class ObjectLikeSequence : IEnumerable<int>

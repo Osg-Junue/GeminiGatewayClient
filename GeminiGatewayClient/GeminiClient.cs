@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
@@ -83,7 +84,8 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
 
     internal TimeSpan HttpClientTimeout => _httpClient.Timeout;
 
-    internal JsonSerializerOptions? ToolSerializerOptions => _settings.ToolSerializerOptions;
+    /// <inheritdoc />
+    public JsonSerializerOptions? ToolSerializerOptions => _settings.ToolSerializerOptions;
 
     /// <inheritdoc />
     public Task<GenerateContentResponse> GenerateContentAsync(
@@ -202,21 +204,10 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                 var initialCapacity = contentLength is > 0 and <= MaxPreallocatedBufferBytes and var length
                     ? (int)length + ReadChunkBytes
                     : ReadChunkBytes;
-                using var buffer = new PooledByteBufferWriter(initialCapacity);
+                var buffer = new ArrayBufferWriter<byte>(initialCapacity);
                 while (true)
                 {
-                    int read;
-                    watchdog.BeforeRead();
-                    var readSucceeded = false;
-                    try
-                    {
-                        read = await stream.ReadAsync(buffer.GetMemory(ReadChunkBytes), watchdog.Token).ConfigureAwait(false);
-                        readSucceeded = true;
-                    }
-                    finally
-                    {
-                        watchdog.AfterRead(readSucceeded);
-                    }
+                    var read = await watchdog.ReadAsync(stream, buffer.GetMemory(ReadChunkBytes)).ConfigureAwait(false);
 
                     if (read == 0)
                     {
@@ -427,16 +418,14 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         };
     }
 
-    private ValueTask<HttpRequestMessage> CreateRequestMessageAsync<TRequest>(
+    private async Task<HttpRequestMessage> CreateRequestMessageAsync<TRequest>(
         Uri requestUri,
         TRequest request,
         JsonTypeInfo<TRequest> requestTypeInfo,
         bool serverSentEvents,
         CancellationToken cancellationToken)
     {
-        var content = JsonContent.Create(request, requestTypeInfo);
-
-        var message = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = content };
+        var message = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = JsonContent.Create(request, requestTypeInfo) };
         try
         {
             if (serverSentEvents)
@@ -444,29 +433,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
                 message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
             }
 
-            var applyTask = _settings.Headers.ApplyAsync(message, cancellationToken);
-            if (applyTask.IsCompletedSuccessfully)
-            {
-                applyTask.GetAwaiter().GetResult();
-                return ValueTask.FromResult(message);
-            }
-
-            return CompleteRequestMessageAsync(message, applyTask);
-        }
-        catch
-        {
-            message.Dispose();
-            throw;
-        }
-    }
-
-    private static async ValueTask<HttpRequestMessage> CompleteRequestMessageAsync(
-        HttpRequestMessage message,
-        ValueTask applyTask)
-    {
-        try
-        {
-            await applyTask.ConfigureAwait(false);
+            await _settings.Headers.ApplyAsync(message, cancellationToken).ConfigureAwait(false);
             return message;
         }
         catch

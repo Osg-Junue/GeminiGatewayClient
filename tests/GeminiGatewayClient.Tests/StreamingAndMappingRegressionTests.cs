@@ -132,7 +132,7 @@ public partial class ChatClientTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task IChatClient_MultiChunkStreamingTextWithTrailingThoughtSignature_ReattachesSignatureToCoalescedTextPartOnNextTurn(bool signatureInSeparateEmptyTextChunk)
+    public async Task IChatClient_MultiChunkStreamingTextWithTrailingThoughtSignature_KeepsItsPartBoundaryOnNextTurn(bool signatureInSeparateEmptyTextChunk)
     {
         var multiChunkSse = signatureInSeparateEmptyTextChunk
             ? """
@@ -184,8 +184,8 @@ public partial class ChatClientTests
         using var sentDoc = JsonDocument.Parse(nextTurnHandler.LastRequestBody);
         var assistantParts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
 
-        // Must be exactly 2 parts (1 thought + 1 coalesced text with signature re-attached), not 3 parts with an orphan signature-only part
-        Assert.Equal(2, assistantParts.GetArrayLength());
+        // A signature on its own part stays there: Gemini forbids merging a signed part with an unsigned one.
+        Assert.Equal(signatureInSeparateEmptyTextChunk ? 3 : 2, assistantParts.GetArrayLength());
 
         Assert.True(assistantParts[0].GetProperty("thought").GetBoolean());
         Assert.Equal("Thinking...", assistantParts[0].GetProperty("text").GetString());
@@ -193,7 +193,7 @@ public partial class ChatClientTests
 
         Assert.False(assistantParts[1].TryGetProperty("thought", out _));
         Assert.Equal("Hello world!", assistantParts[1].GetProperty("text").GetString());
-        Assert.Equal("sig-text-final", assistantParts[1].GetProperty("thoughtSignature").GetString());
+        Assert.Equal("sig-text-final", assistantParts[assistantParts.GetArrayLength() - 1].GetProperty("thoughtSignature").GetString());
     }
 
     [Fact]
@@ -706,9 +706,7 @@ public partial class ChatClientTests
             }
             """;
         var multiPartChunk = JsonSerializer.Deserialize(multiPartChunkJson, GeminiGatewayClient.Serialization.GeminiJsonContext.Default.GenerateContentResponse)!;
-        List<ChatResponseMapper.StreamedTextSegment>? multiSegments = null;
-        var multiBytes = 0;
-        var multiUpdate = ChatResponseMapper.ToChatResponseUpdate(multiPartChunk, DefaultModel, ref multiSegments, ref multiBytes);
+        var multiUpdate = ChatResponseMapper.ToChatResponseUpdate(multiPartChunk, DefaultModel, new ChatResponseMapper.StreamState());
         var multiTexts = multiUpdate.Contents.OfType<TextContent>().ToList();
         Assert.Equal(2, multiTexts.Count);
         Assert.Null(multiTexts[0].Annotations);
@@ -800,7 +798,7 @@ public partial class ChatClientTests
     }
 
     [Fact]
-    public async Task IChatClient_MultiChunkStreaming_ToChatResponse_ThenPersistedWithoutRawRepresentation_ReattachesThoughtSignature()
+    public async Task IChatClient_MultiChunkStreaming_ToChatResponse_ThenPersistedWithoutRawRepresentation_KeepsThoughtSignature()
     {
         const string sse = """
             data: {"responseId":"r-p1","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello "}]}}]}
@@ -834,10 +832,10 @@ public partial class ChatClientTests
         using (var preDoc = JsonDocument.Parse(prePersistHandler.LastRequestBody!))
         {
             var preParts = preDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
-            Assert.Equal(1, preParts.GetArrayLength());
+            Assert.Equal(2, preParts.GetArrayLength());
             Assert.Equal("Hello world!", preParts[0].GetProperty("text").GetString());
-            Assert.Equal("sig-persisted-final", preParts[0].GetProperty("thoughtSignature").GetString());
-            Assert.Equal("keep-sig-extra", preParts[0].GetProperty("sigExtra").GetString());
+            Assert.Equal("sig-persisted-final", preParts[1].GetProperty("thoughtSignature").GetString());
+            Assert.Equal("keep-sig-extra", preParts[1].GetProperty("sigExtra").GetString());
         }
 
         // 2. After persistence (RawRepresentation stripped): ThoughtSignature still re-attaches onto the preceding text part
@@ -867,9 +865,9 @@ public partial class ChatClientTests
         Assert.NotNull(nextHandler.LastRequestBody);
         using var sentDoc = JsonDocument.Parse(nextHandler.LastRequestBody);
         var parts = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts");
-        Assert.Equal(1, parts.GetArrayLength());
+        Assert.Equal(2, parts.GetArrayLength());
         Assert.Equal("Hello world!", parts[0].GetProperty("text").GetString());
-        Assert.Equal("sig-persisted-final", parts[0].GetProperty("thoughtSignature").GetString());
+        Assert.Equal("sig-persisted-final", parts[1].GetProperty("thoughtSignature").GetString());
     }
 
     [Fact]
@@ -1233,22 +1231,9 @@ public partial class ChatClientTests
         Assert.Equal(JsonValueKind.Object, roElement.ValueKind);
         Assert.Equal(99, roElement.GetProperty("nested")[0].GetProperty("score").GetInt32());
 
-        // Custom IReadOnlyDictionary<string, T> that does NOT implement non-generic System.Collections.IDictionary,
-        // plus LINQ IEnumerable<KeyValuePair<string, int>> projection.
-        var customRoString = new NonLegacyReadOnlyDictionary<string>(stringDict);
-        var customRoElement = ToolJsonConverter.ToResponseObject(customRoString, emptyOptions);
-        Assert.Equal(JsonValueKind.Object, customRoElement.ValueKind);
-        Assert.Equal("Tokyo", customRoElement.GetProperty("city").GetString());
-
+        // A key/value sequence that is neither a dictionary nor described by type metadata asks for metadata.
         var customRoInt = new NonLegacyReadOnlyDictionary<int>(intDict);
-        var customRoIntElement = ToolJsonConverter.ToResponseObject(customRoInt, emptyOptions);
-        Assert.Equal(JsonValueKind.Object, customRoIntElement.ValueKind);
-        Assert.Equal(24, customRoIntElement.GetProperty("tempC").GetInt32());
-
-        var linqFiltered = intDict.Where(kv => kv.Value > 30);
-        var linqElement = ToolJsonConverter.ToResponseObject(linqFiltered, emptyOptions);
-        Assert.Equal(JsonValueKind.Object, linqElement.ValueKind);
-        Assert.Equal(60, linqElement.GetProperty("humidity").GetInt32());
+        Assert.Throws<InvalidOperationException>(() => ToolJsonConverter.ToResponseObject(customRoInt, emptyOptions));
     }
 
     private sealed class NonLegacyReadOnlyDictionary<TValue>(IReadOnlyDictionary<string, TValue> inner) : IReadOnlyDictionary<string, TValue>
@@ -1474,27 +1459,6 @@ public partial class ChatClientTests
                 yield return item;
             }
         }
-    }
-
-    [Fact]
-    public void PooledByteBufferWriter_AccessAfterDispose_ThrowsObjectDisposedExceptionAndNeverReRentsBuffer()
-    {
-        var writer = new PooledByteBufferWriter(initialCapacity: 64);
-        var span = writer.GetSpan(4);
-        "test"u8.CopyTo(span);
-        writer.Advance(4);
-        Assert.Equal(4, writer.WrittenCount);
-
-        writer.Dispose();
-        writer.Dispose(); // Idempotent second dispose
-
-        Assert.Throws<ObjectDisposedException>(() => _ = writer.WrittenCount);
-        Assert.Throws<ObjectDisposedException>(() => _ = writer.WrittenSpan);
-        Assert.Throws<ObjectDisposedException>(() => _ = writer.WrittenMemory);
-        Assert.Throws<ObjectDisposedException>(() => writer.Clear());
-        Assert.Throws<ObjectDisposedException>(() => writer.Advance(1));
-        Assert.Throws<ObjectDisposedException>(() => _ = writer.GetMemory(16));
-        Assert.Throws<ObjectDisposedException>(() => _ = writer.GetSpan(16));
     }
 
     [Fact]
@@ -1889,24 +1853,21 @@ public partial class ChatClientTests
         Assert.Equal("Two", citations[3].Title);
 
         // Also verify multi-segment streaming resolution (spanning 1 segment vs >=2 segments) + realtime carrier
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
         _ = ChatResponseMapper.ToChatResponseUpdate(
             new GenerateContentResponse
             {
                 Candidates = [new Candidate { Content = new Content { Role = Role.Model, Parts = [Part.FromText("Alpha ")] } }]
             },
             "gemini-2.5-flash",
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
         _ = ChatResponseMapper.ToChatResponseUpdate(
             new GenerateContentResponse
             {
                 Candidates = [new Candidate { Content = new Content { Role = Role.Model, Parts = [Part.FromText("Beta Gamma Delta")] } }]
             },
             "gemini-2.5-flash",
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
         var finalUpdate = ChatResponseMapper.ToChatResponseUpdate(
             new GenerateContentResponse
             {
@@ -1939,8 +1900,7 @@ public partial class ChatClientTests
                 ]
             },
             "gemini-2.5-flash",
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
 
         var carrier = Assert.Single(finalUpdate.Contents, c => c is not TextContent && c.Annotations is { Count: > 0 });
         Assert.Equal(4, carrier.Annotations!.Count);
@@ -2251,13 +2211,11 @@ public partial class ChatClientTests
             ]
         };
 
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
         var update = ChatResponseMapper.ToChatResponseUpdate(
             response,
             "gemini-2.5-flash",
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
 
         var textContents = update.Contents.OfType<TextContent>().ToList();
         Assert.Equal(2, textContents.Count);

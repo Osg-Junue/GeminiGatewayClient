@@ -39,8 +39,8 @@ internal static class GeminiStreamReader
         StreamIdleWatchdog watchdog,
         int maxSseEventBytes)
     {
-        PooledByteBufferWriter? dataBuffer = null;
-        PooledByteBufferWriter? nonSseBuffer = null;
+        ArrayBufferWriter<byte>? dataBuffer = null;
+        ArrayBufferWriter<byte>? nonSseBuffer = null;
         var sawSseEvent = false;
         var isFirstLine = true;
         var skipLeadingLf = false;
@@ -82,18 +82,7 @@ internal static class GeminiStreamReader
                 }
 
                 var maxBytesToRead = Math.Min(buffer.Length - buffered, (maxSseEventBytes + 1) - buffered);
-                int bytesRead;
-                watchdog.BeforeRead();
-                var readSucceeded = false;
-                try
-                {
-                    bytesRead = await stream.ReadAsync(buffer.AsMemory(buffered, maxBytesToRead), watchdog.Token).ConfigureAwait(false);
-                    readSucceeded = true;
-                }
-                finally
-                {
-                    watchdog.AfterRead(readSucceeded);
-                }
+                var bytesRead = await watchdog.ReadAsync(stream, buffer.AsMemory(buffered, maxBytesToRead)).ConfigureAwait(false);
 
                 if (bytesRead == 0)
                 {
@@ -115,14 +104,14 @@ internal static class GeminiStreamReader
                     {
                         sawSseEvent = true;
                         var response = DeserializeUtf8Chunk(dataBuffer.WrittenSpan, statusCode);
-                        dataBuffer.Clear();
+                        dataBuffer.ResetWrittenCount();
                         yield return response;
                     }
                     else if (!sawSseEvent && nonSseBuffer is { WrittenCount: > 0 })
                     {
                         yield return DeserializeUtf8Chunk(nonSseBuffer.WrittenSpan, statusCode);
                     }
-                    else if (isFirstLine)
+                    else if (!sawSseEvent)
                     {
                         throw new GeminiApiException("Received an empty Gemini streaming response body.", statusCode);
                     }
@@ -166,8 +155,6 @@ internal static class GeminiStreamReader
         }
         finally
         {
-            dataBuffer?.Dispose();
-            nonSseBuffer?.Dispose();
             ArrayPool<byte>.Shared.Return(buffer);
         }
     }
@@ -180,8 +167,8 @@ internal static class GeminiStreamReader
         ref bool skipLeadingLf,
         ref bool isFirstLine,
         ref bool sawSseEvent,
-        ref PooledByteBufferWriter? dataBuffer,
-        ref PooledByteBufferWriter? nonSseBuffer,
+        ref ArrayBufferWriter<byte>? dataBuffer,
+        ref ArrayBufferWriter<byte>? nonSseBuffer,
         HttpStatusCode statusCode,
         int maxSseEventBytes,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out GenerateContentResponse? response)
@@ -231,7 +218,7 @@ internal static class GeminiStreamReader
             if (ProcessSseLine(line, statusCode, maxSseEventBytes, ref isFirstLine, ref sawSseEvent, ref dataBuffer, ref nonSseBuffer))
             {
                 response = DeserializeUtf8Chunk(dataBuffer!.WrittenSpan, statusCode);
-                dataBuffer.Clear();
+                dataBuffer.ResetWrittenCount();
                 return true;
             }
         }
@@ -249,8 +236,8 @@ internal static class GeminiStreamReader
         int maxSseEventBytes,
         ref bool isFirstLine,
         ref bool sawSseEvent,
-        ref PooledByteBufferWriter? dataBuffer,
-        ref PooledByteBufferWriter? nonSseBuffer)
+        ref ArrayBufferWriter<byte>? dataBuffer,
+        ref ArrayBufferWriter<byte>? nonSseBuffer)
     {
         if (isFirstLine)
         {
@@ -287,7 +274,7 @@ internal static class GeminiStreamReader
                 throw new GeminiApiException("An SSE event exceeded the maximum allowed length.", statusCode);
             }
 
-            dataBuffer ??= new PooledByteBufferWriter(1024);
+            dataBuffer ??= new ArrayBufferWriter<byte>(1024);
             if (separatorBytes > 0)
             {
                 dataBuffer.GetSpan(1)[0] = (byte)'\n';
@@ -334,7 +321,7 @@ internal static class GeminiStreamReader
         // Cap buffered non-SSE bytes at MaxNonSseBytes to prevent unbounded memory growth on unexpected responses.
         if (!sawSseEvent)
         {
-            nonSseBuffer ??= new PooledByteBufferWriter(256);
+            nonSseBuffer ??= new ArrayBufferWriter<byte>(256);
             var remaining = MaxNonSseBytes - nonSseBuffer.WrittenCount;
             if (remaining > 0)
             {
@@ -584,7 +571,7 @@ internal static class GeminiStreamReader
         HttpStatusCode statusCode,
         StreamIdleWatchdog watchdog) : Stream
     {
-        private PooledByteBufferWriter? _recorded = new(256);
+        private ArrayBufferWriter<byte>? _recorded = new(256);
         private long _currentElementBytes;
 
         public ReadOnlySpan<byte> WrittenSpan => _recorded is not null ? _recorded.WrittenSpan : ReadOnlySpan<byte>.Empty;
@@ -597,7 +584,6 @@ internal static class GeminiStreamReader
 
         public void StopRecording()
         {
-            _recorded?.Dispose();
             _recorded = null;
         }
 
@@ -612,18 +598,7 @@ internal static class GeminiStreamReader
                     destination = destination[..remaining];
                 }
 
-                int read;
-                watchdog.BeforeRead();
-                var readSucceeded = false;
-                try
-                {
-                    read = await inner.ReadAsync(destination, watchdog.Token).ConfigureAwait(false);
-                    readSucceeded = true;
-                }
-                finally
-                {
-                    watchdog.AfterRead(readSucceeded);
-                }
+                var read = await watchdog.ReadAsync(inner, destination).ConfigureAwait(false);
 
                 if (read == 0)
                 {
@@ -642,18 +617,7 @@ internal static class GeminiStreamReader
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
-            int read;
-            watchdog.BeforeRead();
-            var readSucceeded = false;
-            try
-            {
-                read = await inner.ReadAsync(buffer, watchdog.Token).ConfigureAwait(false);
-                readSucceeded = true;
-            }
-            finally
-            {
-                watchdog.AfterRead(readSucceeded);
-            }
+            var read = await watchdog.ReadAsync(inner, buffer).ConfigureAwait(false);
 
             if (read > 0)
             {

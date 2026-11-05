@@ -1,3 +1,4 @@
+using System.Text.Json;
 using GeminiGatewayClient.Models;
 
 namespace GeminiGatewayClient;
@@ -29,6 +30,12 @@ public interface IGeminiClient
     /// falling back to <see cref="DefaultModel"/>), or <c>null</c>.
     /// </summary>
     string? DefaultEmbeddingModel => DefaultModel;
+
+    /// <summary>
+    /// Serializer options for tool arguments and results (<see cref="GeminiClientOptions.ToolSerializerOptions"/>), or <c>null</c>.
+    /// A decorator should forward this so its chat client keeps the caller's options.
+    /// </summary>
+    JsonSerializerOptions? ToolSerializerOptions => null;
 
     /// <summary>
     /// Calls <c>:generateContent</c> and returns the complete response.

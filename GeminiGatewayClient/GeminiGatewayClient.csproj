@@ -31,7 +31,6 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="GeminiGatewayClient.Tests" />
-    <InternalsVisibleTo Include="GeminiGatewayClient.Benchmarks" />
   </ItemGroup>
 
   <ItemGroup>

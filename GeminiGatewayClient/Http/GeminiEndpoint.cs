@@ -11,13 +11,6 @@ internal sealed class GeminiEndpoint
     private const string ModelsSegment = "models/";
 
     private readonly Uri _baseUri;
-    private readonly string? _defaultResourcePath;
-    private readonly string? _defaultEmbeddingResourcePath;
-    private readonly Uri? _defaultGenerateContentUri;
-    private readonly Uri? _defaultStreamSseUri;
-    private readonly Uri? _defaultStreamJsonUri;
-    private readonly Uri? _defaultEmbedContentUri;
-    private readonly Uri? _defaultBatchEmbedContentsUri;
 
     private GeminiEndpoint(Uri baseUri, string? defaultModel, string? defaultEmbeddingModel)
     {
@@ -25,20 +18,9 @@ internal sealed class GeminiEndpoint
         DefaultModel = defaultModel;
         DefaultEmbeddingModel = defaultEmbeddingModel ?? defaultModel;
 
-        if (ToResourcePath(defaultModel) is { } defaultResourcePath)
-        {
-            _defaultResourcePath = defaultResourcePath;
-            _defaultGenerateContentUri = BuildOperationUri(_baseUri, defaultResourcePath, "generateContent", serverSentEvents: false);
-            _defaultStreamSseUri = BuildOperationUri(_baseUri, defaultResourcePath, "streamGenerateContent", serverSentEvents: true);
-            _defaultStreamJsonUri = BuildOperationUri(_baseUri, defaultResourcePath, "streamGenerateContent", serverSentEvents: false);
-        }
-
-        if (ToResourcePath(DefaultEmbeddingModel) is { } defaultEmbeddingResourcePath)
-        {
-            _defaultEmbeddingResourcePath = defaultEmbeddingResourcePath;
-            _defaultEmbedContentUri = BuildOperationUri(_baseUri, defaultEmbeddingResourcePath, "embedContent", serverSentEvents: false);
-            _defaultBatchEmbedContentsUri = BuildOperationUri(_baseUri, defaultEmbeddingResourcePath, "batchEmbedContents", serverSentEvents: false);
-        }
+        // Reports an invalid configured model at startup rather than on the first call.
+        _ = ToResourcePath(DefaultModel);
+        _ = ToResourcePath(DefaultEmbeddingModel);
     }
 
     /// <summary>
@@ -102,20 +84,6 @@ internal sealed class GeminiEndpoint
     /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultModel"/> is set.</exception>
     public Uri GetOperationUri(string? model, string operation, bool serverSentEvents)
     {
-        if ((string.IsNullOrWhiteSpace(model) || string.Equals(model, DefaultModel, StringComparison.Ordinal)) &&
-            _defaultGenerateContentUri is not null)
-        {
-            if (!serverSentEvents && string.Equals(operation, "generateContent", StringComparison.Ordinal))
-            {
-                return _defaultGenerateContentUri;
-            }
-
-            if (string.Equals(operation, "streamGenerateContent", StringComparison.Ordinal))
-            {
-                return serverSentEvents ? _defaultStreamSseUri! : _defaultStreamJsonUri!;
-            }
-        }
-
         var resourcePath = ResolveResourcePath(model);
         return BuildOperationUri(_baseUri, resourcePath, operation, serverSentEvents);
     }
@@ -134,21 +102,6 @@ internal sealed class GeminiEndpoint
     /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultEmbeddingModel"/> is set.</exception>
     public Uri GetEmbeddingOperationUri(string? model, string operation, out string resourcePath)
     {
-        if ((string.IsNullOrWhiteSpace(model) || string.Equals(model, DefaultEmbeddingModel, StringComparison.Ordinal)) &&
-            _defaultEmbedContentUri is not null)
-        {
-            resourcePath = _defaultEmbeddingResourcePath!;
-            if (string.Equals(operation, "embedContent", StringComparison.Ordinal))
-            {
-                return _defaultEmbedContentUri;
-            }
-
-            if (string.Equals(operation, "batchEmbedContents", StringComparison.Ordinal))
-            {
-                return _defaultBatchEmbedContentsUri!;
-            }
-        }
-
         resourcePath = ResolveEmbeddingResourcePath(model);
         return BuildOperationUri(_baseUri, resourcePath, operation, serverSentEvents: false);
     }
@@ -159,12 +112,6 @@ internal sealed class GeminiEndpoint
     /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultModel"/> is set.</exception>
     public string ResolveResourcePath(string? model)
     {
-        if ((string.IsNullOrWhiteSpace(model) || string.Equals(model, DefaultModel, StringComparison.Ordinal)) &&
-            _defaultResourcePath is not null)
-        {
-            return _defaultResourcePath;
-        }
-
         return ToResourcePath(string.IsNullOrWhiteSpace(model) ? DefaultModel : model)
             ?? throw new InvalidOperationException(
                 "No model was specified. Set GeminiClientOptions.Model or pass a model to the call (ChatOptions.ModelId for IChatClient, EmbeddingGenerationOptions.ModelId for IEmbeddingGenerator).");
@@ -176,12 +123,6 @@ internal sealed class GeminiEndpoint
     /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultEmbeddingModel"/> is set.</exception>
     public string ResolveEmbeddingResourcePath(string? model)
     {
-        if ((string.IsNullOrWhiteSpace(model) || string.Equals(model, DefaultEmbeddingModel, StringComparison.Ordinal)) &&
-            _defaultEmbeddingResourcePath is not null)
-        {
-            return _defaultEmbeddingResourcePath;
-        }
-
         return ToResourcePath(string.IsNullOrWhiteSpace(model) ? DefaultEmbeddingModel : model)
             ?? throw new InvalidOperationException(
                 "No embedding model was specified. Set GeminiClientOptions.EmbeddingModel (or GeminiClientOptions.Model) or pass a model to the call (EmbeddingGenerationOptions.ModelId for IEmbeddingGenerator).");

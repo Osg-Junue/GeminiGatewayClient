@@ -25,6 +25,12 @@ public static class GeminiChatPropertyNames
     public const string SynthesizedCallId = "gemini.synthesizedCallId";
 
     /// <summary>
+    /// <c>AdditionalProperties</c> flag on a signature-only <c>TextReasoningContent</c> whose signature
+    /// belongs to the preceding streamed text, unlike a standalone signature part, which stays a separate part when resent.
+    /// </summary>
+    public const string SignatureCompanion = "gemini.signatureCompanion";
+
+    /// <summary>
     /// <c>AIContent.AdditionalProperties</c> key holding <see cref="Models.ExecutableCode.Language"/> so code execution parts
     /// survive chat history serialization when <c>RawRepresentation</c> is dropped.
     /// </summary>

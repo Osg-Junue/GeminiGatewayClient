@@ -53,6 +53,25 @@ internal sealed class StreamIdleWatchdog : IDisposable
         !_callerToken.IsCancellationRequested;
 
     /// <summary>
+    /// Reads from <paramref name="stream"/> with the idle timer armed only for the duration of the read.
+    /// </summary>
+    public async ValueTask<int> ReadAsync(Stream stream, Memory<byte> buffer)
+    {
+        BeforeRead();
+        var succeeded = false;
+        try
+        {
+            var read = await stream.ReadAsync(buffer, Token).ConfigureAwait(false);
+            succeeded = true;
+            return read;
+        }
+        finally
+        {
+            AfterRead(succeeded);
+        }
+    }
+
+    /// <summary>
     /// Arms the idle timer immediately before awaiting a stream read, refreshing the internal token source if the previous
     /// timer callback fired in the race window after <see cref="AfterRead"/> disarmed it.
     /// </summary>

@@ -599,59 +599,19 @@ internal static class ChatOptionsMapper
 
         if (declarations is { Count: > 0 })
         {
-            if (existingFunctionTool?.FunctionDeclarations is { } existingDecls)
+            if (existingFunctionTool?.FunctionDeclarations is { } existingDeclarations)
             {
-                if (existingDecls is List<FunctionDeclaration> declList)
-                {
-                    declList.AddRange(declarations);
-                }
-                else if (existingDecls.IsReadOnly)
-                {
-                    existingFunctionTool.FunctionDeclarations = [.. existingDecls, .. declarations];
-                }
-                else
-                {
-                    foreach (var decl in declarations)
-                    {
-                        existingDecls.Add(decl);
-                    }
-                }
+                existingFunctionTool.FunctionDeclarations = [.. existingDeclarations, .. declarations];
             }
             else
             {
-                var functionTool = new Tool { FunctionDeclarations = declarations };
-                if (mappedTools is null)
-                {
-                    mappedTools = [functionTool];
-                }
-                else
-                {
-                    mappedTools.Insert(0, functionTool);
-                }
+                (mappedTools ??= []).Insert(0, new Tool { FunctionDeclarations = declarations });
             }
         }
 
         if (mappedTools is { Count: > 0 })
         {
-            if (existingTools is null)
-            {
-                request.Tools = mappedTools;
-            }
-            else if (existingTools is List<Tool> toolList)
-            {
-                toolList.AddRange(mappedTools);
-            }
-            else if (existingTools.IsReadOnly)
-            {
-                request.Tools = [.. existingTools, .. mappedTools];
-            }
-            else
-            {
-                foreach (var mappedTool in mappedTools)
-                {
-                    existingTools.Add(mappedTool);
-                }
-            }
+            request.Tools = [.. existingTools ?? [], .. mappedTools];
         }
     }
 

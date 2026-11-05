@@ -51,13 +51,11 @@ public sealed class AdversarialM1VerificationTests
             ]
         };
 
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
         var update = ChatResponseMapper.ToChatResponseUpdate(
             chunk,
             DefaultModel,
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
 
         var textContents = update.Contents.OfType<TextContent>().ToList();
         var tc = Assert.Single(textContents);
@@ -111,13 +109,11 @@ public sealed class AdversarialM1VerificationTests
             ]
         };
 
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
         var update = ChatResponseMapper.ToChatResponseUpdate(
             chunk,
             DefaultModel,
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
 
         var textContents = update.Contents.OfType<TextContent>().ToList();
         Assert.Equal(3, textContents.Count);
@@ -175,13 +171,11 @@ public sealed class AdversarialM1VerificationTests
             ]
         };
 
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
         var update = ChatResponseMapper.ToChatResponseUpdate(
             chunk,
             DefaultModel,
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
 
         var textContents = update.Contents.OfType<TextContent>().ToList();
         Assert.Equal(3, textContents.Count);
@@ -244,14 +238,13 @@ public sealed class AdversarialM1VerificationTests
             ]
         };
 
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
 
-        var update1 = ChatResponseMapper.ToChatResponseUpdate(chunk1, DefaultModel, ref streamedSegments, ref cumulativeBytes);
-        Assert.Equal(11, cumulativeBytes);
+        var update1 = ChatResponseMapper.ToChatResponseUpdate(chunk1, DefaultModel, stream);
+        Assert.Equal(11, stream.Utf8Bytes);
 
-        var update2 = ChatResponseMapper.ToChatResponseUpdate(chunk2, DefaultModel, ref streamedSegments, ref cumulativeBytes);
-        Assert.Equal(23, cumulativeBytes);
+        var update2 = ChatResponseMapper.ToChatResponseUpdate(chunk2, DefaultModel, stream);
+        Assert.Equal(23, stream.Utf8Bytes);
 
         // When aggregated via ToChatResponse(), the cumulative citation correctly attaches to the streamed text segments
         var aggregated = new[] { update1, update2 }.ToChatResponse();
@@ -315,13 +308,11 @@ public sealed class AdversarialM1VerificationTests
             ]
         };
 
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
         var update = ChatResponseMapper.ToChatResponseUpdate(
             chunk,
             DefaultModel,
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
 
         // Part 0 is not text; mapping should not crash and should produce FunctionCallContent and TextContent
         Assert.Contains(update.Contents, c => c is FunctionCallContent);
@@ -435,15 +426,13 @@ public sealed class AdversarialM1VerificationTests
             ]
         };
 
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
 
         // Must not throw ArgumentOutOfRangeException or IndexOutOfRangeException
         var update = ChatResponseMapper.ToChatResponseUpdate(
             chunk,
             DefaultModel,
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
 
         Assert.NotNull(update);
     }
@@ -483,14 +472,12 @@ public sealed class AdversarialM1VerificationTests
             ]
         };
 
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
 
         var update = ChatResponseMapper.ToChatResponseUpdate(
             chunk,
             DefaultModel,
-            ref streamedSegments,
-            ref cumulativeBytes);
+            stream);
 
         var tc = Assert.Single(update.Contents.OfType<TextContent>());
         var cite = Assert.Single(tc.Annotations!.OfType<CitationAnnotation>());
@@ -913,13 +900,12 @@ public sealed class AdversarialM1VerificationTests
             ]
         };
 
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeBytes = 0;
+        var stream = new ChatResponseMapper.StreamState();
 
-        var update1 = ChatResponseMapper.ToChatResponseUpdate(chunk1, DefaultModel, ref streamedSegments, ref cumulativeBytes);
+        var update1 = ChatResponseMapper.ToChatResponseUpdate(chunk1, DefaultModel, stream);
         Assert.Single(update1.Contents.OfType<TextContent>());
 
-        var update2 = ChatResponseMapper.ToChatResponseUpdate(chunk2, DefaultModel, ref streamedSegments, ref cumulativeBytes);
+        var update2 = ChatResponseMapper.ToChatResponseUpdate(chunk2, DefaultModel, stream);
         // In chunk 2, because there is no TextContent, a carrier AIContent is emitted
         var carrier = Assert.Single(update2.Contents);
         Assert.IsNotType<TextContent>(carrier);

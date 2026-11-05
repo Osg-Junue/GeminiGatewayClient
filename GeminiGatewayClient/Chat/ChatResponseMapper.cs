@@ -1,4 +1,4 @@
-using System.Buffers;
+using System.Net.Http.Headers;
 using System.Text;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
@@ -14,12 +14,22 @@ internal static class ChatResponseMapper
 
     internal readonly record struct StreamedTextSegment(TextContent Content, int StartByte, int EndByte);
 
+    /// <summary>
+    /// What a streamed response has produced so far. A later chunk's citations and finish reason depend on earlier chunks.
+    /// </summary>
+    internal sealed class StreamState
+    {
+        public List<StreamedTextSegment> Segments { get; } = [];
+
+        public int Utf8Bytes { get; set; }
+
+        public bool SawFunctionCall { get; set; }
+    }
+
     public static ChatResponse ToChatResponse(GenerateContentResponse response, string? modelId)
     {
         var candidate = response.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
-        List<StreamedTextSegment>? unusedSegments = null;
-        var unusedBytes = 0;
-        var contents = MapContents(candidate, isStreaming: false, trackStreamSegments: false, ref unusedSegments, ref unusedBytes, out var hasFunctionCall);
+        var contents = MapContents(candidate, stream: null, out var hasFunctionCall);
 
         var message = new ChatMessage(ChatRole.Assistant, contents)
         {
@@ -42,12 +52,12 @@ internal static class ChatResponseMapper
     /// Maps a streamed chunk. Usage is intentionally omitted: Gemini repeats cumulative <c>usageMetadata</c> on many chunks,
     /// and consumers sum every <see cref="UsageContent"/>; see <see cref="ToUsageUpdate"/>.
     /// </summary>
-    public static ChatResponseUpdate ToChatResponseUpdate(GenerateContentResponse chunk, string? modelId)
+    public static ChatResponseUpdate ToChatResponseUpdate(GenerateContentResponse chunk, string? modelId, StreamState? stream = null)
     {
+        stream ??= new StreamState();
         var candidate = chunk.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
-        List<StreamedTextSegment>? unusedSegments = null;
-        var unusedBytes = 0;
-        var contents = MapContents(candidate, isStreaming: true, trackStreamSegments: false, ref unusedSegments, ref unusedBytes, out var hasFunctionCall);
+        var contents = MapContents(candidate, stream, out var hasFunctionCall);
+        stream.SawFunctionCall |= hasFunctionCall;
 
         return new ChatResponseUpdate(ChatRole.Assistant, contents)
         {
@@ -55,31 +65,7 @@ internal static class ChatResponseMapper
             ResponseId = chunk.ResponseId,
             MessageId = chunk.ResponseId,
             ModelId = chunk.ModelVersion ?? candidate?.ModelVersion ?? modelId,
-            FinishReason = MapFinishReason(candidate?.FinishReason, chunk.BlockReason, hasFunctionCall),
-            AdditionalProperties = CreateResponseProperties(chunk.BlockReason, candidate?.GroundingMetadata)
-        };
-    }
-
-    /// <summary>
-    /// Maps a streamed chunk while tracking streamed <see cref="TextContent"/> segments and their cumulative UTF-8 byte ranges
-    /// so trailing <c>groundingMetadata</c> and <c>citationMetadata</c> attach to the corresponding text segment with valid local UTF-16 spans.
-    /// </summary>
-    internal static ChatResponseUpdate ToChatResponseUpdate(
-        GenerateContentResponse chunk,
-        string? modelId,
-        ref List<StreamedTextSegment>? streamedSegments,
-        ref int cumulativeUtf8Bytes)
-    {
-        var candidate = chunk.Candidates is { Count: > 0 } candidates ? candidates[0] : null;
-        var contents = MapContents(candidate, isStreaming: true, trackStreamSegments: true, ref streamedSegments, ref cumulativeUtf8Bytes, out var hasFunctionCall);
-
-        return new ChatResponseUpdate(ChatRole.Assistant, contents)
-        {
-            RawRepresentation = chunk,
-            ResponseId = chunk.ResponseId,
-            MessageId = chunk.ResponseId,
-            ModelId = chunk.ModelVersion ?? candidate?.ModelVersion ?? modelId,
-            FinishReason = MapFinishReason(candidate?.FinishReason, chunk.BlockReason, hasFunctionCall),
+            FinishReason = MapFinishReason(candidate?.FinishReason, chunk.BlockReason, stream.SawFunctionCall),
             AdditionalProperties = CreateResponseProperties(chunk.BlockReason, candidate?.GroundingMetadata)
         };
     }
@@ -103,13 +89,7 @@ internal static class ChatResponseMapper
         };
     }
 
-    private static List<AIContent> MapContents(
-        Candidate? candidate,
-        bool isStreaming,
-        bool trackStreamSegments,
-        ref List<StreamedTextSegment>? streamedSegments,
-        ref int cumulativeUtf8Bytes,
-        out bool hasFunctionCall)
+    private static List<AIContent> MapContents(Candidate? candidate, StreamState? stream, out bool hasFunctionCall)
     {
         hasFunctionCall = false;
         if (candidate is null)
@@ -127,7 +107,7 @@ internal static class ChatResponseMapper
             }
 
             var annotatedOnly = new List<AIContent>(1);
-            AttachCandidateAnnotations(candidate, parts, annotatedOnly, streamedSegments, isStreaming);
+            AttachCandidateAnnotations(candidate, parts, annotatedOnly, stream);
             return annotatedOnly;
         }
 
@@ -166,29 +146,27 @@ internal static class ChatResponseMapper
                     var textContent = new TextContent(text) { RawRepresentation = part };
                     AttachThoughtSignature(textContent, part.ThoughtSignature);
                     contents.Add(textContent);
-                    if (isStreaming)
+                    if (stream is not null)
                     {
-                        if (trackStreamSegments)
-                        {
-                            var startByte = cumulativeUtf8Bytes;
-                            cumulativeUtf8Bytes += Encoding.UTF8.GetByteCount(text);
-                            (streamedSegments ??= new List<StreamedTextSegment>(4)).Add(
-                                new StreamedTextSegment(textContent, startByte, cumulativeUtf8Bytes));
-                        }
+                        var startByte = stream.Utf8Bytes;
+                        stream.Utf8Bytes += Encoding.UTF8.GetByteCount(text);
+                        stream.Segments.Add(new StreamedTextSegment(textContent, startByte, stream.Utf8Bytes));
 
+                        // Merging streamed text drops AdditionalProperties, so the signature also travels on a companion content.
                         if (!string.IsNullOrEmpty(part.ThoughtSignature))
                         {
                             contents.Add(new TextReasoningContent(string.Empty)
                             {
                                 ProtectedData = part.ThoughtSignature,
-                                RawRepresentation = part
+                                RawRepresentation = part,
+                                AdditionalProperties = new AdditionalPropertiesDictionary { [GeminiChatPropertyNames.SignatureCompanion] = true }
                             });
                         }
                     }
                     break;
 
                 case { InlineData: { Data.Length: > 0 } blob }:
-                    var dataContent = new DataContent(blob.Data, string.IsNullOrWhiteSpace(blob.MimeType) ? MimeTypes.ApplicationOctetStream : blob.MimeType)
+                    var dataContent = new DataContent(blob.Data, ToValidMediaType(blob.MimeType))
                     {
                         RawRepresentation = part
                     };
@@ -197,7 +175,7 @@ internal static class ChatResponseMapper
                     break;
 
                 case { FileData: { FileUri.Length: > 0 } file } when Uri.TryCreate(file.FileUri, UriKind.RelativeOrAbsolute, out var fileUri):
-                    var uriContent = new UriContent(fileUri, string.IsNullOrWhiteSpace(file.MimeType) ? MimeTypes.ApplicationOctetStream : file.MimeType)
+                    var uriContent = new UriContent(fileUri, ToValidMediaType(file.MimeType))
                     {
                         RawRepresentation = part
                     };
@@ -222,11 +200,17 @@ internal static class ChatResponseMapper
 
         if (hasAnnotations)
         {
-            AttachCandidateAnnotations(candidate, parts, contents, streamedSegments, isStreaming);
+            AttachCandidateAnnotations(candidate, parts, contents, stream);
         }
 
         return contents;
     }
+
+    /// <summary>
+    /// The content types reject a value they cannot parse, and one bad part must not fail the rest of a response.
+    /// </summary>
+    private static string ToValidMediaType(string? mediaType) =>
+        MediaTypeHeaderValue.TryParse(mediaType, out _) ? mediaType! : MimeTypes.ApplicationOctetStream;
 
     /// <summary>
     /// An empty <c>text</c> key marks a trailing signature carrier; without one, unknown fields mean a part kind this client does not model.
@@ -242,11 +226,11 @@ internal static class ChatResponseMapper
         Candidate candidate,
         IList<Part>? parts,
         List<AIContent> contents,
-        List<StreamedTextSegment>? streamedSegments = null,
-        bool isStreaming = false)
+        StreamState? stream)
     {
-        var needsRealtimeCarrier = isStreaming && !ContainsTextContent(contents);
-        var primaryText = FindPrimaryTextContent(contents, parts, streamedSegments, allowCreateEmpty: !isStreaming);
+        var streamedSegments = stream?.Segments;
+        var needsRealtimeCarrier = stream is not null && !ContainsTextContent(contents);
+        var primaryText = FindPrimaryTextContent(contents, parts, streamedSegments, allowCreateEmpty: stream is null);
         List<AIAnnotation>? carrierAnnotations = needsRealtimeCarrier ? [] : null;
 
         if (candidate.CitationMetadata?.Citations is { Count: > 0 } citations)
@@ -296,8 +280,7 @@ internal static class ChatResponseMapper
             var supports = grounding.GroundingSupports;
             var chunkCount = chunks?.Count ?? 0;
 
-            ulong referencedChunksMask = 0;
-            HashSet<int>? extraReferencedChunks = null;
+            var referencedChunks = new HashSet<int>();
 
             if (supports is { Count: > 0 })
             {
@@ -335,14 +318,7 @@ internal static class ChatResponseMapper
                             }
 
                             attachedToChunk = true;
-                            if ((uint)chunkIndex < 64)
-                            {
-                                referencedChunksMask |= 1UL << chunkIndex;
-                            }
-                            else
-                            {
-                                (extraReferencedChunks ??= []).Add(chunkIndex);
-                            }
+                            referencedChunks.Add(chunkIndex);
 
                             for (var t = 0; t < targets.Count; t++)
                             {
@@ -422,11 +398,7 @@ internal static class ChatResponseMapper
             {
                 for (var i = 0; i < chunkCount; i++)
                 {
-                    var isReferenced = i < 64
-                        ? (referencedChunksMask & (1UL << i)) != 0
-                        : extraReferencedChunks?.Contains(i) == true;
-
-                    if (isReferenced || chunks[i] is not { } chunk)
+                    if (referencedChunks.Contains(i) || chunks[i] is not { } chunk)
                     {
                         continue;
                     }
@@ -709,7 +681,7 @@ internal static class ChatResponseMapper
 
     /// <summary>
     /// Converts Gemini UTF-8 byte offsets (<paramref name="startByte"/>..<paramref name="endByte"/>) into a UTF-16
-    /// <see cref="TextSpanAnnotatedRegion"/> without allocating intermediate byte arrays.
+    /// <see cref="TextSpanAnnotatedRegion"/>.
     /// </summary>
     private static bool TryCreateRegion(
         string? text,
@@ -717,97 +689,47 @@ internal static class ChatResponseMapper
         int? endByte,
         out TextSpanAnnotatedRegion region)
     {
+        region = null!;
         if (startByte is null && endByte is null)
         {
-            region = null!;
             return false;
         }
 
+        text ??= string.Empty;
+        var length = Encoding.UTF8.GetByteCount(text);
         var start = startByte ?? 0;
-        if (start < 0 || (endByte is { } eb && eb < start))
+        if (start < 0 || start > length || endByte < start || (length == 0 && endByte > 0))
         {
-            region = null!;
             return false;
         }
 
-        if (string.IsNullOrEmpty(text))
+        region = new TextSpanAnnotatedRegion
         {
-            if (start == 0 && (endByte is null or 0))
-            {
-                region = new TextSpanAnnotatedRegion { StartIndex = 0, EndIndex = 0 };
-                return true;
-            }
+            StartIndex = ToUtf16Index(text, start),
+            EndIndex = ToUtf16Index(text, Math.Min(endByte ?? length, length))
+        };
+        return true;
+    }
 
-            region = null!;
-            return false;
-        }
-
-        if (Ascii.IsValid(text))
+    /// <summary>
+    /// Returns the UTF-16 index of the first character at or after <paramref name="utf8Offset"/>.
+    /// </summary>
+    private static int ToUtf16Index(string text, int utf8Offset)
+    {
+        var bytes = 0;
+        var chars = 0;
+        foreach (var rune in text.EnumerateRunes())
         {
-            if (start > text.Length)
+            if (bytes >= utf8Offset)
             {
-                region = null!;
-                return false;
-            }
-
-            var end = endByte is { } asciiEnd ? Math.Min(asciiEnd, text.Length) : text.Length;
-            region = new TextSpanAnnotatedRegion { StartIndex = start, EndIndex = end };
-            return true;
-        }
-
-        var span = text.AsSpan();
-        var bytePos = 0;
-        var charPos = 0;
-        var charStart = -1;
-        var charEnd = -1;
-        var targetEnd = endByte ?? int.MaxValue;
-
-        while (charPos < span.Length)
-        {
-            if (charStart < 0 && bytePos >= start)
-            {
-                charStart = charPos;
-            }
-
-            if (bytePos >= targetEnd)
-            {
-                charEnd = charPos;
                 break;
             }
 
-            if (Rune.DecodeFromUtf16(span[charPos..], out var rune, out var charsConsumed) != OperationStatus.Done)
-            {
-                // Unpaired surrogate: UTF-8 replacement character is 3 bytes and 1 UTF-16 code unit.
-                bytePos += 3;
-                charPos += 1;
-            }
-            else
-            {
-                bytePos += rune.Utf8SequenceLength;
-                charPos += charsConsumed;
-            }
+            bytes += rune.Utf8SequenceLength;
+            chars += rune.Utf16SequenceLength;
         }
 
-        if (charStart < 0)
-        {
-            if (bytePos >= start)
-            {
-                charStart = span.Length;
-            }
-            else
-            {
-                region = null!;
-                return false;
-            }
-        }
-
-        if (charEnd < 0)
-        {
-            charEnd = span.Length;
-        }
-
-        region = new TextSpanAnnotatedRegion { StartIndex = charStart, EndIndex = charEnd };
-        return true;
+        return chars;
     }
 
     private static void AttachCodeExecutionProperties(AIContent content, Part part)
@@ -893,7 +815,6 @@ internal static class ChatResponseMapper
             FinishReason.Safety or FinishReason.Recitation or FinishReason.BlockList
                 or FinishReason.ProhibitedContent or FinishReason.Spii or FinishReason.ImageSafety
                 or FinishReason.ImageProhibitedContent or FinishReason.ImageRecitation => ChatFinishReason.ContentFilter,
-            FinishReason.MalformedFunctionCall or FinishReason.UnexpectedToolCall or FinishReason.TooManyToolCalls => ChatFinishReason.ToolCalls,
             _ => null
         };
     }

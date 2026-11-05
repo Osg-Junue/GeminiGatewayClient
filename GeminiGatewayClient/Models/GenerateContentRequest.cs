@@ -9,8 +9,6 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class GenerateContentRequest
 {
-    private IList<Content>? _contents;
-
     /// <summary>
     /// Optional. Resource name of cached context content to prepend to the conversation.
     /// Format: <c>cachedContents/{cachedContent}</c> or <c>projects/{project}/locations/{location}/cachedContents/{cachedContent}</c>.
@@ -24,11 +22,7 @@ public sealed class GenerateContentRequest
     /// Each <see cref="Content"/> item specifies a <see cref="Content.Role"/> and one or more <see cref="Content.Parts"/>.
     /// </summary>
     [JsonPropertyName("contents")]
-    public IList<Content> Contents
-    {
-        get => _contents ??= [];
-        set => _contents = value;
-    }
+    public IList<Content> Contents { get => field ??= []; set; }
 
     /// <summary>
     /// Optional. Developer-provided system instructions for the model. Only <see cref="Content.Parts"/> is used;
@@ -162,7 +156,7 @@ public sealed class GenerateContentRequest
     /// <exception cref="ArgumentException">The request is invalid.</exception>
     internal void Validate(string paramName = "request")
     {
-        var contents = _contents;
+        var contents = Contents;
         if (contents is null || contents.Count == 0)
         {
             throw new ArgumentException("GenerateContentRequest.Contents must contain at least one Content item.", paramName);

@@ -28,6 +28,15 @@ jobs:
       - name: Run unit tests
         run: dotnet test --no-build -c Release --verbosity normal
 
+      - name: Install Native AOT prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Publish Native AOT smoke test (warnings as errors)
+        run: dotnet publish tests/GeminiGatewayClient.AotSmoke -c Release -r linux-x64 -o artifacts/aot-smoke
+
+      - name: Run Native AOT smoke test
+        run: artifacts/aot-smoke/GeminiGatewayClient.AotSmoke
+
       - name: Pack NuGet package
         run: dotnet pack GeminiGatewayClient/GeminiGatewayClient.csproj --no-build -c Release -o artifacts
 

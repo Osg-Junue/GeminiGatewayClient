@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed (Breaking)
+- **Tool arguments and results are serialized by System.Text.Json whenever type metadata exists**: custom converters, `NumberHandling`, and key policies now apply inside dictionaries and collections. `TimeOnly` values use the System.Text.Json format, and a `List<KeyValuePair<,>>` becomes an array of `key`/`value` objects. A key/value sequence that is neither a dictionary nor described by metadata now throws `InvalidOperationException`.
+- **`HostedFileContent` in a chat message now throws `NotSupportedException`** instead of being dropped silently. Use `UriContent` with the uploaded file's URI and media type.
+- **A standalone `thoughtSignature` part stays a separate part when resent**, because Gemini forbids merging a signed part with an unsigned one. A signature that arrived on a text part still returns to that text after streaming aggregation.
+- **`MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL`, and `TOO_MANY_TOOL_CALLS` no longer map to `ChatFinishReason.ToolCalls`**: `FinishReason` is `null` for them, and the original value remains on `RawRepresentation`.
+- **A streaming response containing only SSE comments now throws `GeminiApiException`** like an empty body, instead of completing with no updates.
+
+### Added
+- `IGeminiClient.ToolSerializerOptions`, so a decorator can forward the caller's tool serializer options.
+- `GeminiChatPropertyNames.SignatureCompanion`, which marks a signature that belongs to the preceding streamed text.
+- A Native AOT smoke test that CI publishes with warnings as errors and runs as a native binary.
+
+### Fixed
+- Streaming now reports `ChatFinishReason.ToolCalls` when a later chunk carries `STOP` after a function call, matching non-streaming responses.
+- A part with an unparsable MIME type no longer fails the whole response; its content uses `application/octet-stream`.
+- A function result whose synthesized call was trimmed from the history keeps its function name.
+
+### Removed
+- Allocation-focused code, allocation assertions, and the benchmark project. The library now favors plain code over micro-optimization.
+
 ## [3.0.0] - 2026-11-05
 
 ### Changed (Breaking)
