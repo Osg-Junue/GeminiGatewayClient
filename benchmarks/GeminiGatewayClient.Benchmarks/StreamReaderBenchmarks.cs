@@ -190,6 +190,34 @@ public class StreamReaderBenchmarks
     }
 
     [Benchmark]
+    public async Task<int> ReadServerSentEvents_Fragmented_64B()
+    {
+        await using var stream = new ChunkedMemoryStream(_sseSimpleTextPayload, 64);
+        using var watchdog = new StreamIdleWatchdog(GeminiClientOptions.DefaultStreamIdleTimeout, CancellationToken.None);
+        var count = 0;
+        await foreach (var _ in GeminiStreamReader.ReadAsync(stream, GeminiStreamingFormat.ServerSentEvents, HttpStatusCode.OK, watchdog))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    [Benchmark]
+    public async Task<int> ReadServerSentEvents_Fragmented_64B_AsyncReads()
+    {
+        await using var stream = new ChunkedMemoryStream(_sseSimpleTextPayload, 64, yieldEachRead: true);
+        using var watchdog = new StreamIdleWatchdog(GeminiClientOptions.DefaultStreamIdleTimeout, CancellationToken.None);
+        var count = 0;
+        await foreach (var _ in GeminiStreamReader.ReadAsync(stream, GeminiStreamingFormat.ServerSentEvents, HttpStatusCode.OK, watchdog))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    [Benchmark]
     public async Task<int> ReadJsonArray_SimpleText()
     {
         using var stream = new MemoryStream(_jsonArraySimpleTextPayload, writable: false);

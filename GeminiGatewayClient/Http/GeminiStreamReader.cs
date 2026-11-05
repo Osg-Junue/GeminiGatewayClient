@@ -74,11 +74,6 @@ internal static class GeminiStreamReader
 
                 if (buffered == buffer.Length)
                 {
-                    if (buffer.Length >= maxSseEventBytes + 1)
-                    {
-                        throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
-                    }
-
                     var newCapacity = (int)Math.Min((long)buffer.Length * 2, (long)maxSseEventBytes + 1);
                     var larger = ArrayPool<byte>.Shared.Rent(newCapacity);
                     buffer.AsSpan(0, buffered).CopyTo(larger);
@@ -105,11 +100,6 @@ internal static class GeminiStreamReader
                     if (buffered > start)
                     {
                         var tailLine = buffer.AsSpan(start, buffered - start);
-                        if (skipLeadingLf && !tailLine.IsEmpty && tailLine[0] == (byte)'\n')
-                        {
-                            tailLine = tailLine[1..];
-                        }
-
                         if (tailLine.Length > maxSseEventBytes)
                         {
                             throw new GeminiApiException("An SSE line exceeded the maximum allowed length.", statusCode);
@@ -238,45 +228,6 @@ internal static class GeminiStreamReader
 
             searchStart = start;
 
-            // Fast path: when no multi-line data payload is currently buffered and the immediately following
-            // byte in the read buffer is the blank-line terminator (\n or \r), deserialize directly from the
-            // read buffer slice without copying through dataBuffer or scanning for the second newline.
-            if (dataBuffer is not { WrittenCount: > 0 } &&
-                start < buffered &&
-                (buffer[start] == (byte)'\n' || buffer[start] == (byte)'\r'))
-            {
-                if (TryExtractDataPayload(ref line, ref isFirstLine, ref sawSseEvent, out var payload))
-                {
-                    var blankDelimiter = buffer[start++];
-                    if (blankDelimiter == (byte)'\r')
-                    {
-                        if (start < buffered && buffer[start] == (byte)'\n')
-                        {
-                            start++;
-                        }
-                        else if (start == buffered)
-                        {
-                            skipLeadingLf = true;
-                        }
-                    }
-
-                    searchStart = start;
-
-                    if (payload.IsEmpty || payload.SequenceEqual("[DONE]"u8))
-                    {
-                        continue;
-                    }
-
-                    if (payload.Length > maxSseEventBytes)
-                    {
-                        throw new GeminiApiException("An SSE event exceeded the maximum allowed length.", statusCode);
-                    }
-
-                    response = DeserializeUtf8Chunk(payload, statusCode);
-                    return true;
-                }
-            }
-
             if (ProcessSseLine(line, statusCode, maxSseEventBytes, ref isFirstLine, ref sawSseEvent, ref dataBuffer, ref nonSseBuffer))
             {
                 response = DeserializeUtf8Chunk(dataBuffer!.WrittenSpan, statusCode);
@@ -287,38 +238,6 @@ internal static class GeminiStreamReader
 
         response = null;
         return false;
-    }
-
-    private static bool TryExtractDataPayload(
-        ref ReadOnlySpan<byte> line,
-        ref bool isFirstLine,
-        ref bool sawSseEvent,
-        out ReadOnlySpan<byte> payload)
-    {
-        payload = default;
-        if (isFirstLine)
-        {
-            isFirstLine = false;
-            if (line.StartsWith("\uFEFF"u8))
-            {
-                line = line[3..];
-            }
-        }
-
-        if (!line.StartsWith("data:"u8))
-        {
-            return false;
-        }
-
-        sawSseEvent = true;
-        var p = line[5..];
-        if (!p.IsEmpty && p[0] == (byte)' ')
-        {
-            p = p[1..];
-        }
-
-        payload = p;
-        return true;
     }
 
     /// <summary>
@@ -333,8 +252,24 @@ internal static class GeminiStreamReader
         ref PooledByteBufferWriter? dataBuffer,
         ref PooledByteBufferWriter? nonSseBuffer)
     {
-        if (TryExtractDataPayload(ref line, ref isFirstLine, ref sawSseEvent, out var payload))
+        if (isFirstLine)
         {
+            isFirstLine = false;
+            if (line.StartsWith("\uFEFF"u8))
+            {
+                line = line[3..];
+            }
+        }
+
+        if (line.StartsWith("data:"u8))
+        {
+            sawSseEvent = true;
+            var payload = line[5..];
+            if (!payload.IsEmpty && payload[0] == (byte)' ')
+            {
+                payload = payload[1..];
+            }
+
             if (payload.SequenceEqual("[DONE]"u8))
             {
                 return false;
@@ -362,15 +297,6 @@ internal static class GeminiStreamReader
             payload.CopyTo(dataBuffer.GetSpan(payload.Length));
             dataBuffer.Advance(payload.Length);
             return false;
-        }
-
-        if (isFirstLine)
-        {
-            isFirstLine = false;
-            if (line.StartsWith("\uFEFF"u8))
-            {
-                line = line[3..];
-            }
         }
 
         if (line.IsEmpty)
@@ -446,6 +372,11 @@ internal static class GeminiStreamReader
         string? errorStreamMessage = null)
         where TResponse : class
     {
+        if (utf8Json.StartsWith("\uFEFF"u8))
+        {
+            utf8Json = utf8Json[3..];
+        }
+
         try
         {
             if (StartsWithJsonArray(utf8Json))
@@ -488,11 +419,6 @@ internal static class GeminiStreamReader
 
     private static bool StartsWithJsonArray(ReadOnlySpan<byte> utf8Json)
     {
-        if (utf8Json.StartsWith("\uFEFF"u8))
-        {
-            utf8Json = utf8Json[3..];
-        }
-
         var idx = utf8Json.IndexOfAnyExcept(s_whitespaceSearchValues);
         return idx >= 0 && utf8Json[idx] == (byte)'[';
     }
@@ -648,7 +574,8 @@ internal static class GeminiStreamReader
     /// <summary>
     /// Captures the initial bytes read from a JSON-array stream so non-array error objects (<c>{"error": ...}</c>)
     /// or gateway HTML pages returned with HTTP 200 can be diagnosed if <see cref="JsonSerializer.DeserializeAsyncEnumerable{TValue}(Stream, System.Text.Json.Serialization.Metadata.JsonTypeInfo{TValue}, CancellationToken)"/>
-    /// rejects the root token, while also enforcing the per-element byte limit.
+    /// rejects the root token, while also bounding the bytes read per element. The bound is approximate: it counts read
+    /// buffers between yields rather than tracking element boundaries, so it can differ from an element's size by up to one read.
     /// </summary>
     private sealed class PrefixRecordingStream(
         Stream inner,

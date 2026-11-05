@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using BenchmarkDotNet.Attributes;
 using GeminiGatewayClient.Chat;
 using GeminiGatewayClient.Models;
@@ -19,16 +20,20 @@ public class RequestPipelineBenchmarks
 {
     private const string ModelId = "gemini-2.5-flash";
 
-    [Params(1, 16, 64)]
+    // The smallest size is 3 so the tool scenarios contain a whole user/call/result turn.
+    [Params(3, 16, 64)]
     public int MessageCount { get; set; }
 
     private GeminiClient _client = null!;
     private IChatClient _chatClient = null!;
     private List<ChatMessage> _textHistory = null!;
     private List<ChatMessage> _toolHistory = null!;
+    private List<ChatMessage> _japaneseHistory = null!;
+    private List<ChatMessage> _largeArgumentHistory = null!;
     private GenerateContentRequest _textRequest = null!;
     private GenerateContentRequest _toolRequest = null!;
     private BatchEmbedContentsRequest _embedBatch = null!;
+    private GenerateContentRequest _schemaRequest = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -58,6 +63,24 @@ public class RequestPipelineBenchmarks
 
         _toolHistory.RemoveRange(MessageCount, _toolHistory.Count - MessageCount);
 
+        _japaneseHistory = new List<ChatMessage>(MessageCount);
+        for (var i = 0; i < MessageCount; i++)
+        {
+            _japaneseHistory.Add(new ChatMessage(
+                i % 2 == 0 ? ChatRole.User : ChatRole.Assistant,
+                $"{i + 1} 回目: 東京と京都の今週の天気予報について詳しく説明してください。観光に適した服装も教えてほしいです。🌸"));
+        }
+
+        _largeArgumentHistory = new List<ChatMessage>(MessageCount + 2);
+        for (var i = 0; _largeArgumentHistory.Count < MessageCount; i++)
+        {
+            _largeArgumentHistory.Add(new ChatMessage(ChatRole.User, $"Apply edit {i}."));
+            _largeArgumentHistory.Add(ReplayedLargeEdit(i));
+            _largeArgumentHistory.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent($"edit-{i}", "applied")]));
+        }
+
+        _largeArgumentHistory.RemoveRange(MessageCount, _largeArgumentHistory.Count - MessageCount);
+
         _textRequest = ChatRequestMapper.ToRequest(_textHistory, options: null, _chatClient, ModelId, AIJsonUtilities.DefaultOptions);
         _toolRequest = ChatRequestMapper.ToRequest(_toolHistory, options: null, _chatClient, ModelId, AIJsonUtilities.DefaultOptions);
 
@@ -68,6 +91,26 @@ public class RequestPipelineBenchmarks
         }
 
         _embedBatch = new BatchEmbedContentsRequest { Requests = embedRequests };
+
+        var properties = new Dictionary<string, Schema>(StringComparer.Ordinal);
+        for (var i = 0; i < 6; i++)
+        {
+            properties[$"property{i}"] = new Schema { Type = SchemaType.String };
+        }
+
+        var parameters = new Schema { Type = SchemaType.Object, Properties = properties };
+        var declarations = new List<FunctionDeclaration>(8);
+        for (var i = 0; i < 8; i++)
+        {
+            declarations.Add(new FunctionDeclaration { Name = $"tool_{i}", Parameters = parameters });
+        }
+
+        _schemaRequest = new GenerateContentRequest
+        {
+            Contents = [Content.FromText("hello")],
+            Tools = [new Tool { FunctionDeclarations = declarations }],
+            GenerationConfig = new GenerationConfig { ResponseSchema = parameters }
+        };
     }
 
     /// <summary>
@@ -76,6 +119,17 @@ public class RequestPipelineBenchmarks
     private static ChatMessage ReplayedToolCall(int index)
     {
         var json = $$$$"""{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"call-{{{{index}}}}","name":"get_forecast","args":{"city":"Tokyo","day":{{{{index}}}},"units":"celsius","detail":{"hourly":true}}},"thoughtSignature":"sig-{{{{index}}}}"}]}}]}""";
+        var response = JsonSerializer.Deserialize(json, GeminiJsonContext.Default.GenerateContentResponse)!;
+        return ChatResponseMapper.ToChatResponse(response, ModelId).Messages[0];
+    }
+
+    /// <summary>
+    /// An editor-style tool call: two multi-kilobyte escaped code strings, replayed unchanged on every later turn.
+    /// </summary>
+    private static ChatMessage ReplayedLargeEdit(int index)
+    {
+        var code = string.Concat(Enumerable.Repeat("""    var value = \"text\";\n""", 170));
+        var json = $$$$"""{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"edit-{{{{index}}}}","name":"replace_lines","args":{"path":"src/a.cs","expectedContent":"{{{{code}}}}","newContent":"{{{{code}}}}"}}}]}}]}""";
         var response = JsonSerializer.Deserialize(json, GeminiJsonContext.Default.GenerateContentResponse)!;
         return ChatResponseMapper.ToChatResponse(response, ModelId).Messages[0];
     }
@@ -92,6 +146,10 @@ public class RequestPipelineBenchmarks
         ChatRequestMapper.ToRequest(_toolHistory, options: null, _chatClient, ModelId, AIJsonUtilities.DefaultOptions);
 
     [Benchmark]
+    public GenerateContentRequest ToRequest_LargeArgumentReplay() =>
+        ChatRequestMapper.ToRequest(_largeArgumentHistory, options: null, _chatClient, ModelId, AIJsonUtilities.DefaultOptions);
+
+    [Benchmark]
     public void Validate_TextHistory() => _textRequest.Validate();
 
     [Benchmark]
@@ -101,10 +159,19 @@ public class RequestPipelineBenchmarks
     public void Validate_EmbedBatch() => _embedBatch.Validate();
 
     [Benchmark]
+    public void Validate_WithToolSchemas() => _schemaRequest.Validate();
+
+    [Benchmark]
     public Task<ChatResponse> EndToEnd_TextHistory() => _chatClient.GetResponseAsync(_textHistory);
 
     [Benchmark]
     public Task<ChatResponse> EndToEnd_ToolHistory() => _chatClient.GetResponseAsync(_toolHistory);
+
+    [Benchmark]
+    public Task<ChatResponse> EndToEnd_JapaneseHistory() => _chatClient.GetResponseAsync(_japaneseHistory);
+
+    [Benchmark]
+    public Task<ChatResponse> EndToEnd_LargeArgumentHistory() => _chatClient.GetResponseAsync(_largeArgumentHistory);
 }
 
 /// <summary>
@@ -211,6 +278,9 @@ public class ToolJsonConverterBenchmarks
     private readonly JsonSerializerOptions _options = AIJsonUtilities.DefaultOptions;
     private readonly Dictionary<string, object?> _dictionaryResult = new() { ["city"] = "Tokyo", ["temperature"] = 18, ["sunny"] = true };
     private readonly WeatherReport _pocoResult = new("Tokyo", 18, true);
+    private readonly JsonObject _jsonObjectResult = new() { ["city"] = "Tokyo", ["temperature"] = 18 };
+    private readonly List<int> _listResult = [1, 2, 3, 4];
+    private readonly List<KeyValuePair<string, int>> _keyValueResult = [new("a", 1), new("b", 2)];
     private readonly object _stringElementResult = JsonElement.Parse("\"18C and sunny\"");
     private readonly object _objectElementResult = JsonElement.Parse("""{"city":"Tokyo","temperature":18}""");
     private readonly JsonElement _fourArguments = JsonElement.Parse("""{"city":"Tokyo","metric":"temperature","units":"celsius","days":5}""");
@@ -231,6 +301,15 @@ public class ToolJsonConverterBenchmarks
 
     [Benchmark]
     public JsonElement ToResponseObject_Poco() => ToolJsonConverter.ToResponseObject(_pocoResult, _options);
+
+    [Benchmark]
+    public JsonElement ToResponseObject_JsonObject() => ToolJsonConverter.ToResponseObject(_jsonObjectResult, _options);
+
+    [Benchmark]
+    public JsonElement ToResponseObject_List() => ToolJsonConverter.ToResponseObject(_listResult, _options);
+
+    [Benchmark]
+    public JsonElement ToResponseObject_KeyValueSequence() => ToolJsonConverter.ToResponseObject(_keyValueResult, _options);
 
     [Benchmark]
     public JsonElement ToResponseObject_Null() => ToolJsonConverter.ToResponseObject(null, _options);

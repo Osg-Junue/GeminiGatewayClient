@@ -78,27 +78,8 @@ internal static class ChatRequestMapper
                             contents[^1].Role == targetRole &&
                             lastMergedChatRole == message.Role;
 
-            IList<Part> targetParts;
-            if (isMerging)
-            {
-                var prevParts = contents[^1].Parts;
-                if (prevParts.IsReadOnly)
-                {
-                    var mutableList = new List<Part>(prevParts.Count + message.Contents.Count);
-                    mutableList.AddRange(prevParts);
-
-                    contents[^1].Parts = mutableList;
-                    targetParts = mutableList;
-                }
-                else
-                {
-                    targetParts = prevParts;
-                }
-            }
-            else
-            {
-                targetParts = new List<Part>(message.Contents.Count);
-            }
+            // Every entry in contents was created above or by Content.Clone, so its Parts are always a mutable list.
+            var targetParts = isMerging ? contents[^1].Parts : new List<Part>(message.Contents.Count);
 
             foreach (var item in message.Contents)
             {
@@ -217,6 +198,19 @@ internal static class ChatRequestMapper
                 });
                 break;
 
+            case FunctionResultContent result when rawPart?.FunctionResponse is not null:
+                // A caller-attached wire part keeps its identity and metadata; only a supplied result replaces its payload.
+                var refreshedPart = rawPart.Clone();
+                if (result.Result is not null)
+                {
+                    refreshedPart.FunctionResponse!.Response = ToolJsonConverter.ToResponseObject(result.Result, toolSerializerOptions);
+                }
+
+                refreshedPart.Text = null;
+                refreshedPart.ThoughtSignature = signature;
+                parts.Add(refreshedPart);
+                break;
+
             case FunctionResultContent result:
                 var (name, id) = ResolveFunctionCall(functionCalls, result.CallId);
                 parts.Add(new Part
@@ -245,9 +239,12 @@ internal static class ChatRequestMapper
 
         foreach (var (key, value) in arguments)
         {
+            // Replayed arguments are byte-identical to the wire, so the vectorized compare settles nearly every call;
+            // DeepEquals stays as the fallback for values that are equal but formatted differently.
             if (value is not JsonElement element ||
                 !rawObj.TryGetProperty(key, out var rawProp) ||
-                !JsonElement.DeepEquals(element, rawProp))
+                !(JsonMarshal.GetRawUtf8Value(element).SequenceEqual(JsonMarshal.GetRawUtf8Value(rawProp)) ||
+                  JsonElement.DeepEquals(element, rawProp)))
             {
                 return false;
             }
@@ -293,7 +290,7 @@ internal static class ChatRequestMapper
                     string.IsNullOrWhiteSpace(rawPart.FileData.MimeType) ? MimeTypes.ApplicationOctetStream : rawPart.FileData.MimeType,
                     string.IsNullOrWhiteSpace(uri.MediaType) ? MimeTypes.ApplicationOctetStream : uri.MediaType,
                     StringComparison.Ordinal),
-            FunctionCallContent => false,
+            FunctionCallContent or FunctionResultContent => false,
             _ => string.IsNullOrEmpty(rawPart.Text) && IsUnmodifiedCodeExecutionPart(item.AdditionalProperties, rawPart)
         };
     }
@@ -415,7 +412,7 @@ internal static class ChatRequestMapper
         // and when multi-chunk TextContent coalescing dropped the signature from the preceding text part, re-attach it.
         if (!hasText && !string.IsNullOrEmpty(signature) && parts.Count > 0)
         {
-            if (string.Equals(parts[^1].ThoughtSignature, signature, StringComparison.Ordinal))
+            if (string.Equals(parts[^1]?.ThoughtSignature, signature, StringComparison.Ordinal))
             {
                 return;
             }

@@ -98,33 +98,15 @@ public sealed class Content
 
     internal Content Clone()
     {
-        IList<Part>? clonedParts;
-        if (_parts is Part[] array)
+        // Null elements are kept so request validation reports them instead of the clone silently dropping them.
+        List<Part>? clonedParts = null;
+        if (_parts is { Count: > 0 } sourceParts)
         {
-            var newArr = new Part[array.Length];
-            for (var i = 0; i < array.Length; i++)
-            {
-                newArr[i] = array[i]?.Clone()!;
-            }
-
-            clonedParts = newArr;
-        }
-        else if (_parts is { Count: > 0 } sourceParts)
-        {
-            var list = new List<Part>(sourceParts.Count);
+            clonedParts = new List<Part>(sourceParts.Count);
             for (var i = 0; i < sourceParts.Count; i++)
             {
-                if (sourceParts[i] is { } part)
-                {
-                    list.Add(part.Clone());
-                }
+                clonedParts.Add(sourceParts[i]?.Clone()!);
             }
-
-            clonedParts = list;
-        }
-        else
-        {
-            clonedParts = null;
         }
 
         return new Content

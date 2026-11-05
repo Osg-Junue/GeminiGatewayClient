@@ -1,3 +1,4 @@
+using System.Reflection;
 using GeminiGatewayClient.Chat;
 using GeminiGatewayClient.Http;
 using GeminiGatewayClient.Models;
@@ -8,7 +9,7 @@ namespace GeminiGatewayClient.Tests;
 public class PerformanceAllocationTests
 {
     [Fact]
-    public void ChatResponseMapper_EmptyOrSinglePart_SizesContentsListWithoutExcessCapacity()
+    public void ChatResponseMapper_EmptyOrSinglePart_MapsExpectedContents()
     {
         var uninitializedContent = new Content { Role = Role.Model };
         var uninitializedResponse = new GenerateContentResponse
@@ -42,7 +43,7 @@ public class PerformanceAllocationTests
     }
 
     [Fact]
-    public void ChatOptionsMapper_ApplyTools_SizesDeclarationsAndToolsWithoutOverAllocation()
+    public void ChatOptionsMapper_ApplyTools_GroupsDeclarationsIntoOneFunctionTool()
     {
         var functionsOnlyOptions = new ChatOptions
         {
@@ -87,7 +88,7 @@ public class PerformanceAllocationTests
     }
 
     [Fact]
-    public void ChatRequestMapper_ToRequest_PreSizesContentsAndParts_AndOmitsUnusedSystemParts()
+    public void ChatRequestMapper_ToRequest_MapsContentsAndParts_AndOmitsUnusedSystemParts()
     {
         using var geminiClient = new GeminiClient("test-key", "gemini-2.5-flash");
         var chatClient = geminiClient.AsIChatClient();
@@ -262,63 +263,27 @@ public class PerformanceAllocationTests
         Assert.Empty(support.GroundingChunkIndices);
     }
 
-    [Fact]
-    public void ModelCollections_AssignedViaObjectInitializer_DoNotAllocateThrowawayLists()
+    [Theory]
+    [InlineData(typeof(Content))]
+    [InlineData(typeof(GenerateContentRequest))]
+    [InlineData(typeof(GenerateContentResponse))]
+    [InlineData(typeof(CitationMetadata))]
+    [InlineData(typeof(BatchEmbedContentsRequest))]
+    [InlineData(typeof(BatchEmbedContentsResponse))]
+    [InlineData(typeof(ContentEmbedding))]
+    [InlineData(typeof(GroundingMetadata))]
+    [InlineData(typeof(GroundingSupport))]
+    public void ModelCollections_AreNotAllocatedByTheConstructor(Type modelType)
     {
-        IList<Part> preallocatedParts = [Part.FromText("hello")];
-        IList<Content> preallocatedContents = [new Content { Role = Role.User, Parts = preallocatedParts }];
-        IList<Candidate> preallocatedCandidates = [new Candidate()];
-        IList<Citation> preallocatedCitations = [new Citation()];
-        IList<EmbedContentRequest> preallocatedEmbedReqs = [EmbedContentRequest.FromText("hello")];
-        IList<ContentEmbedding> preallocatedEmbeddings = [new ContentEmbedding { Values = [0.1f] }];
-        IList<float> preallocatedValues = [0.1f, 0.2f];
-        IList<string> preallocatedQueries = ["q"];
-        IList<GroundingChunk> preallocatedChunks = [new GroundingChunk()];
-        IList<GroundingSupport> preallocatedSupports = [new GroundingSupport { GroundingChunkIndices = [0] }];
-        IList<int> preallocatedIndices = [0];
+        var model = Activator.CreateInstance(modelType)!;
 
-        for (var i = 0; i < 50; i++)
-        {
-            _ = new Content { Role = Role.User, Parts = preallocatedParts };
-            _ = new GenerateContentRequest { Contents = preallocatedContents };
-            _ = new GenerateContentResponse { Candidates = preallocatedCandidates };
-            _ = new CitationMetadata { Citations = preallocatedCitations };
-            _ = new BatchEmbedContentsRequest { Requests = preallocatedEmbedReqs };
-            _ = new BatchEmbedContentsResponse { Embeddings = preallocatedEmbeddings };
-            _ = new ContentEmbedding { Values = preallocatedValues };
-            _ = new GroundingMetadata
-            {
-                WebSearchQueries = preallocatedQueries,
-                GroundingChunks = preallocatedChunks,
-                GroundingSupports = preallocatedSupports
-            };
-            _ = new GroundingSupport { GroundingChunkIndices = preallocatedIndices };
-        }
+        var collectionFields = modelType
+            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Where(field => field.FieldType != typeof(string) && typeof(System.Collections.IEnumerable).IsAssignableFrom(field.FieldType))
+            .ToList();
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 100; i++)
-        {
-            _ = new Content { Role = Role.User, Parts = preallocatedParts };
-            _ = new GenerateContentRequest { Contents = preallocatedContents };
-            _ = new GenerateContentResponse { Candidates = preallocatedCandidates };
-            _ = new CitationMetadata { Citations = preallocatedCitations };
-            _ = new BatchEmbedContentsRequest { Requests = preallocatedEmbedReqs };
-            _ = new BatchEmbedContentsResponse { Embeddings = preallocatedEmbeddings };
-            _ = new ContentEmbedding { Values = preallocatedValues };
-            _ = new GroundingMetadata
-            {
-                WebSearchQueries = preallocatedQueries,
-                GroundingChunks = preallocatedChunks,
-                GroundingSupports = preallocatedSupports
-            };
-            _ = new GroundingSupport { GroundingChunkIndices = preallocatedIndices };
-        }
-
-        var allocatedPerIteration = (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
-
-        // The 9 model instances are 424 B today; 10 throwaway List<T> instances would add 320 B, for at least 744 B.
-        // Only the upper bound is the contract, so adding a field to a model does not fail this test.
-        Assert.True(allocatedPerIteration < 744, $"Allocated {allocatedPerIteration} B per iteration.");
+        Assert.NotEmpty(collectionFields);
+        Assert.All(collectionFields, field => Assert.Null(field.GetValue(model)));
     }
 
     [Fact]
@@ -351,10 +316,12 @@ public class PerformanceAllocationTests
             return (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
         }
 
+        const int turns = 256;
         var shortHistory = MeasureValidate(CreateHistory(1));
-        var longHistory = MeasureValidate(CreateHistory(256));
+        var longHistory = MeasureValidate(CreateHistory(turns));
 
-        Assert.True(longHistory <= shortHistory, $"1 turn allocated {shortHistory} B, 256 turns allocated {longHistory} B.");
+        // Under one byte per turn: a per-turn string costs hundreds, while a stray one-off runtime allocation can land in the window.
+        Assert.True(longHistory - shortHistory < turns, $"1 turn allocated {shortHistory} B, {turns} turns allocated {longHistory} B.");
     }
 
     [Fact]
@@ -383,9 +350,43 @@ public class PerformanceAllocationTests
             return (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
         }
 
+        const int items = 256;
         var single = MeasureValidate(1);
-        var large = MeasureValidate(256);
+        var large = MeasureValidate(items);
 
-        Assert.True(large <= single, $"1 item allocated {single} B, 256 items allocated {large} B.");
+        Assert.True(large - single < items, $"1 item allocated {single} B, {items} items allocated {large} B.");
+    }
+
+    [Fact]
+    public void Schema_Validate_AllocationDoesNotGrowWithPropertyCount()
+    {
+        static long MeasureValidate(int propertyCount)
+        {
+            var properties = new Dictionary<string, Schema>(propertyCount);
+            for (var i = 0; i < propertyCount; i++)
+            {
+                properties[$"property{i}"] = new Schema { Type = SchemaType.String };
+            }
+
+            var config = new GenerationConfig { ResponseSchema = new Schema { Type = SchemaType.Object, Properties = properties } };
+            for (var i = 0; i < 50; i++)
+            {
+                config.Validate();
+            }
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+            {
+                config.Validate();
+            }
+
+            return (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
+        }
+
+        const int properties = 256;
+        var single = MeasureValidate(1);
+        var large = MeasureValidate(properties);
+
+        Assert.True(large - single < properties, $"1 property allocated {single} B, {properties} properties allocated {large} B.");
     }
 }

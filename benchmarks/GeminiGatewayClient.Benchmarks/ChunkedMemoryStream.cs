@@ -2,8 +2,9 @@ namespace GeminiGatewayClient.Benchmarks;
 
 /// <summary>
 /// Read-only stream that never returns more than <c>packetSize</c> bytes per read, approximating TCP packet fragmentation.
+/// With <c>yieldEachRead</c>, reads complete asynchronously so callers exercise their suspension path as they do on a socket.
 /// </summary>
-internal sealed class ChunkedMemoryStream(ReadOnlyMemory<byte> payload, int packetSize) : Stream
+internal sealed class ChunkedMemoryStream(ReadOnlyMemory<byte> payload, int packetSize, bool yieldEachRead = false) : Stream
 {
     private int _position;
 
@@ -37,7 +38,13 @@ internal sealed class ChunkedMemoryStream(ReadOnlyMemory<byte> payload, int pack
     }
 
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
-        ValueTask.FromResult(Read(buffer.Span));
+        yieldEachRead ? ReadAfterYieldAsync(buffer) : ValueTask.FromResult(Read(buffer.Span));
+
+    private async ValueTask<int> ReadAfterYieldAsync(Memory<byte> buffer)
+    {
+        await Task.Yield();
+        return Read(buffer.Span);
+    }
 
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken = default) =>
         Task.FromResult(Read(buffer.AsSpan(offset, count)));

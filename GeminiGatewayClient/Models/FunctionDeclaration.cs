@@ -111,7 +111,14 @@ public sealed class FunctionDeclaration
             throw new ArgumentException($"FunctionDeclaration '{Name}' ResponseJsonSchema cannot be JsonValueKind.Undefined.", paramName);
         }
 
-        Parameters?.Validate($"FunctionDeclaration('{Name}').Parameters", paramName);
-        Response?.Validate($"FunctionDeclaration('{Name}').Response", paramName);
+        if (Parameters?.GetValidationError() is { } parametersError)
+        {
+            throw new ArgumentException($"FunctionDeclaration('{Name}').Parameters{parametersError}", paramName);
+        }
+
+        if (Response?.GetValidationError() is { } responseError)
+        {
+            throw new ArgumentException($"FunctionDeclaration('{Name}').Response{responseError}", paramName);
+        }
     }
 }

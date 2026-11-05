@@ -179,30 +179,36 @@ public sealed class Schema
         return clone;
     }
 
-    internal void Validate(string pathPrefix, string paramName, HashSet<Schema>? visited = null)
+    /// <summary>
+    /// Returns why this schema is invalid as a message suffix for the caller's path, or <c>null</c> when it is valid.
+    /// </summary>
+    internal string? GetValidationError(HashSet<Schema>? visited = null)
     {
         if (Type == SchemaType.Unknown)
         {
-            throw new ArgumentException($"{pathPrefix}.Type cannot be SchemaType.Unknown.", paramName);
+            return ".Type cannot be SchemaType.Unknown.";
         }
 
         if (Default is { ValueKind: JsonValueKind.Undefined })
         {
-            throw new ArgumentException($"{pathPrefix}.Default cannot be JsonValueKind.Undefined.", paramName);
+            return ".Default cannot be JsonValueKind.Undefined.";
         }
 
         if (Items is null && Properties is null && AnyOf is null)
         {
-            return;
+            return null;
         }
 
         visited ??= new HashSet<Schema>(ReferenceEqualityComparer.Instance);
         if (!visited.Add(this))
         {
-            return;
+            return null;
         }
 
-        Items?.Validate($"{pathPrefix}.Items", paramName, visited);
+        if (Items?.GetValidationError(visited) is { } itemsError)
+        {
+            return $".Items{itemsError}";
+        }
 
         if (Properties is not null)
         {
@@ -210,10 +216,13 @@ public sealed class Schema
             {
                 if (propSchema is null)
                 {
-                    throw new ArgumentException($"{pathPrefix}.Properties['{key}'] cannot be null.", paramName);
+                    return $".Properties['{key}'] cannot be null.";
                 }
 
-                propSchema.Validate($"{pathPrefix}.Properties['{key}']", paramName, visited);
+                if (propSchema.GetValidationError(visited) is { } propertyError)
+                {
+                    return $".Properties['{key}']{propertyError}";
+                }
             }
         }
 
@@ -223,11 +232,16 @@ public sealed class Schema
             {
                 if (AnyOf[i] is not { } subSchema)
                 {
-                    throw new ArgumentException($"{pathPrefix}.AnyOf[{i}] cannot be null.", paramName);
+                    return $".AnyOf[{i}] cannot be null.";
                 }
 
-                subSchema.Validate($"{pathPrefix}.AnyOf[{i}]", paramName, visited);
+                if (subSchema.GetValidationError(visited) is { } subSchemaError)
+                {
+                    return $".AnyOf[{i}]{subSchemaError}";
+                }
             }
         }
+
+        return null;
     }
 }

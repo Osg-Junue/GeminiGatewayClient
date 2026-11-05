@@ -95,7 +95,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         return SendBufferedAsync(
             requestUri,
             request,
-            GeminiJsonContext.Default.GenerateContentRequest,
+            GeminiJsonContext.Wire.GenerateContentRequest,
             GeminiJsonContext.Default.GenerateContentResponse,
             static r => r.ExtensionData,
             cancellationToken);
@@ -129,7 +129,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         return SendBufferedAsync(
             requestUri,
             wireRequest,
-            GeminiJsonContext.Default.EmbedContentRequest,
+            GeminiJsonContext.Wire.EmbedContentRequest,
             GeminiJsonContext.Default.EmbedContentResponse,
             static r => r.ExtensionData,
             cancellationToken);
@@ -152,7 +152,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         return SendBufferedAsync(
             requestUri,
             wireRequest,
-            GeminiJsonContext.Default.BatchEmbedContentsRequest,
+            GeminiJsonContext.Wire.BatchEmbedContentsRequest,
             GeminiJsonContext.Default.BatchEmbedContentsResponse,
             static r => r.ExtensionData,
             cancellationToken);
@@ -260,7 +260,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         using var httpRequest = await CreateRequestMessageAsync(
             requestUri,
             request,
-            GeminiJsonContext.Default.GenerateContentRequest,
+            GeminiJsonContext.Wire.GenerateContentRequest,
             serverSentEvents,
             cancellationToken).ConfigureAwait(false);
         using var httpResponse = await SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
