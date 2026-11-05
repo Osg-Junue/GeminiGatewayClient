@@ -9,7 +9,7 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class GenerateContentRequest
 {
-    private IList<Content> _contents = [];
+    private IList<Content>? _contents;
 
     /// <summary>
     /// Optional. Resource name of cached context content to prepend to the conversation.
@@ -26,10 +26,9 @@ public sealed class GenerateContentRequest
     [JsonPropertyName("contents")]
     public IList<Content> Contents
     {
-        get => _contents;
-        set => _contents = value ?? [];
+        get => _contents ??= [];
+        set => _contents = value;
     }
-
 
     /// <summary>
     /// Optional. Developer-provided system instructions for the model. Only <see cref="Content.Parts"/> is used;

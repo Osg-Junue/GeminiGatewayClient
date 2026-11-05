@@ -9,7 +9,7 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class Content
 {
-    private IList<Part> _parts = [];
+    private IList<Part>? _parts;
 
     /// <summary>
     /// Producer of the content (<see cref="Models.Role.User"/> or <see cref="Models.Role.Model"/>).
@@ -25,10 +25,9 @@ public sealed class Content
     [JsonPropertyName("parts")]
     public IList<Part> Parts
     {
-        get => _parts;
-        set => _parts = value ?? [];
+        get => _parts ??= [];
+        set => _parts = value;
     }
-
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -68,7 +67,7 @@ public sealed class Content
 
     internal Content Clone()
     {
-        IList<Part> clonedParts;
+        IList<Part>? clonedParts;
         if (_parts is Part[] array)
         {
             var newArr = new Part[array.Length];
@@ -94,7 +93,7 @@ public sealed class Content
         }
         else
         {
-            clonedParts = [];
+            clonedParts = null;
         }
 
         return new Content

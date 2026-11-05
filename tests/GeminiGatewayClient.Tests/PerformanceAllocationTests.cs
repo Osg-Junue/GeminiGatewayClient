@@ -201,4 +201,119 @@ public class PerformanceAllocationTests
         // ~296 B in 64-bit Release; allow up to 400 B for Debug/coverage/PGO instrumentation headroom.
         Assert.InRange(allocatedPerCall, 1, 400);
     }
+
+    [Fact]
+    public void ModelCollections_LazyInitializeWhenUnset_AndAvoidThrowawayListAllocationsWhenSet()
+    {
+        // 1. Default construction lazily initializes non-null empty lists on getter access, including after null assignment.
+        var emptyContent = new Content();
+        var clonedEmpty = emptyContent.Clone();
+        Assert.Empty(emptyContent.Parts);
+        Assert.Empty(clonedEmpty.Parts);
+        emptyContent.Parts = null!;
+        Assert.Empty(emptyContent.Parts);
+
+        var emptyRequest = new GenerateContentRequest();
+        Assert.Empty(emptyRequest.Contents);
+        emptyRequest.Contents = null!;
+        Assert.Empty(emptyRequest.Contents);
+
+        var emptyResponse = new GenerateContentResponse();
+        Assert.Null(emptyResponse.Text);
+        Assert.Empty(emptyResponse.FunctionCalls);
+        Assert.Null(emptyResponse.FinishReason);
+        Assert.Empty(emptyResponse.Candidates);
+        emptyResponse.Candidates = null!;
+        Assert.Empty(emptyResponse.Candidates);
+
+        var citationMeta = new CitationMetadata();
+        Assert.Empty(citationMeta.Citations);
+        citationMeta.Citations = null!;
+        Assert.Empty(citationMeta.Citations);
+
+        var batchEmbedReq = new BatchEmbedContentsRequest();
+        Assert.Empty(batchEmbedReq.Requests);
+        batchEmbedReq.Requests = null!;
+        Assert.Empty(batchEmbedReq.Requests);
+
+        var batchEmbedResp = new BatchEmbedContentsResponse();
+        Assert.Empty(batchEmbedResp.Embeddings);
+        batchEmbedResp.Embeddings = null!;
+        Assert.Empty(batchEmbedResp.Embeddings);
+
+        var embedding = new ContentEmbedding();
+        Assert.Empty(embedding.Values);
+        embedding.Values = null!;
+        Assert.Empty(embedding.Values);
+
+        var grounding = new GroundingMetadata();
+        Assert.Empty(grounding.WebSearchQueries);
+        Assert.Empty(grounding.GroundingChunks);
+        Assert.Empty(grounding.GroundingSupports);
+        grounding.WebSearchQueries = null!;
+        grounding.GroundingChunks = null!;
+        grounding.GroundingSupports = null!;
+        Assert.Empty(grounding.WebSearchQueries);
+        Assert.Empty(grounding.GroundingChunks);
+        Assert.Empty(grounding.GroundingSupports);
+
+        var support = new GroundingSupport();
+        Assert.Empty(support.GroundingChunkIndices);
+        support.GroundingChunkIndices = null!;
+        Assert.Empty(support.GroundingChunkIndices);
+
+        // 2. Assigning pre-allocated lists via object initializers should not allocate throwaway List<T> instances in constructors.
+        IList<Part> preallocatedParts = [Part.FromText("hello")];
+        IList<Content> preallocatedContents = [new Content { Role = Role.User, Parts = preallocatedParts }];
+        IList<Candidate> preallocatedCandidates = [new Candidate()];
+        IList<Citation> preallocatedCitations = [new Citation()];
+        IList<EmbedContentRequest> preallocatedEmbedReqs = [EmbedContentRequest.FromText("hello")];
+        IList<ContentEmbedding> preallocatedEmbeddings = [new ContentEmbedding { Values = [0.1f] }];
+        IList<float> preallocatedValues = [0.1f, 0.2f];
+        IList<string> preallocatedQueries = ["q"];
+        IList<GroundingChunk> preallocatedChunks = [new GroundingChunk()];
+        IList<GroundingSupport> preallocatedSupports = [new GroundingSupport { GroundingChunkIndices = [0] }];
+        IList<int> preallocatedIndices = [0];
+
+        for (var i = 0; i < 50; i++)
+        {
+            _ = new Content { Role = Role.User, Parts = preallocatedParts };
+            _ = new GenerateContentRequest { Contents = preallocatedContents };
+            _ = new GenerateContentResponse { Candidates = preallocatedCandidates };
+            _ = new CitationMetadata { Citations = preallocatedCitations };
+            _ = new BatchEmbedContentsRequest { Requests = preallocatedEmbedReqs };
+            _ = new BatchEmbedContentsResponse { Embeddings = preallocatedEmbeddings };
+            _ = new ContentEmbedding { Values = preallocatedValues };
+            _ = new GroundingMetadata
+            {
+                WebSearchQueries = preallocatedQueries,
+                GroundingChunks = preallocatedChunks,
+                GroundingSupports = preallocatedSupports
+            };
+            _ = new GroundingSupport { GroundingChunkIndices = preallocatedIndices };
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 100; i++)
+        {
+            _ = new Content { Role = Role.User, Parts = preallocatedParts };
+            _ = new GenerateContentRequest { Contents = preallocatedContents };
+            _ = new GenerateContentResponse { Candidates = preallocatedCandidates };
+            _ = new CitationMetadata { Citations = preallocatedCitations };
+            _ = new BatchEmbedContentsRequest { Requests = preallocatedEmbedReqs };
+            _ = new BatchEmbedContentsResponse { Embeddings = preallocatedEmbeddings };
+            _ = new ContentEmbedding { Values = preallocatedValues };
+            _ = new GroundingMetadata
+            {
+                WebSearchQueries = preallocatedQueries,
+                GroundingChunks = preallocatedChunks,
+                GroundingSupports = preallocatedSupports
+            };
+            _ = new GroundingSupport { GroundingChunkIndices = preallocatedIndices };
+        }
+
+        var allocatedPerIteration = (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
+        // 9 model object instances total 424 B on 64-bit Release (432 B in Debug), avoiding the 10 * 32 B = 320 B of throwaway List<T> allocations (which would total >= 744 B).
+        Assert.InRange(allocatedPerIteration, 400, 480);
+    }
 }
