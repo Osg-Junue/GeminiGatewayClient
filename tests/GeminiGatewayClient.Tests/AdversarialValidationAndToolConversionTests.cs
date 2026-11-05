@@ -1221,21 +1221,183 @@ public sealed class AdversarialValidationAndToolConversionTests
 
     #endregion
 
-    #region Templates: a null trailing element must not crash mapping (pattern 2)
+    #region Templates: null contents are reported at their template index (patterns 1 and 2)
 
-    [Fact]
-    public void ToRequest_TemplateContentsEndingWithNull_MergesWithTheLastRealTurn()
+    private static GenerateContentRequest MapWithTemplateContents(IList<Content> templateContents, params ChatMessage[] messages)
     {
-        IList<Content> templateContents = [new Content { Role = Role.User, Parts = [Part.FromText("template")] }, null!];
         var options = new ChatOptions { RawRepresentationFactory = _ => new GenerateContentRequest { Contents = templateContents } };
         using var client = new GeminiClient("key", Model);
+        return ChatRequestMapper.ToRequest(messages, options, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
+    }
 
-        var request = ChatRequestMapper.ToRequest(
-            [new ChatMessage(ChatRole.User, "next")],
-            options,
-            client.AsIChatClient(),
-            Model,
-            AIJsonUtilities.DefaultOptions);
+    public static TheoryData<Func<IList<Content>>, int> TemplateContentsWithNull() => new()
+    {
+        { () => new List<Content> { null! }, 0 },
+        { () => new List<Content> { null!, Content.FromText("template") }, 0 },
+        { () => new List<Content> { Content.FromText("template"), null! }, 1 },
+        { () => new List<Content> { Content.FromText("a"), null!, Content.FromText("b") }, 1 },
+        { () => new[] { Content.FromText("template"), null! }, 1 },
+        { () => new ReadOnlyCollection<Content>([Content.FromText("template"), null!]), 1 }
+    };
+
+    [Theory]
+    [MemberData(nameof(TemplateContentsWithNull))]
+    public void ToRequest_NullContentInTemplate_IsReportedAtItsTemplateIndex(Func<IList<Content>> createContents, int expectedIndex)
+    {
+        var request = MapWithTemplateContents(createContents(), new ChatMessage(ChatRole.User, "next"));
+
+        Assert.Equal(
+            $"GenerateContentRequest.Contents[{expectedIndex}] cannot be null. (Parameter 'request')",
+            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
+    }
+
+    [Theory]
+    [InlineData("user")]
+    [InlineData("assistant")]
+    [InlineData("system")]
+    public void ToRequest_MessageAfterNullTemplateTail_DoesNotMergeIntoTheNull(string role)
+    {
+        var request = MapWithTemplateContents(
+            new List<Content> { Content.FromText("template"), null! },
+            new ChatMessage(new ChatRole(role), "next"));
+
+        Assert.Null(request.Contents[1]);
+    }
+
+    [Fact]
+    public async Task GetResponse_NullContentInTemplate_FailsBeforeAnythingIsSent()
+    {
+        using var handler = new RecordingHandler("""{"candidates":[]}""");
+        using var httpClient = new HttpClient(handler);
+        using var client = new GeminiClient(new GeminiClientOptions { ApiKey = "key", Model = Model }, httpClient);
+        var options = new ChatOptions
+        {
+            RawRepresentationFactory = _ => new GenerateContentRequest { Contents = [Content.FromText("template"), null!] }
+        };
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.AsIChatClient().GetResponseAsync("next", options));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    private static GenerateContentRequest MapWithTemplate(GenerateContentRequest template, ChatOptions? additionalOptions = null)
+    {
+        var options = additionalOptions ?? new ChatOptions();
+        options.RawRepresentationFactory = _ => template;
+        using var client = new GeminiClient("key", Model);
+        return ChatRequestMapper.ToRequest([new ChatMessage(ChatRole.User, "next")], options, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
+    }
+
+    private static Tool ToolWith(string name) => new() { FunctionDeclarations = [new FunctionDeclaration { Name = name }] };
+
+    private static SafetySetting Setting() => new() { Category = HarmCategory.Harassment, Threshold = HarmBlockThreshold.BlockNone };
+
+    public static TheoryData<Func<IList<Tool>>, int> TemplateToolsWithNull() => new()
+    {
+        { () => new List<Tool> { null! }, 0 },
+        { () => new List<Tool> { ToolWith("a"), null! }, 1 },
+        { () => new[] { ToolWith("a"), null! }, 1 },
+        { () => new ReadOnlyCollection<Tool>([null!, ToolWith("a")]), 0 }
+    };
+
+    [Theory]
+    [MemberData(nameof(TemplateToolsWithNull))]
+    public void ToRequest_NullToolInTemplate_IsReportedAtItsTemplateIndex(Func<IList<Tool>> createTools, int expectedIndex)
+    {
+        var request = MapWithTemplate(new GenerateContentRequest { Tools = createTools() });
+
+        Assert.Equal(
+            $"GenerateContentRequest.Tools[{expectedIndex}] cannot be null. (Parameter 'request')",
+            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
+    }
+
+    [Fact]
+    public void ToRequest_NullToolInTemplate_SurvivesMergingChatOptionTools()
+    {
+        var options = new ChatOptions { Tools = [AIFunctionFactory.Create((string a) => a, "added"), new HostedWebSearchTool()] };
+
+        var request = MapWithTemplate(new GenerateContentRequest { Tools = [ToolWith("existing"), null!] }, options);
+
+        Assert.Equal(
+            "GenerateContentRequest.Tools[1] cannot be null. (Parameter 'request')",
+            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
+    }
+
+    [Fact]
+    public void ToRequest_NullFunctionDeclarationInTemplate_IsReported()
+    {
+        var template = new GenerateContentRequest { Tools = [new Tool { FunctionDeclarations = [new FunctionDeclaration { Name = "a" }, null!] }] };
+        var options = new ChatOptions { Tools = [AIFunctionFactory.Create((string a) => a, "added")] };
+
+        foreach (var request in new[] { MapWithTemplate(template), MapWithTemplate(template, options) })
+        {
+            Assert.Equal(
+                "Tool.FunctionDeclarations cannot contain null elements. (Parameter 'request')",
+                Assert.Throws<ArgumentException>(() => request.Validate()).Message);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void ToRequest_NullSafetySettingInTemplate_IsReportedAtItsTemplateIndex(int nullIndex)
+    {
+        IList<SafetySetting> settings = [Setting(), Setting()];
+        settings[nullIndex] = null!;
+
+        var request = MapWithTemplate(new GenerateContentRequest { SafetySettings = settings });
+
+        Assert.Equal(
+            $"GenerateContentRequest.SafetySettings[{nullIndex}] cannot be null. (Parameter 'request')",
+            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
+    }
+
+    [Fact]
+    public void ToRequest_NullAnyOfInTemplateSchema_IsReported()
+    {
+        var schema = new Schema { Type = SchemaType.Object, AnyOf = [new Schema { Type = SchemaType.String }, null!] };
+        var template = new GenerateContentRequest { GenerationConfig = new GenerationConfig { ResponseSchema = schema } };
+
+        var request = MapWithTemplate(template);
+
+        Assert.Equal(
+            "GenerationConfig.ResponseSchema.AnyOf[1] cannot be null. (Parameter 'request')",
+            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
+    }
+
+    [Fact]
+    public void ToRequest_ValidTemplateCollections_AreCopiedAndNotShared()
+    {
+        var tools = new List<Tool> { ToolWith("a") };
+        var settings = new List<SafetySetting> { Setting() };
+
+        var request = MapWithTemplate(new GenerateContentRequest { Tools = tools, SafetySettings = settings });
+        request.Validate();
+
+        Assert.NotSame(tools, request.Tools);
+        Assert.NotSame(tools[0], request.Tools![0]);
+        Assert.NotSame(tools[0].FunctionDeclarations![0], request.Tools[0].FunctionDeclarations![0]);
+        Assert.NotSame(settings, request.SafetySettings);
+        Assert.NotSame(settings[0], request.SafetySettings![0]);
+    }
+
+    [Fact]
+    public void ToModelContent_NullsInServerResponses_StayTolerated()
+    {
+        var chunk = new GenerateContentResponse
+        {
+            Candidates = [new Candidate { Content = new Content { Role = Role.Model, Parts = [null!, Part.FromText("ok")] } }]
+        };
+
+        var content = new[] { null!, chunk }.ToModelContent();
+
+        Assert.Equal("ok", Assert.Single(content!.Parts).Text);
+    }
+
+    [Fact]
+    public void ToRequest_TemplateWithoutNulls_StillMergesConsecutiveTurns()
+    {
+        var request = MapWithTemplateContents([Content.FromText("template")], new ChatMessage(ChatRole.User, "next"));
 
         var turn = Assert.Single(request.Contents);
         Assert.Equal(["template", "next"], turn.Parts.Select(p => p.Text));

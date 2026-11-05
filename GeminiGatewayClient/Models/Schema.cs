@@ -162,10 +162,7 @@ public sealed class Schema
             var clonedAnyOf = new List<Schema>(AnyOf.Count);
             for (var i = 0; i < AnyOf.Count; i++)
             {
-                if (AnyOf[i] is { } item)
-                {
-                    clonedAnyOf.Add(item.Clone());
-                }
+                clonedAnyOf.Add(AnyOf[i]?.Clone()!);
             }
 
             clone.AnyOf = clonedAnyOf;

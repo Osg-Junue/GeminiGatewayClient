@@ -110,7 +110,8 @@ public sealed class GenerateContentRequest
 
     /// <summary>
     /// Creates a copy of this request that uses <paramref name="contents"/> as its conversation turns
-    /// with isolated top-level collection and configuration containers.
+    /// with isolated top-level collection and configuration containers. Null elements are kept so <see cref="Validate"/>
+    /// reports them instead of a clone silently hiding them.
     /// </summary>
     internal GenerateContentRequest CloneWithContents(IList<Content> contents)
     {
@@ -124,10 +125,7 @@ public sealed class GenerateContentRequest
             var clonedTools = new List<Tool>(Tools.Count);
             for (var i = 0; i < Tools.Count; i++)
             {
-                if (Tools[i] is { } tool)
-                {
-                    clonedTools.Add(tool.Clone());
-                }
+                clonedTools.Add(Tools[i]?.Clone()!);
             }
 
             clone.Tools = clonedTools;
@@ -138,10 +136,7 @@ public sealed class GenerateContentRequest
             var clonedSettings = new List<SafetySetting>(SafetySettings.Count);
             for (var i = 0; i < SafetySettings.Count; i++)
             {
-                if (SafetySettings[i] is { } setting)
-                {
-                    clonedSettings.Add(setting.Clone());
-                }
+                clonedSettings.Add(SafetySettings[i]?.Clone()!);
             }
 
             clone.SafetySettings = clonedSettings;

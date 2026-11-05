@@ -51,10 +51,7 @@ public sealed class Tool
             var clonedDeclarations = new List<FunctionDeclaration>(FunctionDeclarations.Count);
             for (var i = 0; i < FunctionDeclarations.Count; i++)
             {
-                if (FunctionDeclarations[i] is { } decl)
-                {
-                    clonedDeclarations.Add(decl.Clone());
-                }
+                clonedDeclarations.Add(FunctionDeclarations[i]?.Clone()!);
             }
 
             clone.FunctionDeclarations = clonedDeclarations;

@@ -29,12 +29,10 @@ internal static class ChatRequestMapper
         var contents = new List<Content>(initialCapacity);
         if (templateContents is { Count: > 0 } existing)
         {
+            // Null elements are kept so request validation reports them at their template index.
             for (var i = 0; i < existing.Count; i++)
             {
-                if (existing[i] is { } existingContent)
-                {
-                    contents.Add(existingContent.Clone());
-                }
+                contents.Add(existing[i]?.Clone()!);
             }
         }
 
@@ -48,7 +46,7 @@ internal static class ChatRequestMapper
 
         Dictionary<string, (string Name, string? ApiId)>? functionCalls = null;
         ChatRole? lastMergedChatRole = contents.Count > 0
-            ? (contents[^1].Role == Role.Model ? ChatRole.Assistant : ChatRole.User)
+            ? (contents[^1]?.Role == Role.Model ? ChatRole.Assistant : ChatRole.User)
             : null;
 
         foreach (var message in messages)
@@ -76,7 +74,7 @@ internal static class ChatRequestMapper
 
             var targetRole = message.Role == ChatRole.Assistant ? Role.Model : Role.User;
             var isMerging = contents.Count > 0 &&
-                            contents[^1].Role == targetRole &&
+                            contents[^1]?.Role == targetRole &&
                             lastMergedChatRole == message.Role;
 
             // Every entry in contents was created above or by Content.Clone, so its Parts are always a mutable list.
