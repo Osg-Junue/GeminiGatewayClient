@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [3.0.0] - 2026-11-05
 
 ### Changed (Breaking)
 - **Null elements in `ChatOptions.RawRepresentationFactory` templates now fail validation**: a `null` in a template's `Contents`, `Content.Parts`, `Tools`, `Tool.FunctionDeclarations`, `SafetySettings`, or `Schema.AnyOf` now throws `ArgumentException` before anything is sent, matching a `null` passed directly on a request. Except for array-backed `Parts`, these elements were previously removed silently while cloning the template. `null` values in server responses are still tolerated.
