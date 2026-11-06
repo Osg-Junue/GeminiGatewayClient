@@ -1,6 +1,6 @@
-using System.Net;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
+using System.Net;
 
 namespace GeminiGatewayClient;
 

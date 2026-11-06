@@ -749,6 +749,16 @@ public sealed class ValidationAndToolJsonTests
     }
 
     [Fact]
+    public void TryGetModelContent_EmptyTextNextToOtherData_LeavesTheResponseAsReceived()
+    {
+        var response = ParseResponse("""{"text":"","functionCall":{"name":"f"}}""");
+
+        Assert.True(response.TryGetModelContent(out _));
+
+        Assert.Equal(string.Empty, Assert.Single(response.Candidates[0].Content!.Parts).Text);
+    }
+
+    [Fact]
     public void TryGetModelContent_EmptyTextWithOnlyASignature_KeepsTheText()
     {
         var response = ParseResponse("""{"text":"","thoughtSignature":"sig"}""");

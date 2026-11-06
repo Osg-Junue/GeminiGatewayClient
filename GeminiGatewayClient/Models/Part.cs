@@ -98,6 +98,16 @@ public sealed class Part
         (ExtensionData is null || ExtensionData.Count == 0);
 
     /// <summary>
+    /// Returns a copy without <see cref="Text"/>, because this instance belongs to the response it came from.
+    /// </summary>
+    internal Part WithoutText()
+    {
+        var copy = (Part)MemberwiseClone();
+        copy.Text = null;
+        return copy;
+    }
+
+    /// <summary>
     /// Creates a text part.
     /// </summary>
     /// <param name="text">The text content.</param>

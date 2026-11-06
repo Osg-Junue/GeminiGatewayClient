@@ -22,7 +22,8 @@ public sealed class GroundingMetadata
     public SearchEntryPoint? SearchEntryPoint { get; set; }
 
     /// <summary>
-    /// Supporting grounding chunks (web pages or retrieved context documents) referenced by the candidate.
+    /// Supporting grounding chunks (web pages or retrieved context documents) referenced by the candidate. When streaming, holds
+    /// only the chunks that earlier responses did not include.
     /// </summary>
     [JsonPropertyName("groundingChunks")]
     public IList<GroundingChunk> GroundingChunks { get => field ??= []; set; }
@@ -164,7 +165,8 @@ public sealed class GroundingSupport
     public GroundingSegment? Segment { get; set; }
 
     /// <summary>
-    /// Zero-based indices into <see cref="GroundingMetadata.GroundingChunks"/> supporting <see cref="Segment"/>.
+    /// Zero-based indices into <see cref="GroundingMetadata.GroundingChunks"/> supporting <see cref="Segment"/>. When streaming,
+    /// they count the chunks of all responses in order, so a caller of the raw stream must accumulate them.
     /// </summary>
     [JsonPropertyName("groundingChunkIndices")]
     public IList<int> GroundingChunkIndices { get => field ??= []; set; }

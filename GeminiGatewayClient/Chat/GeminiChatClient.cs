@@ -1,8 +1,8 @@
-using System.Runtime.CompilerServices;
-using System.Text.Json;
 using GeminiGatewayClient.Chat;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 namespace GeminiGatewayClient;
 

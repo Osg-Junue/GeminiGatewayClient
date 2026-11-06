@@ -1,8 +1,7 @@
-using System.Diagnostics.CodeAnalysis;
-using System.Text;
-using System.Text.Json;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
+using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
 
 namespace GeminiGatewayClient;
 
@@ -186,13 +185,9 @@ public static class GeminiClientExtensions
         var parts = chunks
             .SelectMany(chunk => chunk?.Candidates is [{ Content: { } content }, ..] ? content.Parts : [])
             .Where(part => part is { IsEmptyText: false })
+            // Gemini rejects text next to other data on a part, even when that text is empty.
+            .Select(part => part is { Text: "", HasNonTextData: true } ? part.WithoutText() : part)
             .ToList();
-
-        // Gemini rejects text next to other data on a part, even when that text is empty.
-        foreach (var part in parts.Where(part => part is { Text: "", HasNonTextData: true }))
-        {
-            part.Text = null;
-        }
 
         return parts.Count > 0 ? new Content { Role = Role.Model, Parts = parts } : null;
     }

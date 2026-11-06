@@ -1,6 +1,6 @@
-using System.Text;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
+using System.Text;
 
 namespace GeminiGatewayClient.Chat;
 
@@ -13,9 +13,10 @@ internal static class CitationAnnotator
 
     /// <summary>
     /// Adds the annotations to <paramref name="target"/>. Gemini counts offsets in UTF-8 bytes from the start of the response
-    /// text, which <paramref name="text"/> must hold.
+    /// text, which <paramref name="text"/> must hold. On a stream, <paramref name="streamedChunks"/> gathers the grounding chunks
+    /// of all responses, because Gemini sends each chunk once and counts <c>groundingChunkIndices</c> across the responses.
     /// </summary>
-    public static void Annotate(Candidate candidate, AIContent target, string text)
+    public static void Annotate(Candidate candidate, AIContent target, string text, List<GroundingChunk>? streamedChunks = null)
     {
         foreach (var citation in candidate.CitationMetadata?.Citations ?? [])
         {
@@ -27,17 +28,17 @@ internal static class CitationAnnotator
 
         if (candidate.GroundingMetadata is { } grounding)
         {
-            AddGrounding(grounding, target, text);
+            AddGrounding(grounding, target, text, streamedChunks);
         }
     }
 
     /// <summary>
     /// Adds the annotations on an annotation-only content, when there are any.
     /// </summary>
-    public static void AddAnnotationContent(Candidate candidate, List<AIContent> contents, string text)
+    public static void AddAnnotationContent(Candidate candidate, List<AIContent> contents, string text, List<GroundingChunk>? streamedChunks = null)
     {
         var carrier = new AIContent { RawRepresentation = (object?)candidate.GroundingMetadata ?? candidate.CitationMetadata };
-        Annotate(candidate, carrier, text);
+        Annotate(candidate, carrier, text, streamedChunks);
         if (carrier.Annotations is { Count: > 0 })
         {
             contents.Add(carrier);
@@ -51,9 +52,11 @@ internal static class CitationAnnotator
         (target.Annotations ??= []).Add(annotation);
     }
 
-    private static void AddGrounding(GroundingMetadata grounding, AIContent target, string text)
+    private static void AddGrounding(GroundingMetadata grounding, AIContent target, string text, List<GroundingChunk>? streamedChunks)
     {
-        var chunks = grounding.GroundingChunks;
+        var firstNewChunk = streamedChunks?.Count ?? 0;
+        streamedChunks?.AddRange(grounding.GroundingChunks);
+        var chunks = streamedChunks ?? grounding.GroundingChunks;
         var referenced = new HashSet<int>();
 
         foreach (var support in grounding.GroundingSupports)
@@ -86,7 +89,7 @@ internal static class CitationAnnotator
             }
         }
 
-        for (var i = 0; i < chunks.Count; i++)
+        for (var i = firstNewChunk; i < chunks.Count; i++)
         {
             if (!referenced.Contains(i) && chunks[i] is { } chunk && (chunk.Web is not null || chunk.RetrievedContext is not null))
             {

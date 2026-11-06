@@ -1,10 +1,10 @@
+using GeminiGatewayClient.Http;
+using GeminiGatewayClient.Models;
+using GeminiGatewayClient.Serialization;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
-using GeminiGatewayClient.Http;
-using GeminiGatewayClient.Models;
-using GeminiGatewayClient.Serialization;
 
 namespace GeminiGatewayClient;
 
