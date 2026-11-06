@@ -343,7 +343,7 @@ public class SerializationTests
                     {
                       "text": "clip",
                       "videoMetadata": {
-                        "startOffset": { "seconds": 5, "nanos": 250000000 },
+                        "startOffset": "5.25s",
                         "endOffset": "15.75s"
                       }
                     }

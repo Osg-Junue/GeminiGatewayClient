@@ -39,15 +39,4 @@ public sealed class FunctionCall
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    internal FunctionCall Clone()
-    {
-        var clone = (FunctionCall)MemberwiseClone();
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
 }

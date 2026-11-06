@@ -9,19 +9,11 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class GroundingMetadata
 {
-    private IList<string>? _webSearchQueries;
-    private IList<GroundingChunk>? _groundingChunks;
-    private IList<GroundingSupport>? _groundingSupports;
-
     /// <summary>
     /// Web search queries executed by the model to gather grounding context.
     /// </summary>
     [JsonPropertyName("webSearchQueries")]
-    public IList<string> WebSearchQueries
-    {
-        get => _webSearchQueries ??= [];
-        set => _webSearchQueries = value;
-    }
+    public IList<string> WebSearchQueries { get => field ??= []; set; }
 
     /// <summary>
     /// Optional Google Search entry point widget metadata (HTML/CSS and SDK blob) for rendering search suggestions.
@@ -33,21 +25,13 @@ public sealed class GroundingMetadata
     /// Supporting grounding chunks (web pages or retrieved context documents) referenced by the candidate.
     /// </summary>
     [JsonPropertyName("groundingChunks")]
-    public IList<GroundingChunk> GroundingChunks
-    {
-        get => _groundingChunks ??= [];
-        set => _groundingChunks = value;
-    }
+    public IList<GroundingChunk> GroundingChunks { get => field ??= []; set; }
 
     /// <summary>
     /// Mappings from specific spans of the candidate response text to indices in <see cref="GroundingChunks"/>.
     /// </summary>
     [JsonPropertyName("groundingSupports")]
-    public IList<GroundingSupport> GroundingSupports
-    {
-        get => _groundingSupports ??= [];
-        set => _groundingSupports = value;
-    }
+    public IList<GroundingSupport> GroundingSupports { get => field ??= []; set; }
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -173,8 +157,6 @@ public sealed class GroundingChunkRetrievedContext
 /// </summary>
 public sealed class GroundingSupport
 {
-    private IList<int>? _groundingChunkIndices;
-
     /// <summary>
     /// The text segment in the candidate response backed by the referenced chunks.
     /// </summary>
@@ -185,11 +167,7 @@ public sealed class GroundingSupport
     /// Zero-based indices into <see cref="GroundingMetadata.GroundingChunks"/> supporting <see cref="Segment"/>.
     /// </summary>
     [JsonPropertyName("groundingChunkIndices")]
-    public IList<int> GroundingChunkIndices
-    {
-        get => _groundingChunkIndices ??= [];
-        set => _groundingChunkIndices = value;
-    }
+    public IList<int> GroundingChunkIndices { get => field ??= []; set; }
 
     /// <summary>
     /// Confidence scores (<c>[0.0, 1.0]</c>) corresponding to <see cref="GroundingChunkIndices"/>.
@@ -216,19 +194,19 @@ public sealed class GroundingSupport
 public sealed class GroundingSegment
 {
     /// <summary>
-    /// Zero-based index of the <see cref="Part"/> within <see cref="Content.Parts"/>.
+    /// Zero-based index of the <see cref="Part"/> within <see cref="Content.Parts"/>. The API usually omits it.
     /// </summary>
     [JsonPropertyName("partIndex")]
     public int? PartIndex { get; set; }
 
     /// <summary>
-    /// Inclusive start offset of the segment in the part text, measured in UTF-8 bytes.
+    /// Inclusive start offset of the segment in the response text, measured in UTF-8 bytes.
     /// </summary>
     [JsonPropertyName("startIndex")]
     public int? StartIndex { get; set; }
 
     /// <summary>
-    /// Exclusive end offset of the segment in the part text, measured in UTF-8 bytes.
+    /// Exclusive end offset of the segment in the response text, measured in UTF-8 bytes.
     /// </summary>
     [JsonPropertyName("endIndex")]
     public int? EndIndex { get; set; }

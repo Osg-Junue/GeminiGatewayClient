@@ -9,8 +9,6 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class Content
 {
-    private IList<Part>? _parts;
-
     /// <summary>
     /// Producer of the content (<see cref="Models.Role.User"/> or <see cref="Models.Role.Model"/>).
     /// Leave <c>null</c> for <see cref="GenerateContentRequest.SystemInstruction"/>; for single-turn requests the API treats a missing role as <see cref="Models.Role.User"/>.
@@ -23,11 +21,7 @@ public sealed class Content
     /// Ordered parts that make up this conversation turn.
     /// </summary>
     [JsonPropertyName("parts")]
-    public IList<Part> Parts
-    {
-        get => _parts ??= [];
-        set => _parts = value;
-    }
+    public IList<Part> Parts { get => field ??= []; set; }
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -75,7 +69,7 @@ public sealed class Content
             return ".Role cannot be Role.Unknown.";
         }
 
-        if (_parts is not { Count: > 0 } parts)
+        if (Parts is not { Count: > 0 } parts)
         {
             return ExtensionData is { Count: > 0 } ? null : ".Parts must contain at least one Part item.";
         }
@@ -94,26 +88,5 @@ public sealed class Content
         }
 
         return null;
-    }
-
-    internal Content Clone()
-    {
-        // Null elements are kept so request validation reports them instead of the clone silently dropping them.
-        List<Part>? clonedParts = null;
-        if (_parts is { Count: > 0 } sourceParts)
-        {
-            clonedParts = new List<Part>(sourceParts.Count);
-            for (var i = 0; i < sourceParts.Count; i++)
-            {
-                clonedParts.Add(sourceParts[i]?.Clone()!);
-            }
-        }
-
-        return new Content
-        {
-            Role = Role,
-            _parts = clonedParts,
-            ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
-        };
     }
 }

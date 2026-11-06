@@ -1,3 +1,4 @@
+using System.Text.Json;
 using GeminiGatewayClient.Models;
 
 namespace GeminiGatewayClient;
@@ -31,6 +32,12 @@ public interface IGeminiClient
     string? DefaultEmbeddingModel => DefaultModel;
 
     /// <summary>
+    /// Serializer options for tool arguments and results (<see cref="GeminiClientOptions.ToolSerializerOptions"/>), or <c>null</c>.
+    /// A decorator should forward this so its chat client keeps the caller's options.
+    /// </summary>
+    JsonSerializerOptions? ToolSerializerOptions => null;
+
+    /// <summary>
     /// Calls <c>:generateContent</c> and returns the complete response.
     /// </summary>
     /// <param name="request">The request to send.</param>
@@ -44,9 +51,6 @@ public interface IGeminiClient
     /// returned an empty or invalid value.
     /// </exception>
     /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
-    /// <exception cref="TimeoutException">
-    /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
-    /// </exception>
     /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
     /// <exception cref="OperationCanceledException">
     /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
@@ -101,9 +105,6 @@ public interface IGeminiClient
     /// returned an empty or invalid value.
     /// </exception>
     /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
-    /// <exception cref="TimeoutException">
-    /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
-    /// </exception>
     /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
     /// <exception cref="OperationCanceledException">
     /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
@@ -119,7 +120,7 @@ public interface IGeminiClient
     /// <c>models/{model}</c> on the wire without mutating <paramref name="request"/>.
     /// </summary>
     /// <param name="request">The batch embedding request to send.</param>
-    /// <param name="model">The embedding model to call, or <c>null</c> to use <see cref="DefaultEmbeddingModel"/>.</param>
+    /// <param name="model">The embedding model to call, or <c>null</c> to use the first item's model, then <see cref="DefaultEmbeddingModel"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed batch embedding response.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
@@ -129,9 +130,6 @@ public interface IGeminiClient
     /// returned an empty or invalid value.
     /// </exception>
     /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
-    /// <exception cref="TimeoutException">
-    /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
-    /// </exception>
     /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
     /// <exception cref="OperationCanceledException">
     /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.

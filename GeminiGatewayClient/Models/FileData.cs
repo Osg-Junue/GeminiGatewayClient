@@ -31,15 +31,4 @@ public sealed class FileData
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    internal FileData Clone()
-    {
-        var clone = (FileData)MemberwiseClone();
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
 }

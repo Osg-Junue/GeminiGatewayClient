@@ -39,6 +39,8 @@ public sealed class GeminiClientOptions
     /// </summary>
     public static TimeSpan DefaultStreamIdleTimeout { get; } = TimeSpan.FromMinutes(2);
 
+    private static TimeSpan MaxStreamIdleTimeout { get; } = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     /// <summary>
     /// Base URI that model resources are resolved against. Requests are sent to
     /// <c>{Endpoint}/models/{model}:generateContent</c> (or <c>:streamGenerateContent</c>, <c>:embedContent</c>, <c>:batchEmbedContents</c>); query strings are preserved.
@@ -56,7 +58,7 @@ public sealed class GeminiClientOptions
     } = DefaultEndpoint;
 
     /// <summary>
-    /// Default model used when a call does not specify one, for example <c>gemini-2.5-flash</c>.
+    /// Default model used when a call does not specify one, for example <c>gemini-flash-latest</c>.
     /// Bare IDs are resolved as <c>models/{id}</c>; resource names containing <c>/</c> (such as <c>tunedModels/my-model</c>) are used as-is.
     /// </summary>
     public string? Model { get; set; }
@@ -78,9 +80,9 @@ public sealed class GeminiClientOptions
     public string? ApiKey { get; set; }
 
     /// <summary>
-    /// Asynchronously supplies the credential for every request (for example a short-lived OAuth access token or gateway JWT).
+    /// Asynchronously supplies the credential for every client call (for example a short-lived OAuth access token or gateway JWT).
     /// Mutually exclusive with <see cref="ApiKey"/>. The value is combined with <see cref="ApiKeyPrefix"/> and sent in <see cref="ApiKeyHeader"/>.
-    /// Implementations should cache tokens; the delegate is invoked once per request.
+    /// Implementations should cache tokens; the delegate is invoked once per client call, so retries inside an HTTP handler resend the same value.
     /// </summary>
     public Func<CancellationToken, ValueTask<string>>? ApiKeyProvider { get; set; }
 
@@ -114,8 +116,9 @@ public sealed class GeminiClientOptions
     } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Time allowed until response headers arrive. Applied to the <see cref="HttpClient"/> created internally and to clients
-    /// created by <c>AddGeminiClient</c>; ignored when you pass your own <see cref="HttpClient"/>.
+    /// Time allowed for a complete response, or for the response headers of a streaming call. Applied to the
+    /// <see cref="HttpClient"/> created internally and to clients created by <c>AddGeminiClient</c>; ignored when you pass
+    /// your own <see cref="HttpClient"/>.
     /// Must be positive or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>. Defaults to <see cref="DefaultTimeout"/>.
     /// </summary>
     public TimeSpan Timeout
@@ -129,14 +132,14 @@ public sealed class GeminiClientOptions
     /// <summary>
     /// Maximum time to wait for the next chunk of a streaming response before failing with <see cref="TimeoutException"/>.
     /// Defaults to <see cref="DefaultStreamIdleTimeout"/> (2 minutes). Set to <c>null</c> or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to disable.
-    /// Must be positive or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> when set.
+    /// Must be positive and below about 49.7 days, or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>, when set.
     /// </summary>
     public TimeSpan? StreamIdleTimeout
     {
         get;
-        set => field = value is null || value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan
+        set => field = value is null || (value > TimeSpan.Zero && value <= MaxStreamIdleTimeout) || value == System.Threading.Timeout.InfiniteTimeSpan
             ? value
-            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamIdleTimeout must be positive or Timeout.InfiniteTimeSpan.");
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamIdleTimeout must be positive and below about 49.7 days, or Timeout.InfiniteTimeSpan.");
     } = DefaultStreamIdleTimeout;
 
     /// <summary>
@@ -146,29 +149,18 @@ public sealed class GeminiClientOptions
     public bool AllowInsecureHttp { get; set; }
 
     /// <summary>
-    /// Wire format used by <c>:streamGenerateContent</c>.
-    /// Defaults to <see cref="GeminiStreamingFormat.ServerSentEvents"/> (<c>?alt=sse</c>), matching the official Gemini SDKs.
-    /// </summary>
-    public GeminiStreamingFormat StreamingFormat
-    {
-        get;
-        set => field = Enum.IsDefined(value)
-            ? value
-            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamingFormat is not a defined value.");
-    } = GeminiStreamingFormat.ServerSentEvents;
-
-    /// <summary>
     /// Optional <see cref="JsonSerializerOptions"/> used by the <c>IChatClient</c> adapter when serializing custom
     /// tool/function return values that are not covered by the built-in primitive types.
-    /// Provide options backed by a source-generated <see cref="System.Text.Json.Serialization.JsonSerializerContext"/> when publishing with NativeAOT.
+    /// The options need a <see cref="JsonSerializerOptions.TypeInfoResolver"/> for those types, also outside Native AOT;
+    /// a source-generated <see cref="System.Text.Json.Serialization.JsonSerializerContext"/> works everywhere.
     /// </summary>
     public JsonSerializerOptions? ToolSerializerOptions { get; set; }
 
     internal string RedactedEndpoint => FormatEndpoint(Endpoint);
 
     /// <summary>
-    /// Formats option members while redacting <see cref="ApiKey"/>, <see cref="AdditionalHeaders"/> values, and sensitive
-    /// <see cref="Endpoint"/> query parameters so credentials are never leaked through <c>ToString()</c> or structured logging.
+    /// Formats option members while redacting <see cref="ApiKey"/>, <see cref="AdditionalHeaders"/> values, and the whole
+    /// <see cref="Endpoint"/> query string so credentials are never leaked through <c>ToString()</c> or structured logging.
     /// </summary>
     public override string ToString()
     {
@@ -194,125 +186,20 @@ public sealed class GeminiClientOptions
         builder.Append(", Timeout = ").Append(Timeout);
         builder.Append(", StreamIdleTimeout = ").Append(StreamIdleTimeout?.ToString() ?? "<none>");
         builder.Append(", AllowInsecureHttp = ").Append(AllowInsecureHttp);
-        builder.Append(", StreamingFormat = ").Append(StreamingFormat);
         return builder.Append(" }").ToString();
     }
 
+    /// <summary>
+    /// Gateways often carry keys in the query string or user info, so only the scheme, host, and path are shown.
+    /// </summary>
     private static string FormatEndpoint(Uri endpoint)
     {
-        var raw = endpoint.ToString();
-        var hasUserInfo = endpoint.IsAbsoluteUri && !string.IsNullOrEmpty(endpoint.UserInfo);
-        var fragmentIndex = raw.IndexOf('#', StringComparison.Ordinal);
-        var searchEnd = fragmentIndex >= 0 ? fragmentIndex : raw.Length;
-        var queryIndex = raw.AsSpan(0, searchEnd).IndexOf('?');
-
-        if (!hasUserInfo && queryIndex < 0 && fragmentIndex < 0)
+        if (!endpoint.IsAbsoluteUri)
         {
-            return raw;
+            return "<relative>";
         }
 
-        var pathEnd = queryIndex >= 0 ? queryIndex : searchEnd;
-        var sb = new StringBuilder(raw.Length);
-
-        var prefixStart = 0;
-        if (hasUserInfo)
-        {
-            var schemeEnd = raw.IndexOf("://", StringComparison.Ordinal);
-            if (schemeEnd >= 0)
-            {
-                var atIndex = raw.IndexOf('@', schemeEnd + 3);
-                if (atIndex > schemeEnd + 3 && atIndex < pathEnd)
-                {
-                    sb.Append(raw.AsSpan(0, schemeEnd + 3)).Append("***@");
-                    prefixStart = atIndex + 1;
-                }
-            }
-        }
-
-        sb.Append(raw.AsSpan(prefixStart, pathEnd - prefixStart));
-
-        if (queryIndex >= 0)
-        {
-            sb.Append('?');
-            var querySpan = raw.AsSpan(queryIndex + 1, searchEnd - (queryIndex + 1));
-            var first = true;
-            var remaining = querySpan;
-            while (!remaining.IsEmpty)
-            {
-                var ampIndex = remaining.IndexOf('&');
-                ReadOnlySpan<char> pair;
-                if (ampIndex >= 0)
-                {
-                    pair = remaining[..ampIndex];
-                    remaining = remaining[(ampIndex + 1)..];
-                }
-                else
-                {
-                    pair = remaining;
-                    remaining = ReadOnlySpan<char>.Empty;
-                }
-
-                if (!first)
-                {
-                    sb.Append('&');
-                }
-
-                first = false;
-
-                var eqIndex = pair.IndexOf('=');
-                if (eqIndex > 0)
-                {
-                    var paramName = pair[..eqIndex];
-                    sb.Append(paramName).Append('=');
-                    if (IsSensitiveQueryParam(paramName))
-                    {
-                        sb.Append("***");
-                    }
-                    else
-                    {
-                        sb.Append(pair[(eqIndex + 1)..]);
-                    }
-                }
-                else
-                {
-                    sb.Append(pair);
-                }
-            }
-        }
-
-        if (fragmentIndex >= 0)
-        {
-            sb.Append("#***");
-        }
-
-        return sb.ToString();
+        var address = endpoint.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped);
+        return endpoint.Query.Length > 0 ? address + "?***" : address;
     }
-
-    private static bool IsSensitiveQueryParam(ReadOnlySpan<char> name) =>
-        name.Contains("key", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("token", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("sig", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("auth", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("pass", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("pwd", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("cred", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("code", StringComparison.OrdinalIgnoreCase);
-}
-
-/// <summary>
-/// Wire format requested from the Gemini <c>:streamGenerateContent</c> endpoint.
-/// </summary>
-public enum GeminiStreamingFormat
-{
-    /// <summary>
-    /// Server-Sent Events (<c>?alt=sse</c>) where each chunk is emitted as a <c>data: {json}</c> line.
-    /// Recommended for API gateways and reverse proxies because events flush immediately without array buffering.
-    /// </summary>
-    ServerSentEvents,
-
-    /// <summary>
-    /// Chunked JSON array (<c>[{...}, {...}]</c>) without <c>alt=sse</c>.
-    /// </summary>
-    JsonArray
 }

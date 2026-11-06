@@ -9,8 +9,6 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class GenerateContentRequest
 {
-    private IList<Content>? _contents;
-
     /// <summary>
     /// Optional. Resource name of cached context content to prepend to the conversation.
     /// Format: <c>cachedContents/{cachedContent}</c> or <c>projects/{project}/locations/{location}/cachedContents/{cachedContent}</c>.
@@ -24,11 +22,7 @@ public sealed class GenerateContentRequest
     /// Each <see cref="Content"/> item specifies a <see cref="Content.Role"/> and one or more <see cref="Content.Parts"/>.
     /// </summary>
     [JsonPropertyName("contents")]
-    public IList<Content> Contents
-    {
-        get => _contents ??= [];
-        set => _contents = value;
-    }
+    public IList<Content> Contents { get => field ??= []; set; }
 
     /// <summary>
     /// Optional. Developer-provided system instructions for the model. Only <see cref="Content.Parts"/> is used;
@@ -109,60 +103,13 @@ public sealed class GenerateContentRequest
     }
 
     /// <summary>
-    /// Creates a copy of this request that uses <paramref name="contents"/> as its conversation turns
-    /// with isolated top-level collection and configuration containers. Null elements are kept so <see cref="Validate"/>
-    /// reports them instead of a clone silently hiding them.
-    /// </summary>
-    internal GenerateContentRequest CloneWithContents(IList<Content> contents)
-    {
-        var clone = (GenerateContentRequest)MemberwiseClone();
-        clone.Contents = contents;
-        clone.SystemInstruction = SystemInstruction?.Clone();
-        clone.GenerationConfig = GenerationConfig?.Clone();
-        clone.ToolConfig = ToolConfig?.Clone();
-        if (Tools is not null)
-        {
-            var clonedTools = new List<Tool>(Tools.Count);
-            for (var i = 0; i < Tools.Count; i++)
-            {
-                clonedTools.Add(Tools[i]?.Clone()!);
-            }
-
-            clone.Tools = clonedTools;
-        }
-
-        if (SafetySettings is not null)
-        {
-            var clonedSettings = new List<SafetySetting>(SafetySettings.Count);
-            for (var i = 0; i < SafetySettings.Count; i++)
-            {
-                clonedSettings.Add(SafetySettings[i]?.Clone()!);
-            }
-
-            clone.SafetySettings = clonedSettings;
-        }
-
-        if (Labels is not null)
-        {
-            clone.Labels = new Dictionary<string, string>(Labels, StringComparer.Ordinal);
-        }
-
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
-
-    /// <summary>
     /// Validates client-side invariants that the API would otherwise reject with HTTP 400.
     /// </summary>
     /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
     /// <exception cref="ArgumentException">The request is invalid.</exception>
     internal void Validate(string paramName = "request")
     {
-        var contents = _contents;
+        var contents = Contents;
         if (contents is null || contents.Count == 0)
         {
             throw new ArgumentException("GenerateContentRequest.Contents must contain at least one Content item.", paramName);

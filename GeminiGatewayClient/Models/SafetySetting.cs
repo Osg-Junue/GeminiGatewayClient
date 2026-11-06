@@ -34,17 +34,6 @@ public sealed class SafetySetting
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    internal SafetySetting Clone()
-    {
-        var clone = (SafetySetting)MemberwiseClone();
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
 }
 
 /// <summary>

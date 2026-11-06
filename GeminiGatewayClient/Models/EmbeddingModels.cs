@@ -78,15 +78,12 @@ public sealed class EmbedContentRequest
         };
     }
 
-    internal EmbedContentRequest Clone(string? modelOverride = null, bool clearModel = false) => new()
+    internal EmbedContentRequest WithModel(string model)
     {
-        Model = clearModel ? null : modelOverride ?? Model,
-        Content = Content.Clone(),
-        TaskType = TaskType,
-        Title = Title,
-        OutputDimensionality = OutputDimensionality,
-        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
-    };
+        var copy = (EmbedContentRequest)MemberwiseClone();
+        copy.Model = model;
+        return copy;
+    }
 
     internal void Validate(string paramName = "request", int? batchIndex = null)
     {
@@ -136,17 +133,11 @@ public sealed class EmbedContentRequest
 /// </summary>
 public sealed class BatchEmbedContentsRequest
 {
-    private IList<EmbedContentRequest>? _requests;
-
     /// <summary>
     /// Required. Individual embed requests for the batch.
     /// </summary>
     [JsonPropertyName("requests")]
-    public IList<EmbedContentRequest> Requests
-    {
-        get => _requests ??= [];
-        set => _requests = value;
-    }
+    public IList<EmbedContentRequest> Requests { get => field ??= []; set; }
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -156,14 +147,14 @@ public sealed class BatchEmbedContentsRequest
 
     internal void Validate(string paramName = "request")
     {
-        if (_requests is null || _requests.Count == 0)
+        if (Requests is null || Requests.Count == 0)
         {
             throw new ArgumentException("BatchEmbedContentsRequest.Requests must contain at least one EmbedContentRequest item.", paramName);
         }
 
-        for (var i = 0; i < _requests.Count; i++)
+        for (var i = 0; i < Requests.Count; i++)
         {
-            var item = _requests[i];
+            var item = Requests[i];
             if (item is null)
             {
                 throw new ArgumentException($"BatchEmbedContentsRequest.Requests[{i}] cannot be null.", paramName);
@@ -199,17 +190,11 @@ public sealed class EmbedContentResponse
 /// </summary>
 public sealed class BatchEmbedContentsResponse
 {
-    private IList<ContentEmbedding>? _embeddings;
-
     /// <summary>
     /// The embeddings for each request, in the same order as provided in the batch request.
     /// </summary>
     [JsonPropertyName("embeddings")]
-    public IList<ContentEmbedding> Embeddings
-    {
-        get => _embeddings ??= [];
-        set => _embeddings = value;
-    }
+    public IList<ContentEmbedding> Embeddings { get => field ??= []; set; }
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.
@@ -224,17 +209,11 @@ public sealed class BatchEmbedContentsResponse
 /// </summary>
 public sealed class ContentEmbedding
 {
-    private IList<float>? _values;
-
     /// <summary>
     /// Floating-point vector values representing the embedding.
     /// </summary>
     [JsonPropertyName("values")]
-    public IList<float> Values
-    {
-        get => _values ??= [];
-        set => _values = value;
-    }
+    public IList<float> Values { get => field ??= []; set; }
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

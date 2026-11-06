@@ -43,30 +43,17 @@ public sealed class Tool
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
-    internal Tool Clone()
+    /// <summary>
+    /// Returns a copy that also declares <paramref name="declarations"/>, because the caller may reuse this instance.
+    /// </summary>
+    internal Tool WithDeclarations(IEnumerable<FunctionDeclaration> declarations) => new()
     {
-        var clone = (Tool)MemberwiseClone();
-        if (FunctionDeclarations is not null)
-        {
-            var clonedDeclarations = new List<FunctionDeclaration>(FunctionDeclarations.Count);
-            for (var i = 0; i < FunctionDeclarations.Count; i++)
-            {
-                clonedDeclarations.Add(FunctionDeclarations[i]?.Clone()!);
-            }
-
-            clone.FunctionDeclarations = clonedDeclarations;
-        }
-
-        clone.GoogleSearch = GoogleSearch?.Clone();
-        clone.CodeExecution = CodeExecution?.Clone();
-        clone.UrlContext = UrlContext?.Clone();
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
+        FunctionDeclarations = [.. FunctionDeclarations ?? [], .. declarations],
+        GoogleSearch = GoogleSearch,
+        CodeExecution = CodeExecution,
+        UrlContext = UrlContext,
+        ExtensionData = ExtensionData
+    };
 }
 
 /// <summary>
@@ -79,11 +66,6 @@ public sealed class GoogleSearchTool
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    internal GoogleSearchTool Clone() => new()
-    {
-        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
-    };
 }
 
 /// <summary>
@@ -96,11 +78,6 @@ public sealed class CodeExecutionTool
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    internal CodeExecutionTool Clone() => new()
-    {
-        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
-    };
 }
 
 /// <summary>
@@ -113,9 +90,4 @@ public sealed class UrlContextTool
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    internal UrlContextTool Clone() => new()
-    {
-        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
-    };
 }

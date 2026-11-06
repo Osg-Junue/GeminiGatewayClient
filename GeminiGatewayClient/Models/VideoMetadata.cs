@@ -36,24 +36,11 @@ public sealed class VideoMetadata
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    internal VideoMetadata Clone()
-    {
-        var clone = (VideoMetadata)MemberwiseClone();
-        clone.StartOffset = StartOffset?.Clone();
-        clone.EndOffset = EndOffset?.Clone();
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
 }
 
 /// <summary>
 /// Time offset within a video stream. Serialized on the wire as a Protobuf <c>Duration</c> string (for example <c>"40s"</c> or <c>"1.5s"</c>)
-/// per the Gemini REST API specification, while accepting both Protobuf duration strings and <c>{"seconds": ..., "nanos": ...}</c> objects when deserializing.
+/// per the Gemini REST API specification.
 /// </summary>
 [JsonConverter(typeof(VideoOffsetJsonConverter))]
 public sealed class VideoOffset
@@ -61,18 +48,12 @@ public sealed class VideoOffset
     /// <summary>
     /// Whole seconds of the time offset.
     /// </summary>
-    [JsonPropertyName("seconds")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Seconds { get; set; }
 
     /// <summary>
     /// Sub-second nanosecond fraction of the time offset.
     /// </summary>
-    [JsonPropertyName("nanos")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Nanos { get; set; }
-
-    internal VideoOffset Clone() => (VideoOffset)MemberwiseClone();
 
     /// <summary>
     /// Creates a <see cref="VideoOffset"/> from a <see cref="TimeSpan"/>.
@@ -104,219 +85,32 @@ public sealed class VideoOffset
 }
 
 /// <summary>
-/// Converts <see cref="VideoOffset"/> to and from the Gemini REST API Protobuf <c>Duration</c> wire format
-/// (for example <c>"40s"</c> or <c>"10.5s"</c>), while also accepting <c>{"seconds": ..., "nanos": ...}</c> JSON objects.
+/// Converts <see cref="VideoOffset"/> to and from the Protobuf <c>Duration</c> wire format, such as <c>"40s"</c> or <c>"10.5s"</c>.
 /// </summary>
 public sealed class VideoOffsetJsonConverter : JsonConverter<VideoOffset>
 {
+    private const decimal NanosPerSecond = 1_000_000_000m;
+
     /// <inheritdoc />
     public override VideoOffset? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        if (reader.TokenType == JsonTokenType.Null)
+        var text = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+        if (text is null || !text.EndsWith('s') ||
+            !decimal.TryParse(text.AsSpan(0, text.Length - 1), NumberStyles.Number, CultureInfo.InvariantCulture, out var total) ||
+            Math.Abs(total) > int.MaxValue)
         {
-            return null;
+            throw new JsonException($"Invalid VideoOffset duration '{text}'.");
         }
 
-        if (reader.TokenType == JsonTokenType.String)
-        {
-            var raw = reader.GetString();
-            if (string.IsNullOrWhiteSpace(raw))
-            {
-                return new VideoOffset();
-            }
-
-            if (TryParseDurationString(raw.AsSpan(), out var parsedOffset))
-            {
-                return parsedOffset;
-            }
-
-            throw new JsonException($"Invalid VideoOffset duration string '{raw}'.");
-        }
-
-        if (reader.TokenType == JsonTokenType.StartObject)
-        {
-            int? seconds = null;
-            int? nanos = null;
-
-            while (reader.Read())
-            {
-                if (reader.TokenType == JsonTokenType.EndObject)
-                {
-                    return new VideoOffset { Seconds = seconds, Nanos = nanos };
-                }
-
-                if (reader.TokenType != JsonTokenType.PropertyName)
-                {
-                    continue;
-                }
-
-                if (reader.ValueTextEquals("seconds"u8))
-                {
-                    reader.Read();
-                    if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var s))
-                    {
-                        seconds = s;
-                    }
-                    else if (reader.TokenType == JsonTokenType.String &&
-                             int.TryParse(reader.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedS))
-                    {
-                        seconds = parsedS;
-                    }
-                    else
-                    {
-                        reader.Skip();
-                    }
-                }
-                else if (reader.ValueTextEquals("nanos"u8))
-                {
-                    reader.Read();
-                    if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var n))
-                    {
-                        nanos = n;
-                    }
-                    else if (reader.TokenType == JsonTokenType.String &&
-                             int.TryParse(reader.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedN))
-                    {
-                        nanos = parsedN;
-                    }
-                    else
-                    {
-                        reader.Skip();
-                    }
-                }
-                else
-                {
-                    reader.Read();
-                    reader.Skip();
-                }
-            }
-
-            throw new JsonException("Unexpected end of JSON while reading VideoOffset object.");
-        }
-
-        throw new JsonException($"Unexpected JSON token {reader.TokenType} when reading VideoOffset.");
+        var seconds = (int)decimal.Truncate(total);
+        var nanos = (int)((total - seconds) * NanosPerSecond);
+        return new VideoOffset { Seconds = seconds, Nanos = nanos == 0 ? null : nanos };
     }
 
     /// <inheritdoc />
     public override void Write(Utf8JsonWriter writer, VideoOffset value, JsonSerializerOptions options)
     {
-        ArgumentNullException.ThrowIfNull(writer);
-        if (value is null)
-        {
-            writer.WriteNullValue();
-            return;
-        }
-
-        var seconds = value.Seconds ?? 0;
-        var nanos = value.Nanos ?? 0;
-        if (nanos == 0)
-        {
-            Span<char> buffer = stackalloc char[16];
-            if (seconds.TryFormat(buffer, out var charsWritten, provider: CultureInfo.InvariantCulture))
-            {
-                buffer[charsWritten] = 's';
-                writer.WriteStringValue(buffer[..(charsWritten + 1)]);
-                return;
-            }
-        }
-
-        const long NanosPerSecond = 1_000_000_000L;
-        var totalNanos = ((long)seconds * NanosPerSecond) + nanos;
-        if (totalNanos == 0)
-        {
-            writer.WriteStringValue("0s"u8);
-            return;
-        }
-
-        var isNegative = totalNanos < 0;
-        var absNanos = isNegative ? -totalNanos : totalNanos;
-        var wholeSeconds = absNanos / NanosPerSecond;
-        var remNanos = (int)(absNanos % NanosPerSecond);
-        var signPrefix = isNegative ? "-" : "";
-
-        if (remNanos == 0)
-        {
-            writer.WriteStringValue(string.Create(CultureInfo.InvariantCulture, $"{signPrefix}{wholeSeconds}s"));
-            return;
-        }
-
-        Span<char> fracBuffer = stackalloc char[9];
-        remNanos.TryFormat(fracBuffer, out _, "D9", CultureInfo.InvariantCulture);
-        var fracSpan = fracBuffer.TrimEnd('0');
-        writer.WriteStringValue(string.Create(CultureInfo.InvariantCulture, $"{signPrefix}{wholeSeconds}.{fracSpan}s"));
-    }
-
-    private static bool TryParseDurationString(ReadOnlySpan<char> span, out VideoOffset offset)
-    {
-        offset = null!;
-        span = span.Trim();
-        if (span.IsEmpty || span[^1] != 's')
-        {
-            return false;
-        }
-
-        var numberSpan = span[..^1].TrimEnd();
-        if (numberSpan.IsEmpty)
-        {
-            return false;
-        }
-
-        var dotIndex = numberSpan.IndexOf('.');
-        if (dotIndex < 0)
-        {
-            if (!int.TryParse(numberSpan, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var wholeSeconds))
-            {
-                return false;
-            }
-
-            offset = new VideoOffset { Seconds = wholeSeconds };
-            return true;
-        }
-
-        var secSpan = numberSpan[..dotIndex];
-        var fracSpan = numberSpan[(dotIndex + 1)..];
-        var isNegative = secSpan.StartsWith('-');
-
-        var hasSecDigits = !secSpan.IsEmpty && secSpan is not ['-' or '+'];
-        if (!hasSecDigits && fracSpan.IsEmpty)
-        {
-            return false;
-        }
-
-        var whole = 0;
-        if (hasSecDigits &&
-            !int.TryParse(secSpan, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out whole))
-        {
-            return false;
-        }
-
-        var nanos = 0;
-        if (!fracSpan.IsEmpty)
-        {
-            if (fracSpan.Length > 9)
-            {
-                fracSpan = fracSpan[..9];
-            }
-
-            Span<char> padded = stackalloc char[9];
-            padded.Fill('0');
-            fracSpan.CopyTo(padded);
-            if (!int.TryParse(padded, NumberStyles.None, CultureInfo.InvariantCulture, out nanos))
-            {
-                return false;
-            }
-
-            if (isNegative)
-            {
-                nanos = -nanos;
-            }
-        }
-
-        offset = new VideoOffset
-        {
-            Seconds = whole,
-            Nanos = nanos == 0 ? null : nanos
-        };
-        return true;
+        var total = (value.Seconds ?? 0) + ((value.Nanos ?? 0) / NanosPerSecond);
+        writer.WriteStringValue(total.ToString("0.#########", CultureInfo.InvariantCulture) + "s");
     }
 }

@@ -9,16 +9,21 @@ namespace GeminiGatewayClient.Models;
 /// </summary>
 public sealed class CitationMetadata
 {
-    private IList<Citation>? _citations;
-
     /// <summary>
     /// Citations to sources for a specific response.
     /// </summary>
+    [JsonPropertyName("citationSources")]
+    public IList<Citation> Citations { get => field ??= []; set; }
+
+    /// <summary>
+    /// Vertex AI's name for <see cref="Citations"/>, for gateways that front it.
+    /// </summary>
+    [JsonInclude]
     [JsonPropertyName("citations")]
-    public IList<Citation> Citations
+    internal IList<Citation>? VertexCitations
     {
-        get => _citations ??= [];
-        set => _citations = value;
+        get => null;
+        set => Citations = value ?? Citations;
     }
 
     /// <summary>

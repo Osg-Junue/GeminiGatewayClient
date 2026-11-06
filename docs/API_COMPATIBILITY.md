@@ -23,9 +23,9 @@ This document maps the official [Google Gemini REST API (`generativelanguage.goo
 | Official Gemini REST Endpoint | Official Doc Reference | Status | `GeminiGatewayClient` API |
 |---|---|---|---|
 | `POST /{version}/models/{model}:generateContent` | [Generating content](https://ai.google.dev/api/generate-content#method:-models.generatecontent) | ✅ Supported | `IGeminiClient.GenerateContentAsync`<br>`IChatClient.GetResponseAsync` |
-| `POST /{version}/models/{model}:streamGenerateContent?alt=sse` | [Streaming content](https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent) | ✅ Supported | `IGeminiClient.StreamGenerateContentAsync` (`ServerSentEvents` default, or `JsonArray`)<br>`IChatClient.GetStreamingResponseAsync` |
-| `POST /{version}/models/{model}:embedContent` | [Embeddings](https://ai.google.dev/api/embeddings#method:-models.embedcontent) | ✅ Supported | `IGeminiClient.EmbedContentAsync`<br>`IEmbeddingGenerator<string, Embedding<float>>.GenerateAsync` (single input) |
-| `POST /{version}/models/{model}:batchEmbedContents` | [Batch embeddings](https://ai.google.dev/api/embeddings#method:-models.batchembedcontents) | ✅ Supported | `IGeminiClient.BatchEmbedContentsAsync`<br>`IEmbeddingGenerator<string, Embedding<float>>.GenerateAsync` (multiple inputs) |
+| `POST /{version}/models/{model}:streamGenerateContent?alt=sse` | [Streaming content](https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent) | ✅ Supported | `IGeminiClient.StreamGenerateContentAsync`<br>`IChatClient.GetStreamingResponseAsync` |
+| `POST /{version}/models/{model}:embedContent` | [Embeddings](https://ai.google.dev/api/embeddings#method:-models.embedcontent) | ✅ Supported | `IGeminiClient.EmbedContentAsync` |
+| `POST /{version}/models/{model}:batchEmbedContents` | [Batch embeddings](https://ai.google.dev/api/embeddings#method:-models.batchembedcontents) | ✅ Supported | `IGeminiClient.BatchEmbedContentsAsync`<br>`IEmbeddingGenerator<string, Embedding<float>>.GenerateAsync` |
 | `POST /{version}/tunedModels/{model}:generateContent` | [Tuned models](https://ai.google.dev/api/tuning) | ✅ Supported | Pass `"tunedModels/{id}"` as `Model` |
 | `POST /{version}/tunedModels/{model}:streamGenerateContent` | [Tuned models](https://ai.google.dev/api/tuning) | ✅ Supported | Pass `"tunedModels/{id}"` as `Model` |
 | Consuming uploaded files (`fileData.fileUri`) | [Files API](https://ai.google.dev/api/files) | ✅ Supported | `Part.FromUri(fileUri, mimeType)` / `FileData` |
@@ -47,7 +47,7 @@ Reference: [`models.generateContent` Request Body](https://ai.google.dev/api/gen
 | `tools` | `Tool[]` | ✅ Supported | `Tools` (`IList<Tool>?`) | Functions, Google Search, Code Execution, URL Context |
 | `toolConfig` | `ToolConfig` | ✅ Supported | `ToolConfig` (`ToolConfig?`) | Controls `FunctionCallingConfig` (`Mode`, `AllowedFunctionNames`) |
 | `safetySettings` | `SafetySetting[]` | ✅ Supported | `SafetySettings` (`IList<SafetySetting>?`) | Per-category `HarmBlockThreshold` and `HarmBlockMethod` |
-| `systemInstruction` | `Content` | ✅ Supported | `SystemInstruction` (`Content?`) | System prompt (`Role` omitted or `System`) |
+| `systemInstruction` | `Content` | ✅ Supported | `SystemInstruction` (`Content?`) | System prompt (`Role` omitted) |
 | `generationConfig` | `GenerationConfig` | ✅ Supported | `GenerationConfig` (`GenerationConfig?`) | Sampling, schema, modalities, and thinking parameters |
 | `cachedContent` | `string` | ✅ Supported | `CachedContent` (`string?`) | Format: `cachedContents/{id}` |
 | `store` | `boolean` | ✅ Supported | `Store` (`bool?`) | Optional conversation storage flag |
@@ -78,7 +78,7 @@ Reference: [`GenerationConfig`](https://ai.google.dev/api/generate-content#gener
 | `responseLogprobs` | `boolean` | ✅ Supported | `ResponseLogprobs` (`bool?`) | Enables token log-probabilities in response |
 | `logprobs` | `integer` | ✅ Supported | `Logprobs` (`int?`) | Number of top candidate tokens per step (`[0, 20]`) |
 | `enableEnhancedCivicAnswers` | `boolean` | ✅ Supported | `EnableEnhancedCivicAnswers` (`bool?`) | Enhanced civic integrity mode |
-| `mediaResolution` | `MediaResolution` | ✅ Supported | `MediaResolution` (`MediaResolution?`) | `MediaResolutionLow`, `MediaResolutionMedium`, `MediaResolutionHigh` |
+| `mediaResolution` | `MediaResolution` | ✅ Supported | `MediaResolution` (`MediaResolution?`) | `Low`, `Medium`, `High` |
 | `audioTimestamp` | `boolean` | ✅ Supported | `AudioTimestamp` (`bool?`) | **Vertex AI endpoints only** |
 | `thinkingConfig.includeThoughts` | `boolean` | ✅ Supported | `ThinkingConfig.IncludeThoughts` (`bool?`) | Returns thought summaries (`Part.Thought == true`) |
 | `thinkingConfig.thinkingBudget` | `integer` | ✅ Supported | `ThinkingConfig.ThinkingBudget` (`int?`) | Gemini 2.5 token budget (`-1` dynamic, `0` off, `> 0` cap) |
@@ -133,7 +133,7 @@ Reference: [`GenerateContentResponse`](https://ai.google.dev/api/generate-conten
 | `modelVersion` | `string` | ✅ Supported | `GenerateContentResponse.ModelVersion` | Model version identifier used for generation |
 | `responseId` | `string` | ✅ Supported | `GenerateContentResponse.ResponseId` | Unique response identifier |
 | `candidates[].content` | `Content` | ✅ Supported | `Candidate.Content` | Generated model message parts |
-| `candidates[].finishReason` | `FinishReason` | ✅ Supported | `Candidate.FinishReason` | All 17 official values (`Stop`, `MaxTokens`, `Safety`, `MalformedFunctionCall`, `UnexpectedToolCall`, etc.) + `Unknown` fallback |
+| `candidates[].finishReason` | `FinishReason` | ✅ Supported | `Candidate.FinishReason` | All 19 official values (`Stop`, `MaxTokens`, `Safety`, `MalformedFunctionCall`, `UnexpectedToolCall`, etc.) + `Unknown` fallback |
 | `candidates[].safetyRatings` | `SafetyRating[]` | ✅ Supported | `Candidate.SafetyRatings` | `Category`, `Probability`, `ProbabilityScore`, `Severity`, `SeverityScore`, `Blocked` |
 | `candidates[].citationMetadata` | `CitationMetadata` | ✅ Supported | `Candidate.CitationMetadata` | `Citations` (`StartIndex`, `EndIndex`, `Uri`, `Title`, `License`, `PublicationDate`) |
 | `candidates[].groundingMetadata` | `GroundingMetadata` | ✅ Supported | `Candidate.GroundingMetadata` | `WebSearchQueries`, `SearchEntryPoint` (`RenderedContent`, `SdkBlob`), `GroundingChunks` (`Web`, `RetrievedContext`), `GroundingSupports` (`Segment`, `GroundingChunkIndices`, `ConfidenceScores`) |
@@ -171,7 +171,7 @@ Reference: [`Embeddings`](https://ai.google.dev/api/embeddings)
 | `ChatRole.User` / `ChatRole.Tool` | `Content` with `Role.User` |
 | `ChatRole.Assistant` | `Content` with `Role.Model` |
 | `TextContent` | `Part.Text` (preserves trailing `ThoughtSignature` via `AdditionalProperties`) |
-| `TextContent.Annotations` (`CitationAnnotation`) | Mapped from `Candidate.CitationMetadata` and `Candidate.GroundingMetadata` (`GroundingChunks` + `GroundingSupports`), converting UTF-8 byte offsets into UTF-16 `char` offsets on `TextSpanAnnotatedRegion` |
+| `AIContent.Annotations` (`CitationAnnotation`) | On the `TextContent` of a single-text response, otherwise on an annotation-only `AIContent`. Mapped from `Candidate.CitationMetadata` and `Candidate.GroundingMetadata` (`GroundingChunks` + `GroundingSupports`), converting UTF-8 byte offsets into UTF-16 `char` offsets on `TextSpanAnnotatedRegion` |
 | `ChatResponse.AdditionalProperties["gemini.webSearchQueries"]` | Mapped from `Candidate.GroundingMetadata.WebSearchQueries` |
 | `TextReasoningContent` | `Part` with `Thought = true`, `Text`, and `ThoughtSignature` (`ProtectedData`) |
 | `DataContent` | `Part.InlineData` (`Blob` with `MimeType` and `Data` bytes) |
@@ -186,8 +186,8 @@ Reference: [`Embeddings`](https://ai.google.dev/api/embeddings)
 | `ChatResponseFormatText` | `GenerationConfig.ResponseMimeType = "text/plain"` |
 | `ChatResponseFormatJson` | `GenerationConfig.ResponseMimeType = "application/json"` + `ResponseJsonSchema` |
 | `ChatOptions.Reasoning` | Mapped to `ThinkingConfig` (`ThinkingLevel` on Gemini 3+, `ThinkingBudget` on Gemini 2.5, `IncludeThoughts` from `ReasoningOutput`) |
-| `ChatOptions.RawRepresentationFactory` | Accepts a `GenerateContentRequest` template, deep-cloned per call so shared templates are never mutated |
-| `IEmbeddingGenerator<string, Embedding<float>>` | Calls `:embedContent` for single input and `:batchEmbedContents` for multiple inputs; maps `EmbeddingGenerationOptions.ModelId`, `Dimensions` (`outputDimensionality`), and `RawRepresentationFactory` (`EmbedContentRequest` / `BatchEmbedContentsRequest`) |
+| `ChatOptions.RawRepresentationFactory` | Accepts a `GenerateContentRequest` template, which the client modifies, so return a new instance on each call |
+| `IEmbeddingGenerator<string, Embedding<float>>` | Always calls `:batchEmbedContents`; maps `EmbeddingGenerationOptions.ModelId`, `Dimensions` (`outputDimensionality`), and `RawRepresentationFactory` (`EmbedContentRequest`) |
 
 ---
 

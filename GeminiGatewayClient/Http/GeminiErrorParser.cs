@@ -1,5 +1,3 @@
-using System.Buffers;
-using System.Collections.Frozen;
 using System.Globalization;
 using System.Net;
 using System.Text;
@@ -13,101 +11,43 @@ namespace GeminiGatewayClient.Http;
 /// </summary>
 internal static class GeminiErrorParser
 {
-    private const string DefaultStreamErrorMessage = "The Gemini API reported an error in the response stream";
-
-    private static readonly FrozenDictionary<string, HttpStatusCode> s_rpcStatusToHttp = new Dictionary<string, HttpStatusCode>(StringComparer.OrdinalIgnoreCase)
-    {
-        ["RESOURCE_EXHAUSTED"] = HttpStatusCode.TooManyRequests,
-        ["UNAVAILABLE"] = HttpStatusCode.ServiceUnavailable,
-        ["DEADLINE_EXCEEDED"] = HttpStatusCode.GatewayTimeout,
-        ["INTERNAL"] = HttpStatusCode.InternalServerError,
-        ["UNKNOWN"] = HttpStatusCode.InternalServerError,
-        ["DATA_LOSS"] = HttpStatusCode.InternalServerError,
-        ["INVALID_ARGUMENT"] = HttpStatusCode.BadRequest,
-        ["FAILED_PRECONDITION"] = HttpStatusCode.BadRequest,
-        ["OUT_OF_RANGE"] = HttpStatusCode.BadRequest,
-        ["NOT_FOUND"] = HttpStatusCode.NotFound,
-        ["ALREADY_EXISTS"] = HttpStatusCode.Conflict,
-        ["ABORTED"] = HttpStatusCode.Conflict,
-        ["PERMISSION_DENIED"] = HttpStatusCode.Forbidden,
-        ["UNAUTHENTICATED"] = HttpStatusCode.Unauthorized,
-        ["UNIMPLEMENTED"] = HttpStatusCode.NotImplemented,
-        ["CANCELLED"] = (HttpStatusCode)499
-    }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
-
     /// <summary>
-    /// Maximum number of characters of an error body retained in <see cref="GeminiApiException.ErrorContent"/>.
+    /// Maximum length of an error body retained in <see cref="GeminiApiException.ErrorContent"/>.
     /// </summary>
     public const int MaxErrorBodyChars = 64 * 1024;
 
     /// <summary>
-    /// Builds an exception from a non-success HTTP response, reading at most <see cref="MaxErrorBodyChars"/> of its body.
+    /// Builds an exception from a non-success HTTP response. A body that cannot be read in time never hides the status.
     /// </summary>
-    public static Task<GeminiApiException> CreateFromResponseAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    public static async Task<GeminiApiException> FromResponseAsync(HttpResponseMessage response, TimeSpan? readTimeout, CancellationToken cancellationToken)
     {
-        using var watchdog = new StreamIdleWatchdog(idleTimeout: null, cancellationToken);
-        return CreateFromResponseAsync(response, watchdog);
-    }
-
-    /// <summary>
-    /// Builds an exception from a non-success HTTP response, reading at most <see cref="MaxErrorBodyChars"/> of its body
-    /// while enforcing per-read idle timeouts via <paramref name="watchdog"/>.
-    /// </summary>
-    public static async Task<GeminiApiException> CreateFromResponseAsync(HttpResponseMessage response, StreamIdleWatchdog watchdog)
-    {
-        var body = await ReadBoundedAsync(response.Content, watchdog).ConfigureAwait(false);
-        var details = Parse(body);
-        var retryAfter = details.RetryDelay ?? GetRetryAfterHeader(response);
+        var body = await ReadBodyAsync(response.Content, readTimeout, cancellationToken).ConfigureAwait(false);
+        var details = ParseBody(body);
 
         return new GeminiApiException(
             "API request failed",
             response.StatusCode,
-            body,
+            body?.Length > MaxErrorBodyChars ? body[..MaxErrorBodyChars] : body,
             details.Status,
             details.Message,
-            retryAfter,
+            details.RetryDelay ?? GetRetryAfterHeader(response),
             errorCode: details.Code);
     }
 
     /// <summary>
-    /// Returns an exception when <paramref name="payload"/> is an in-stream error object (sent after the HTTP 200 status line),
-    /// or <c>null</c> when it is a regular chunk.
+    /// Builds an exception from an <c>"error"</c> object sent with a 2xx status.
     /// </summary>
-    public static GeminiApiException? TryCreateFromStreamPayload(
-        JsonElement payload,
-        HttpStatusCode httpStatusCode,
-        string? summaryMessage = null)
-    {
-        if (payload.ValueKind != JsonValueKind.Object ||
-            !payload.TryGetProperty("error", out var error) ||
-            error.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
-
-        var raw = payload.GetRawText();
-        if (raw.Length > MaxErrorBodyChars)
-        {
-            raw = raw[..MaxErrorBodyChars];
-        }
-
-        return CreateFromErrorElement(error, raw, httpStatusCode, summaryMessage);
-    }
-
-    /// <summary>
-    /// Builds an in-stream <see cref="GeminiApiException"/> from an already-extracted <c>"error"</c> JSON object and raw payload text.
-    /// </summary>
-    internal static GeminiApiException CreateFromErrorElement(
-        JsonElement error,
-        string? rawBody,
-        HttpStatusCode httpStatusCode,
-        string? summaryMessage = null)
+    public static GeminiApiException FromErrorElement(JsonElement error, string rawBody, HttpStatusCode httpStatusCode)
     {
         var details = ParseErrorObject(error);
-        var statusCode = MapStatusCode(details.Code, details.Status, httpStatusCode);
+
+        // The HTTP status of such a response says nothing about the failure, and a 2xx status must never be reported as one.
+        var statusCode = details.Code is >= 400 and <= 599 ? (HttpStatusCode)details.Code.Value
+            : (int)httpStatusCode >= 400 ? httpStatusCode
+            : HttpStatusCode.InternalServerError;
 
         return new GeminiApiException(
-            summaryMessage ?? DefaultStreamErrorMessage,
+            "The Gemini API reported an error in the response body",
             statusCode,
             rawBody,
             details.Status,
@@ -116,55 +56,50 @@ internal static class GeminiErrorParser
             errorCode: details.Code);
     }
 
-    private static HttpStatusCode MapStatusCode(int? code, string? rpcStatus, HttpStatusCode fallback)
+    /// <summary>
+    /// Builds an exception from a 2xx body that holds no usable response, reporting the Google error it may carry instead.
+    /// </summary>
+    public static GeminiApiException FromUnusableBody(string message, string body, HttpStatusCode httpStatusCode, Exception? innerException = null)
     {
-        if (code is >= 100 and <= 599 and not (>= 200 and <= 299))
+        try
         {
-            return (HttpStatusCode)code.Value;
+            using var document = JsonDocument.Parse(body);
+            if (FindError(document.RootElement) is { } error)
+            {
+                return FromErrorElement(error, body, httpStatusCode);
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON, for example an HTML page from a gateway; keep the raw body only.
         }
 
-        // Map canonical gRPC status codes (1..16) when returned in-stream instead of an HTTP status code.
-        switch (code)
-        {
-            case 1:
-                return (HttpStatusCode)499;
-            case 2:
-            case 13:
-            case 15:
-                return HttpStatusCode.InternalServerError;
-            case 3:
-            case 9:
-            case 11:
-                return HttpStatusCode.BadRequest;
-            case 4:
-                return HttpStatusCode.GatewayTimeout;
-            case 5:
-                return HttpStatusCode.NotFound;
-            case 6:
-            case 10:
-                return HttpStatusCode.Conflict;
-            case 7:
-                return HttpStatusCode.Forbidden;
-            case 8:
-                return HttpStatusCode.TooManyRequests;
-            case 12:
-                return HttpStatusCode.NotImplemented;
-            case 14:
-                return HttpStatusCode.ServiceUnavailable;
-            case 16:
-                return HttpStatusCode.Unauthorized;
-        }
-
-        if (!string.IsNullOrEmpty(rpcStatus) && s_rpcStatusToHttp.TryGetValue(rpcStatus, out var mappedStatus))
-        {
-            return mappedStatus;
-        }
-
-        // An in-stream error arrived on an HTTP 2xx connection; never report a 2xx status code on GeminiApiException.
-        return (int)fallback is >= 200 and <= 299 ? HttpStatusCode.InternalServerError : fallback;
+        return new GeminiApiException(message, httpStatusCode, body.Length > 0 ? body : null, innerException);
     }
 
-    private static ErrorDetails Parse(string? body)
+    private static async Task<string?> ReadBodyAsync(HttpContent content, TimeSpan? readTimeout, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (readTimeout is { } limit)
+        {
+            timeout.CancelAfter(limit);
+        }
+
+        try
+        {
+            // Gemini speaks UTF-8; a gateway's charset parameter may be wrong or unknown to .NET.
+            await content.LoadIntoBufferAsync(GeminiClient.MaxResponseBytes, timeout.Token).ConfigureAwait(false);
+            var bytes = await content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
+            return Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
+        }
+        catch (Exception ex) when (ex is IOException or HttpRequestException ||
+                                   (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+        {
+            return null;
+        }
+    }
+
+    private static ErrorDetails ParseBody(string? body)
     {
         if (string.IsNullOrWhiteSpace(body))
         {
@@ -174,19 +109,7 @@ internal static class GeminiErrorParser
         try
         {
             using var document = JsonDocument.Parse(body);
-            var root = document.RootElement;
-
-            // Streaming endpoints may wrap the error in a single-element array.
-            if (root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 0)
-            {
-                root = root[0];
-            }
-
-            return root.ValueKind == JsonValueKind.Object &&
-                   root.TryGetProperty("error", out var error) &&
-                   error.ValueKind == JsonValueKind.Object
-                ? ParseErrorObject(error)
-                : default;
+            return FindError(document.RootElement) is { } error ? ParseErrorObject(error) : default;
         }
         catch (JsonException)
         {
@@ -195,179 +118,74 @@ internal static class GeminiErrorParser
         }
     }
 
+    private static JsonElement? FindError(JsonElement root)
+    {
+        // Google's streaming endpoints wrap an error in a single-element array.
+        var body = root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 0 ? root[0] : root;
+
+        return body.ValueKind == JsonValueKind.Object &&
+               body.TryGetProperty("error", out var error) &&
+               error.ValueKind == JsonValueKind.Object
+            ? error
+            : null;
+    }
+
     private static ErrorDetails ParseErrorObject(JsonElement error)
     {
-        int? code = error.TryGetProperty("code", out var codeProp) &&
-                    codeProp.ValueKind == JsonValueKind.Number &&
-                    codeProp.TryGetInt32(out var parsedCode)
+        // A gateway may send a text code such as "invalid_api_key".
+        int? code = error.TryGetProperty("code", out var codeProperty) &&
+                    codeProperty.ValueKind == JsonValueKind.Number &&
+                    codeProperty.TryGetInt32(out var parsedCode)
             ? parsedCode
             : null;
-
-        var status = error.TryGetProperty("status", out var statusProp) && statusProp.ValueKind == JsonValueKind.String
-            ? statusProp.GetString()
-            : null;
-
-        var message = error.TryGetProperty("message", out var messageProp) && messageProp.ValueKind == JsonValueKind.String
-            ? messageProp.GetString()
-            : null;
-
         TimeSpan? retryDelay = null;
-        if (error.TryGetProperty("details", out var detailsProp) && detailsProp.ValueKind == JsonValueKind.Array)
+
+        if (error.TryGetProperty("details", out var details) && details.ValueKind == JsonValueKind.Array)
         {
-            foreach (var detail in detailsProp.EnumerateArray())
+            foreach (var detail in details.EnumerateArray())
             {
                 if (detail.ValueKind == JsonValueKind.Object &&
-                    detail.TryGetProperty("retryDelay", out var delayProp) &&
-                    delayProp.ValueKind == JsonValueKind.String &&
-                    TryParseProtobufDuration(delayProp.GetString(), out var delay))
+                    detail.TryGetProperty("retryDelay", out var delay) &&
+                    TryParseSeconds(delay, out var parsedDelay))
                 {
-                    retryDelay = delay;
+                    retryDelay = parsedDelay;
                     break;
                 }
             }
         }
 
-        return new ErrorDetails(code, status, message, retryDelay);
+        return new ErrorDetails(code, GetString(error, "status"), GetString(error, "message"), retryDelay);
     }
 
-    private static TimeSpan? GetRetryAfterHeader(HttpResponseMessage response)
-    {
-        if (response.Headers.RetryAfter is not { } retryAfter)
-        {
-            return null;
-        }
-
-        if (retryAfter.Delta is { } delta && delta > TimeSpan.Zero)
-        {
-            return delta;
-        }
-
-        if (retryAfter.Date is { } date && date - DateTimeOffset.UtcNow is var diff && diff > TimeSpan.Zero)
-        {
-            return diff;
-        }
-
-        return null;
-    }
-
-    private static async Task<string> ReadBoundedAsync(HttpContent content, StreamIdleWatchdog watchdog)
-    {
-        Stream stream;
-        watchdog.BeforeRead();
-        var openSucceeded = false;
-        try
-        {
-            stream = await content.ReadAsStreamAsync(watchdog.Token).ConfigureAwait(false);
-            openSucceeded = true;
-        }
-        finally
-        {
-            watchdog.AfterRead(openSucceeded);
-        }
-
-        await using (stream.ConfigureAwait(false))
-        {
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true);
-
-            var buffer = ArrayPool<char>.Shared.Rent(4096);
-            try
-            {
-                var builder = new StringBuilder();
-                var remaining = MaxErrorBodyChars;
-
-                while (remaining > 0)
-                {
-                    int read;
-                    watchdog.BeforeRead();
-                    var readSucceeded = false;
-                    try
-                    {
-                        read = await reader.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), watchdog.Token).ConfigureAwait(false);
-                        readSucceeded = true;
-                    }
-                    catch (IOException)
-                    {
-                        // The status and headers already arrived, so a cut-off body must not hide them or the retry advice.
-                        break;
-                    }
-                    finally
-                    {
-                        watchdog.AfterRead(readSucceeded);
-                    }
-
-                    if (read == 0)
-                    {
-                        break;
-                    }
-
-                    builder.Append(buffer, 0, read);
-                    remaining -= read;
-                }
-
-                return builder.ToString();
-            }
-            finally
-            {
-                ArrayPool<char>.Shared.Return(buffer);
-            }
-        }
-    }
+    private static string? GetString(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
 
     /// <summary>
-    /// Parses a protobuf JSON <c>Duration</c> such as <c>"37s"</c>, <c>"1.5s"</c>, or <c>"250ms"</c>.
+    /// Parses the seconds form Google uses for a protobuf <c>Duration</c>, such as <c>"37s"</c> or <c>"1.5s"</c>.
     /// </summary>
-    internal static bool TryParseProtobufDuration(string? value, out TimeSpan duration)
+    private static bool TryParseSeconds(JsonElement value, out TimeSpan duration)
     {
         duration = default;
-        if (string.IsNullOrWhiteSpace(value))
+        if (value.ValueKind == JsonValueKind.String &&
+            value.GetString() is { Length: > 1 } text &&
+            text.EndsWith('s') &&
+            double.TryParse(text.AsSpan(0, text.Length - 1), NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) &&
+            seconds is >= 0 and < 1e9)
         {
-            return false;
+            duration = TimeSpan.FromSeconds(seconds);
+            return true;
         }
 
-        var span = value.AsSpan().Trim();
-        double scale;
-        if (span.EndsWith("ms", StringComparison.OrdinalIgnoreCase))
-        {
-            span = span[..^2];
-            scale = 1.0;
-        }
-        else if (span.EndsWith("us", StringComparison.OrdinalIgnoreCase) ||
-                 span.EndsWith("µs", StringComparison.OrdinalIgnoreCase))
-        {
-            span = span[..^2];
-            scale = 0.001;
-        }
-        else if (span.EndsWith("ns", StringComparison.OrdinalIgnoreCase))
-        {
-            span = span[..^2];
-            scale = 0.000001;
-        }
-        else if (span.EndsWith("s", StringComparison.OrdinalIgnoreCase))
-        {
-            span = span[..^1];
-            scale = 1000.0;
-        }
-        else
-        {
-            return false;
-        }
-
-        if (!double.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out var amount) ||
-            !double.IsFinite(amount) ||
-            amount < 0)
-        {
-            return false;
-        }
-
-        var milliseconds = amount * scale;
-        if (milliseconds >= TimeSpan.MaxValue.TotalMilliseconds)
-        {
-            return false;
-        }
-
-        duration = TimeSpan.FromMilliseconds(milliseconds);
-        return true;
+        return false;
     }
+
+    private static TimeSpan? GetRetryAfterHeader(HttpResponseMessage response) =>
+        response.Headers.RetryAfter switch
+        {
+            { Delta: { } delta } when delta > TimeSpan.Zero => delta,
+            { Date: { } date } when date > DateTimeOffset.UtcNow => date - DateTimeOffset.UtcNow,
+            _ => null
+        };
 
     private readonly record struct ErrorDetails(int? Code, string? Status, string? Message, TimeSpan? RetryDelay);
 }

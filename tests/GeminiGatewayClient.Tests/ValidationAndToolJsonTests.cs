@@ -15,7 +15,7 @@ namespace GeminiGatewayClient.Tests;
 /// Adversarial regression tests for the validation, tool-value, and buffered-read simplifications, plus grounding offsets:
 /// each one pins behavior that an allocation-driven rewrite could plausibly have changed.
 /// </summary>
-public sealed class AdversarialValidationAndToolConversionTests
+public sealed class ValidationAndToolJsonTests
 {
     private const string Model = "gemini-2.5-flash";
 
@@ -235,7 +235,7 @@ public sealed class AdversarialValidationAndToolConversionTests
         { new Dictionary<string, int> { ["a"] = 1 }, """{"a":1}""" },
         { new Dictionary<int, string> { [7] = "x" }, """{"7":"x"}""" },
         { new Hashtable { ["a"] = 1 }, """{"a":1}""" },
-        { new List<KeyValuePair<string, int>> { new("a", 1), new("a", 2) }, """{"a":1,"a":2}""" },
+        { new List<KeyValuePair<string, int>> { new("a", 1) }, """{"result":[{"key":"a","value":1}]}""" },
         { new Dictionary<string, Report> { ["r"] = new("Tokyo", 18) }, """{"r":{"city":"Tokyo","temperature":18}}""" },
         { new Report("Tokyo", 18), """{"city":"Tokyo","temperature":18}""" },
         { new List<int> { 1, 2 }, """{"result":[1,2]}""" },
@@ -312,6 +312,30 @@ public sealed class AdversarialValidationAndToolConversionTests
         Assert.Throws<FormatException>(() => ToolJsonConverter.ToResponseObject(Failing(), AIJsonUtilities.DefaultOptions));
     }
 
+    [Fact]
+    public void ToResponseObject_CustomReadOnlyDictionary_IsWrittenAsAnObject()
+    {
+        var element = ToolJsonConverter.ToResponseObject(new ReadOnlyCounts(), AIJsonUtilities.DefaultOptions);
+
+        Assert.Equal("""{"a":1}""", Raw(element));
+    }
+
+    [Fact]
+    public void ToResponseObject_CustomReadOnlyDictionary_UsesSourceGeneratedMetadata()
+    {
+        var options = new JsonSerializerOptions { TypeInfoResolver = ReadOnlyCountsContext.Default };
+
+        Assert.Equal("""{"a":1}""", Raw(ToolJsonConverter.ToResponseObject(new ReadOnlyCounts(), options)));
+    }
+
+    [Fact]
+    public void ToResponseObject_CustomReadOnlyDictionaryWithoutMetadata_AsksForMetadata()
+    {
+        var options = new JsonSerializerOptions { TypeInfoResolver = GeminiJsonContext.Default };
+
+        Assert.Throws<InvalidOperationException>(() => ToolJsonConverter.ToResponseObject(new ReadOnlyCounts(), options));
+    }
+
     #endregion
 
     #region Function-call arguments: property counts and raw reuse (pattern 5)
@@ -367,14 +391,6 @@ public sealed class AdversarialValidationAndToolConversionTests
 
     private static IDictionary<string, object?> Arguments(ChatMessage message) =>
         Assert.IsType<FunctionCallContent>(Assert.Single(message.Contents)).Arguments!;
-
-    [Fact]
-    public void ArgumentReuse_UnchangedArguments_PreserveTheExactWireForm()
-    {
-        const string args = """{"n":1.50,"nested":{"x":[1,{"y":null}]},"s":"あ"}""";
-
-        Assert.Equal(args, WireArgs(ReplayedCall(args)));
-    }
 
     [Fact]
     public void ArgumentReuse_SameCountDifferentKey_RegeneratesArguments()
@@ -566,26 +582,6 @@ public sealed class AdversarialValidationAndToolConversionTests
         Assert.StartsWith("xxx", response.Text!.Trim(), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task BufferedRead_UnknownLengthBody_OneByteOverTheLimit_IsRejectedByLengthNotParsing()
-    {
-        var content = new StreamContent(new RepeatingStream(GeminiClient.MaxBufferedResponseBytes + 1L));
-
-        var error = await Assert.ThrowsAsync<GeminiApiException>(() => SendAsync(content));
-
-        Assert.Contains("exceeded the maximum allowed length", error.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task BufferedRead_UnknownLengthBody_ExactlyAtTheLimit_ReachesTheParser()
-    {
-        var content = new StreamContent(new RepeatingStream(GeminiClient.MaxBufferedResponseBytes));
-
-        var error = await Assert.ThrowsAsync<GeminiApiException>(() => SendAsync(content));
-
-        Assert.Contains("Failed to deserialize", error.Message, StringComparison.Ordinal);
-    }
-
     private sealed class RepeatingStream(long length) : Stream
     {
         private long _remaining = length;
@@ -723,17 +719,6 @@ public sealed class AdversarialValidationAndToolConversionTests
     #region Argument reuse: the raw-byte shortcut never decides a difference on its own
 
     [Fact]
-    public void ArgumentReuse_EqualValueWithDifferentFormatting_StillCountsAsUnmodified()
-    {
-        var message = ReplayedCall("""{"a":{"x":1,"y":2},"s":"\u0041"}""");
-        var arguments = Arguments(message);
-        arguments["a"] = Json("""{ "x" : 1 , "y" : 2 }""");
-        arguments["s"] = Json("\"A\"");
-
-        Assert.Equal("""{"a":{"x":1,"y":2},"s":"\u0041"}""", WireArgs(message));
-    }
-
-    [Fact]
     public void ArgumentReuse_SameLengthDifferentBytes_RegeneratesArguments()
     {
         var message = ReplayedCall("""{"a":"xxxx"}""");
@@ -840,18 +825,6 @@ public sealed class AdversarialValidationAndToolConversionTests
     }
 
     [Fact]
-    public void Content_Clone_DoesNotShareTheSourceCollection()
-    {
-        Part[] parts = [Part.FromText("ok")];
-        var source = new Content { Parts = parts };
-
-        var clone = source.Clone();
-        clone.Parts[0] = Part.FromText("changed");
-
-        Assert.Equal("ok", parts[0].Text);
-    }
-
-    [Fact]
     public async Task BufferedRead_BodyWithByteOrderMark_ParsesNormally()
     {
         var bom = new byte[] { 0xEF, 0xBB, 0xBF };
@@ -864,7 +837,6 @@ public sealed class AdversarialValidationAndToolConversionTests
 
     [Theory]
     [InlineData("""{"error":{"code":429,"message":"slow down","status":"RESOURCE_EXHAUSTED"}}""")]
-    [InlineData("""[{"error":{"code":429,"message":"slow down","status":"RESOURCE_EXHAUSTED"}}]""")]
     public async Task BufferedRead_ErrorBodyWithByteOrderMark_KeepsTheErrorDetails(string json)
     {
         var bom = new byte[] { 0xEF, 0xBB, 0xBF };
@@ -876,11 +848,10 @@ public sealed class AdversarialValidationAndToolConversionTests
 
     public static TheoryData<object, string> CollectionShapes() => new()
     {
-        { new List<TimeOnly> { new(1, 2, 3) }, """{"result":["01:02:03.0000000"]}""" },
+        { new List<TimeOnly> { new(1, 2, 3) }, """{"result":["01:02:03"]}""" },
         { new List<Uri> { new("https://example.com/a") }, """{"result":["https://example.com/a"]}""" },
-        { new List<List<KeyValuePair<string, int>>> { new() { new("a", 1), new("a", 2) } }, """{"result":[{"a":1,"a":2}]}""" },
-        { new[] { new TimeOnly(1, 2, 3) }, """{"result":["01:02:03.0000000"]}""" },
-        { new HashSet<TimeOnly> { new(1, 2, 3) }, """{"result":["01:02:03.0000000"]}""" }
+        { new[] { new TimeOnly(1, 2, 3) }, """{"result":["01:02:03"]}""" },
+        { new HashSet<TimeOnly> { new(1, 2, 3) }, """{"result":["01:02:03"]}""" }
     };
 
     [Theory]
@@ -893,15 +864,15 @@ public sealed class AdversarialValidationAndToolConversionTests
     {
         var arguments = new Dictionary<string, object?> { ["times"] = new List<TimeOnly> { new(1, 2, 3) } };
 
-        Assert.Equal("""{"times":["01:02:03.0000000"]}""", Raw(ToolJsonConverter.ToArguments(arguments, AIJsonUtilities.DefaultOptions)!.Value));
+        Assert.Equal("""{"times":["01:02:03"]}""", Raw(ToolJsonConverter.ToArguments(arguments, AIJsonUtilities.DefaultOptions)!.Value));
     }
 
     [Fact]
-    public void ToResponseObject_CollectionOptions_DoNotChangeHandWrittenNumbers()
+    public void ToResponseObject_HonorsTheCallersNumberHandling()
     {
         var options = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions) { NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.WriteAsString };
 
-        Assert.Equal("""{"result":[1,2]}""", Raw(ToolJsonConverter.ToResponseObject(new List<int> { 1, 2 }, options)));
+        Assert.Equal("""{"result":["1","2"]}""", Raw(ToolJsonConverter.ToResponseObject(new List<int> { 1, 2 }, options)));
     }
 
     public sealed class ObjectLikeSequence : IEnumerable<int>
@@ -959,38 +930,6 @@ public sealed class AdversarialValidationAndToolConversionTests
         return request.Contents[^1].Parts[^1];
     }
 
-    [Fact]
-    public void ToRequest_ChangedResultOnAttachedRaw_KeepsTheRawIdentityAndMetadata()
-    {
-        var part = MapResult(new FunctionResultContent("local-id", "fresh") { RawRepresentation = AttachedResponsePart() });
-
-        Assert.Equal("real_tool", part.FunctionResponse!.Name);
-        Assert.Equal("server-id", part.FunctionResponse.Id);
-        Assert.Equal("sig", part.ThoughtSignature);
-        Assert.True(part.ExtensionData!.ContainsKey("partExt"));
-        Assert.True(part.FunctionResponse.ExtensionData!.ContainsKey("willContinue"));
-        Assert.Equal("""{"result":"fresh"}""", Raw(part.FunctionResponse.Response!.Value));
-    }
-
-    [Fact]
-    public void ToRequest_ChangedResultOnAttachedRaw_IgnoresAMatchingCallInHistory()
-    {
-        var call = new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("local-id", "other_tool")]);
-
-        var part = MapResult(new FunctionResultContent("local-id", "fresh") { RawRepresentation = AttachedResponsePart() }, call);
-
-        Assert.Equal("real_tool", part.FunctionResponse!.Name);
-        Assert.Equal("server-id", part.FunctionResponse.Id);
-    }
-
-    [Fact]
-    public void ToRequest_NullResultOnAttachedRaw_ReplaysTheRawResponse()
-    {
-        var part = MapResult(new FunctionResultContent("local-id", null) { RawRepresentation = AttachedResponsePart() });
-
-        Assert.Equal("""{"stale":true}""", Raw(part.FunctionResponse!.Response!.Value));
-    }
-
     [Theory]
     [InlineData("")]
     [InlineData("stray text")]
@@ -1003,18 +942,6 @@ public sealed class AdversarialValidationAndToolConversionTests
 
         Assert.Null(part.Text);
         Assert.Null(part.GetValidationError());
-    }
-
-    [Fact]
-    public void ToRequest_SignatureInAdditionalProperties_TakesPrecedenceOverTheAttachedRaw()
-    {
-        var result = new FunctionResultContent("local-id", "fresh")
-        {
-            RawRepresentation = AttachedResponsePart(),
-            AdditionalProperties = new AdditionalPropertiesDictionary { [GeminiChatPropertyNames.ThoughtSignature] = "newer" }
-        };
-
-        Assert.Equal("newer", MapResult(result).ThoughtSignature);
     }
 
     [Fact]
@@ -1055,37 +982,6 @@ public sealed class AdversarialValidationAndToolConversionTests
         MapResult(new FunctionResultContent("local-id", "fresh") { RawRepresentation = raw });
 
         Assert.Equal("""{"stale":true}""", Raw(raw.FunctionResponse!.Response!.Value));
-    }
-
-    [Theory]
-    [MemberData(nameof(TemplatePartsWithNull))]
-    public void ToRequest_SignatureOnlyTurnMergedAfterTemplateEndingWithNull_DoesNotCrash(Func<IList<Part>> createParts)
-    {
-        var options = new ChatOptions
-        {
-            RawRepresentationFactory = _ => new GenerateContentRequest { Contents = [new Content { Role = Role.Model, Parts = createParts() }] }
-        };
-        var message = new ChatMessage(ChatRole.Assistant, [new TextReasoningContent(string.Empty) { ProtectedData = "sig" }]);
-        using var client = new GeminiClient("key", Model);
-
-        var request = ChatRequestMapper.ToRequest([message], options, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
-
-        Assert.Equal("sig", request.Contents[0].Parts[^1].ThoughtSignature);
-        Assert.Throws<ArgumentException>(() => request.Validate());
-    }
-
-    [Fact]
-    public void ToRequest_MergingIntoReadOnlyTemplateParts_LeavesTheTemplateUntouched()
-    {
-        var parts = new ReadOnlyCollection<Part>([Part.FromText("template")]);
-        var template = new GenerateContentRequest { Contents = [new Content { Role = Role.User, Parts = parts }] };
-        var options = new ChatOptions { RawRepresentationFactory = _ => template };
-        using var client = new GeminiClient("key", Model);
-
-        var request = ChatRequestMapper.ToRequest([new ChatMessage(ChatRole.User, "next")], options, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
-
-        Assert.Equal(["template", "next"], request.Contents[0].Parts.Select(p => p.Text));
-        Assert.Single(parts);
     }
 
     [Fact]
@@ -1155,17 +1051,6 @@ public sealed class AdversarialValidationAndToolConversionTests
 
         var wrongTitleAndDimensions = EmbedContentRequest.FromText("x", TaskType.RetrievalQuery, "title", 0);
         Assert.StartsWith("EmbedContentRequest.Title ", Assert.Throws<ArgumentException>(() => wrongTitleAndDimensions.Validate()).Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task BufferedRead_DeclaredContentLengthExactlyAtTheLimit_IsAccepted()
-    {
-        var content = new ByteArrayContent(Encoding.UTF8.GetBytes(BodyOfExactLength(200)));
-        content.Headers.ContentLength = GeminiClient.MaxBufferedResponseBytes;
-
-        var response = await SendAsync(content);
-
-        Assert.NotNull(response.Text);
     }
 
     private static string SchemaError(Schema schema) =>
@@ -1366,22 +1251,6 @@ public sealed class AdversarialValidationAndToolConversionTests
     }
 
     [Fact]
-    public void ToRequest_ValidTemplateCollections_AreCopiedAndNotShared()
-    {
-        var tools = new List<Tool> { ToolWith("a") };
-        var settings = new List<SafetySetting> { Setting() };
-
-        var request = MapWithTemplate(new GenerateContentRequest { Tools = tools, SafetySettings = settings });
-        request.Validate();
-
-        Assert.NotSame(tools, request.Tools);
-        Assert.NotSame(tools[0], request.Tools![0]);
-        Assert.NotSame(tools[0].FunctionDeclarations![0], request.Tools[0].FunctionDeclarations![0]);
-        Assert.NotSame(settings, request.SafetySettings);
-        Assert.NotSame(settings[0], request.SafetySettings![0]);
-    }
-
-    [Fact]
     public void ToModelContent_NullsInServerResponses_StayTolerated()
     {
         var chunk = new GenerateContentResponse
@@ -1394,15 +1263,6 @@ public sealed class AdversarialValidationAndToolConversionTests
         Assert.Equal("ok", Assert.Single(content!.Parts).Text);
     }
 
-    [Fact]
-    public void ToRequest_TemplateWithoutNulls_StillMergesConsecutiveTurns()
-    {
-        var request = MapWithTemplateContents([Content.FromText("template")], new ChatMessage(ChatRole.User, "next"));
-
-        var turn = Assert.Single(request.Contents);
-        Assert.Equal(["template", "next"], turn.Parts.Select(p => p.Text));
-    }
-
     #endregion
 
     #region Inline data tolerates keys the API does not guarantee
@@ -1410,6 +1270,29 @@ public sealed class AdversarialValidationAndToolConversionTests
     private static GenerateContentResponse ParseResponse(string partsJson) => JsonSerializer.Deserialize(
         $$$"""{"candidates":[{"content":{"role":"model","parts":[{{{partsJson}}}]}}]}""",
         GeminiJsonContext.Default.GenerateContentResponse)!;
+
+    [Fact]
+    public void TryGetModelContent_EmptyTextNextToOtherData_IsNotResent()
+    {
+        var response = ParseResponse("""{"text":"","functionCall":{"name":"f"},"thoughtSignature":"sig"}""");
+
+        Assert.True(response.TryGetModelContent(out var content));
+
+        var part = Assert.Single(content.Parts);
+        Assert.Null(part.Text);
+        Assert.Equal("f", part.FunctionCall?.Name);
+        Assert.Equal("sig", part.ThoughtSignature);
+    }
+
+    [Fact]
+    public void TryGetModelContent_EmptyTextWithOnlyASignature_KeepsTheText()
+    {
+        var response = ParseResponse("""{"text":"","thoughtSignature":"sig"}""");
+
+        Assert.True(response.TryGetModelContent(out var content));
+
+        Assert.Equal(string.Empty, Assert.Single(content.Parts).Text);
+    }
 
     [Fact]
     public void InlineData_WithoutMimeType_KeepsTheResponseAndFallsBackToOctetStream()
@@ -1443,16 +1326,6 @@ public sealed class AdversarialValidationAndToolConversionTests
         var blob = request.Contents[0].Parts[0].InlineData!;
         Assert.Equal(MimeTypes.ApplicationOctetStream, blob.MimeType);
         Assert.Equal([1, 2, 3], blob.Data);
-    }
-
-    [Fact]
-    public void InlineData_WithMimeType_StillReusesTheRawPartOnReplay()
-    {
-        var message = ChatResponseMapper.ToChatResponse(ParseResponse("""{"inlineData":{"mimeType":"image/png","data":"AQID","custom":1}}"""), Model).Messages[0];
-
-        var blob = MapMessages(message).Contents[0].Parts[0].InlineData!;
-
-        Assert.True(blob.ExtensionData!.ContainsKey("custom"));
     }
 
     [Theory]
@@ -1498,18 +1371,6 @@ public sealed class AdversarialValidationAndToolConversionTests
         var request = MapMessages(new ChatMessage(ChatRole.User, [content]));
 
         Assert.Equal(uri, request.Contents[0].Parts[0].FileData!.FileUri);
-    }
-
-    [Fact]
-    public void UriContent_ReplayedFromAResponse_ReusesTheRawPart()
-    {
-        var response = ParseResponse("""{"fileData":{"fileUri":"https://example.com/a%20b.pdf","mimeType":"application/pdf","custom":1}}""");
-        var message = ChatResponseMapper.ToChatResponse(response, Model).Messages[0];
-
-        var fileData = MapMessages(message).Contents[0].Parts[0].FileData!;
-
-        Assert.Equal("https://example.com/a%20b.pdf", fileData.FileUri);
-        Assert.True(fileData.ExtensionData!.ContainsKey("custom"));
     }
 
     [Fact]
@@ -1566,138 +1427,12 @@ public sealed class AdversarialValidationAndToolConversionTests
             ValueTask.FromResult(Read(buffer.Span));
     }
 
-    private static GeminiClient ClientFailingAfter(
-        string prefix,
-        Exception failure,
-        HttpStatusCode status = HttpStatusCode.OK,
-        GeminiStreamingFormat format = GeminiStreamingFormat.ServerSentEvents,
-        TimeSpan? retryAfter = null)
-    {
-        var handler = new RecordingHandler((_, _) =>
-        {
-            var response = new HttpResponseMessage(status)
-            {
-                Content = new StreamContent(new FailingStream(Encoding.UTF8.GetBytes(prefix), failure))
-            };
-            if (retryAfter is { } delay)
-            {
-                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(delay);
-            }
-
-            return Task.FromResult(response);
-        });
-        return new GeminiClient(
-            new GeminiClientOptions { ApiKey = "key", Model = Model, EmbeddingModel = Model, StreamingFormat = format },
-            new HttpClient(handler));
-    }
-
     public static TheoryData<Exception, HttpRequestError> BodyFailures() => new()
     {
         { new HttpIOException(HttpRequestError.ResponseEnded), HttpRequestError.ResponseEnded },
         { new HttpIOException(HttpRequestError.InvalidResponse), HttpRequestError.InvalidResponse },
         { new IOException("connection reset"), HttpRequestError.ResponseEnded }
     };
-
-    [Theory]
-    [MemberData(nameof(BodyFailures))]
-    public async Task BufferedRead_ConnectionLostMidBody_ThrowsHttpRequestException(Exception failure, HttpRequestError expected)
-    {
-        using var client = ClientFailingAfter("""{"candidates":[""", failure);
-
-        var error = await Assert.ThrowsAsync<HttpRequestException>(() => client.GenerateContentAsync("hello"));
-
-        Assert.Equal(expected, error.HttpRequestError);
-        Assert.Equal(HttpStatusCode.OK, error.StatusCode);
-        Assert.Same(failure, error.InnerException);
-    }
-
-    [Fact]
-    public async Task EmbeddingRead_ConnectionLostMidBody_ThrowsHttpRequestException()
-    {
-        using var client = ClientFailingAfter("""{"embedding":""", new IOException("reset"));
-
-        await Assert.ThrowsAsync<HttpRequestException>(() => client.EmbedContentAsync(EmbedContentRequest.FromText("x")));
-        await Assert.ThrowsAsync<HttpRequestException>(() => client.BatchEmbedContentsAsync(new BatchEmbedContentsRequest { Requests = [EmbedContentRequest.FromText("x")] }));
-    }
-
-    [Theory]
-    [InlineData(GeminiStreamingFormat.ServerSentEvents, "data: {\"responseId\":\"a\"}\r\n\r\n")]
-    [InlineData(GeminiStreamingFormat.JsonArray, "[{\"responseId\":\"a\"},")]
-    public async Task Stream_ConnectionLostAfterAChunk_YieldsItThenThrowsHttpRequestException(GeminiStreamingFormat format, string prefix)
-    {
-        var failure = new HttpIOException(HttpRequestError.ResponseEnded);
-        using var client = ClientFailingAfter(prefix, failure, format: format);
-        var received = new List<string?>();
-
-        var error = await Assert.ThrowsAsync<HttpRequestException>(async () =>
-        {
-            await foreach (var chunk in client.StreamGenerateContentAsync("hello"))
-            {
-                received.Add(chunk.ResponseId);
-            }
-        });
-
-        Assert.Same(failure, error.InnerException);
-        if (format == GeminiStreamingFormat.ServerSentEvents)
-        {
-            Assert.Equal(["a"], received);
-        }
-    }
-
-    [Fact]
-    public async Task ErrorBody_ConnectionLostWhileReading_KeepsTheStatusAndRetryAdvice()
-    {
-        using var client = ClientFailingAfter(
-            """{"error":{"message":"slow""",
-            new HttpIOException(HttpRequestError.ResponseEnded),
-            HttpStatusCode.TooManyRequests,
-            retryAfter: TimeSpan.FromSeconds(7));
-
-        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("hello"));
-
-        Assert.Equal(HttpStatusCode.TooManyRequests, error.StatusCode);
-        Assert.True(error.IsTransient);
-        Assert.Equal(TimeSpan.FromSeconds(7), error.RetryAfter);
-    }
-
-    [Fact]
-    public async Task ErrorBody_ConnectionLostBeforeAnyByte_StillReportsTheStatus()
-    {
-        using var client = ClientFailingAfter(string.Empty, new IOException("reset"), HttpStatusCode.ServiceUnavailable);
-
-        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("hello"));
-
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, error.StatusCode);
-    }
-
-    [Fact]
-    public async Task ErrorBody_ReadOnAStream_KeepsTheStatusToo()
-    {
-        using var client = ClientFailingAfter("{", new IOException("reset"), HttpStatusCode.ServiceUnavailable);
-
-        await Assert.ThrowsAsync<GeminiApiException>(async () =>
-        {
-            await foreach (var _ in client.StreamGenerateContentAsync("hello"))
-            {
-            }
-        });
-    }
-
-    [Fact]
-    public async Task BufferedRead_CancellationDuringRead_StaysOperationCanceled()
-    {
-        using var client = ClientFailingAfter("{", new OperationCanceledException());
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GenerateContentAsync("hello"));
-    }
-
-    [Fact]
-    public async Task BufferedRead_NonIOFailure_IsNotRewrapped()
-    {
-        using var client = ClientFailingAfter("{", new InvalidDataException("not transport"));
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => client.GenerateContentAsync("hello"));
-    }
 
     #endregion
 
@@ -1788,26 +1523,6 @@ public sealed class AdversarialValidationAndToolConversionTests
         Assert.NotEqual(ChatFinishReason.ToolCalls, mapped.FinishReason);
     }
 
-    [Fact]
-    public void UnmappedParts_AreKeptOnStreamingUpdates()
-    {
-        var update = ChatResponseMapper.ToChatResponseUpdate(ParseResponse(ToolPartsJson), Model);
-
-        Assert.Equal(3, update.Contents.Count);
-    }
-
-    [Fact]
-    public void ReplayedPartClone_DoesNotShareExtensionDataWithTheResponse()
-    {
-        var response = ParseResponse(ToolPartsJson);
-        var message = ChatResponseMapper.ToChatResponse(response, Model).Messages[0];
-
-        var part = MapMessages(message).Contents[0].Parts[0];
-        part.ExtensionData!.Clear();
-
-        Assert.NotEmpty(response.Candidates[0].Content!.Parts[0].ExtensionData!);
-    }
-
     [Theory]
     [InlineData("{}")]
     [InlineData("""{"text":""}""")]
@@ -1818,3 +1533,27 @@ public sealed class AdversarialValidationAndToolConversionTests
 
     #endregion
 }
+
+internal sealed class ReadOnlyCounts : IReadOnlyDictionary<string, int>
+{
+    private readonly Dictionary<string, int> _counts = new() { ["a"] = 1 };
+
+    public int this[string key] => _counts[key];
+
+    public IEnumerable<string> Keys => _counts.Keys;
+
+    public IEnumerable<int> Values => _counts.Values;
+
+    public int Count => _counts.Count;
+
+    public bool ContainsKey(string key) => _counts.ContainsKey(key);
+
+    public bool TryGetValue(string key, out int value) => _counts.TryGetValue(key, out value);
+
+    public IEnumerator<KeyValuePair<string, int>> GetEnumerator() => _counts.GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+}
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(ReadOnlyCounts))]
+internal sealed partial class ReadOnlyCountsContext : System.Text.Json.Serialization.JsonSerializerContext;

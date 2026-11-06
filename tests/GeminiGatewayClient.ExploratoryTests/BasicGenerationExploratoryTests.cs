@@ -12,7 +12,7 @@ namespace GeminiGatewayClient.ExploratoryTests;
 
 /// <summary>
 /// Exploratory tests for core <see cref="GeminiClient"/> operations:
-/// model discovery, single-turn generation, SSE and JSON-array streaming, structured JSON output,
+/// model discovery, single-turn generation, SSE streaming, structured JSON output,
 /// thinking/reasoning configuration, and inline multimodal image input.
 /// </summary>
 public sealed class BasicGenerationExploratoryTests(ExploratoryTestFixture fixture, ITestOutputHelper output)
@@ -70,13 +70,11 @@ public sealed class BasicGenerationExploratoryTests(ExploratoryTestFixture fixtu
         Assert.True(response.UsageMetadata.TotalTokenCount >= response.UsageMetadata.PromptTokenCount);
     }
 
-    [ExploratoryTheory]
-    [InlineData(GeminiStreamingFormat.ServerSentEvents)]
-    [InlineData(GeminiStreamingFormat.JsonArray)]
-    public async Task Streaming_ServerSentEventsAndJsonArray_YieldsChunksInRealTime(GeminiStreamingFormat format)
+    [ExploratoryFact]
+    public async Task Streaming_YieldsChunksInRealTime()
     {
-        LogSection($"Streaming Generation ({format})");
-        using var client = CreateGeminiClient(options => options.StreamingFormat = format);
+        LogSection("Streaming Generation");
+        using var client = CreateGeminiClient();
 
         var sw = Stopwatch.StartNew();
         var chunks = new List<GenerateContentResponse>();

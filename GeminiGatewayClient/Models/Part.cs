@@ -87,19 +87,35 @@ public sealed class Part
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
     /// <summary>
+    /// <c>true</c> when a primary data field other than <see cref="Text"/> is set.
+    /// </summary>
+    internal bool HasNonTextData =>
+        InlineData is not null ||
+        FileData is not null ||
+        FunctionCall is not null ||
+        FunctionResponse is not null ||
+        ExecutableCode is not null ||
+        CodeExecutionResult is not null;
+
+    /// <summary>
+    /// <c>true</c> for a placeholder that says nothing, such as the empty text some streamed chunks carry.
+    /// </summary>
+    internal bool IsEmptyText =>
+        string.IsNullOrEmpty(Text) &&
+        string.IsNullOrEmpty(ThoughtSignature) &&
+        !HasNonTextData &&
+        VideoMetadata is null &&
+        (ExtensionData is null || ExtensionData.Count == 0);
+
+    /// <summary>
     /// <c>true</c> when no data, metadata, or extension field is set on this part.
     /// </summary>
     internal bool IsEmpty =>
         Text is null &&
         Thought is null &&
         ThoughtSignature is null &&
-        InlineData is null &&
-        FileData is null &&
-        FunctionCall is null &&
-        FunctionResponse is null &&
+        !HasNonTextData &&
         VideoMetadata is null &&
-        ExecutableCode is null &&
-        CodeExecutionResult is null &&
         (ExtensionData is null || ExtensionData.Count == 0);
 
     /// <summary>
@@ -167,24 +183,6 @@ public sealed class Part
         }
 
         return new Part { FunctionResponse = new FunctionResponse { Name = name, Response = response, Id = id } };
-    }
-
-    internal Part Clone()
-    {
-        var clone = (Part)MemberwiseClone();
-        clone.InlineData = InlineData?.Clone();
-        clone.FileData = FileData?.Clone();
-        clone.FunctionCall = FunctionCall?.Clone();
-        clone.FunctionResponse = FunctionResponse?.Clone();
-        clone.VideoMetadata = VideoMetadata?.Clone();
-        clone.ExecutableCode = ExecutableCode?.Clone();
-        clone.CodeExecutionResult = CodeExecutionResult?.Clone();
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
     }
 
     /// <summary>

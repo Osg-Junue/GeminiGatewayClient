@@ -27,8 +27,8 @@ public sealed class GeminiChatClient : IChatClient
     /// <param name="client">The underlying Gemini client.</param>
     /// <param name="defaultModelId">The model used when <see cref="ChatOptions.ModelId"/> is not set; defaults to <see cref="IGeminiClient.DefaultModel"/>.</param>
     /// <param name="toolSerializerOptions">
-    /// Serializer options for function arguments and results; defaults to <see cref="GeminiClientOptions.ToolSerializerOptions"/>
-    /// (when <paramref name="client"/> is a <see cref="GeminiClient"/>) or <see cref="AIJsonUtilities.DefaultOptions"/>.
+    /// Serializer options for function arguments and results; defaults to <see cref="IGeminiClient.ToolSerializerOptions"/>,
+    /// then <see cref="AIJsonUtilities.DefaultOptions"/>.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
     public GeminiChatClient(IGeminiClient client, string? defaultModelId = null, JsonSerializerOptions? toolSerializerOptions = null)
@@ -37,7 +37,7 @@ public sealed class GeminiChatClient : IChatClient
 
         _client = client;
         _toolSerializerOptions = toolSerializerOptions
-            ?? (client as GeminiClient)?.ToolSerializerOptions
+            ?? client.ToolSerializerOptions
             ?? AIJsonUtilities.DefaultOptions;
         _metadata = new ChatClientMetadata("gemini", client.Endpoint, string.IsNullOrWhiteSpace(defaultModelId) ? client.DefaultModel : defaultModelId);
     }
@@ -72,7 +72,7 @@ public sealed class GeminiChatClient : IChatClient
         var model = ResolveModel(options);
         var request = ChatRequestMapper.ToRequest(messages, options, this, model, _toolSerializerOptions);
         var chunks = _client.StreamGenerateContentAsync(request, model, cancellationToken);
-        return StreamCoreAsync(chunks, model, cancellationToken);
+        return StreamCoreAsync(chunks, model);
     }
 
     /// <inheritdoc />
@@ -108,25 +108,16 @@ public sealed class GeminiChatClient : IChatClient
     private static async IAsyncEnumerable<ChatResponseUpdate> StreamCoreAsync(
         IAsyncEnumerable<GenerateContentResponse> chunks,
         string? model,
-        CancellationToken requestCancellationToken,
-        [EnumeratorCancellation] CancellationToken enumeratorCancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        using var linkedCts = GeminiClient.CreateLinkedTokenSource(requestCancellationToken, enumeratorCancellationToken, out var cancellationToken);
-        GenerateContentResponse? lastUsageChunk = null;
-        List<ChatResponseMapper.StreamedTextSegment>? streamedSegments = null;
-        var cumulativeUtf8Bytes = 0;
+        var mapper = new ChatStreamMapper(model);
 
         await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (chunk.UsageMetadata is not null)
-            {
-                lastUsageChunk = chunk;
-            }
-
-            yield return ChatResponseMapper.ToChatResponseUpdate(chunk, model, ref streamedSegments, ref cumulativeUtf8Bytes);
+            yield return mapper.ToUpdate(chunk);
         }
 
-        if (ChatResponseMapper.ToUsageUpdate(lastUsageChunk, model) is { } usageUpdate)
+        if (mapper.ToUsageUpdate() is { } usageUpdate)
         {
             yield return usageUpdate;
         }

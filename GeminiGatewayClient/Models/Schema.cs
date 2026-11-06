@@ -127,55 +127,6 @@ public sealed class Schema
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
-    internal Schema Clone()
-    {
-        var clone = (Schema)MemberwiseClone();
-        clone.Items = Items?.Clone();
-        if (Enum is not null)
-        {
-            clone.Enum = [.. Enum];
-        }
-
-        if (Required is not null)
-        {
-            clone.Required = [.. Required];
-        }
-
-        if (PropertyOrdering is not null)
-        {
-            clone.PropertyOrdering = [.. PropertyOrdering];
-        }
-
-        if (Properties is not null)
-        {
-            var clonedProps = new Dictionary<string, Schema>(Properties.Count, StringComparer.Ordinal);
-            foreach (var (key, value) in Properties)
-            {
-                clonedProps[key] = value?.Clone()!;
-            }
-
-            clone.Properties = clonedProps;
-        }
-
-        if (AnyOf is not null)
-        {
-            var clonedAnyOf = new List<Schema>(AnyOf.Count);
-            for (var i = 0; i < AnyOf.Count; i++)
-            {
-                clonedAnyOf.Add(AnyOf[i]?.Clone()!);
-            }
-
-            clone.AnyOf = clonedAnyOf;
-        }
-
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
-
     /// <summary>
     /// Returns why this schema is invalid as a message suffix for the caller's path, or <c>null</c> when it is valid.
     /// </summary>

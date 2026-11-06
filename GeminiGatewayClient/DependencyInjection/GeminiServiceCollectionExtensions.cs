@@ -85,7 +85,7 @@ public static class GeminiServiceCollectionExtensions
         {
             httpClientBuilder
                 .ConfigureHttpClient(static (sp, httpClient) =>
-                    httpClient.Timeout = sp.GetRequiredService<GeminiClientSettings>().Timeout)
+                    GeminiClient.ConfigureHttpClient(httpClient, sp.GetRequiredService<GeminiClientSettings>().Timeout))
                 .ConfigurePrimaryHttpMessageHandler(static () => GeminiClient.CreateDefaultHandler());
         }
 

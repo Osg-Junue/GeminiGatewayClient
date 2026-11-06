@@ -12,7 +12,7 @@ public static class GeminiChatPropertyNames
     public const string BlockReason = "gemini.blockReason";
 
     /// <summary>
-    /// <c>FunctionCallContent.AdditionalProperties</c> key holding the <c>thoughtSignature</c> of a function call part.
+    /// <c>AIContent.AdditionalProperties</c> key holding the <c>thoughtSignature</c> of a part, such as a function call.
     /// Stored here (not only in <c>RawRepresentation</c>) so it survives serialization of chat history; Gemini 3 models reject
     /// replayed function calls whose signature is missing.
     /// </summary>
@@ -23,6 +23,12 @@ public static class GeminiChatPropertyNames
     /// the server did not return a function call ID. Such IDs are never sent back to the API.
     /// </summary>
     public const string SynthesizedCallId = "gemini.synthesizedCallId";
+
+    /// <summary>
+    /// <c>AdditionalProperties</c> flag on a signature-only <c>TextReasoningContent</c> whose signature
+    /// belongs to the preceding streamed text, unlike a standalone signature part, which stays a separate part when resent.
+    /// </summary>
+    public const string SignatureCompanion = "gemini.signatureCompanion";
 
     /// <summary>
     /// <c>AIContent.AdditionalProperties</c> key holding <see cref="Models.ExecutableCode.Language"/> so code execution parts

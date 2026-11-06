@@ -1,5 +1,3 @@
-using System.Buffers;
-using System.Collections.Frozen;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
@@ -17,9 +15,9 @@ namespace GeminiGatewayClient.Serialization;
 public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields)] TEnum> : JsonConverter<TEnum>
     where TEnum : struct, Enum
 {
-    private static readonly FrozenDictionary<TEnum, JsonEncodedText> s_toWire;
-    private static readonly FrozenDictionary<string, TEnum> s_fromWire;
-    private static readonly FrozenDictionary<int, TEnum> s_fromNumeric;
+    private static readonly Dictionary<TEnum, JsonEncodedText> s_toWire;
+    private static readonly Dictionary<string, TEnum> s_fromWire;
+    private static readonly Dictionary<int, TEnum> s_fromNumeric;
     private static readonly TEnum s_unknownValue;
 
     static LenientStringEnumConverter()
@@ -54,9 +52,9 @@ public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(Dynam
             fromWire.TryAdd(name, value);
         }
 
-        s_toWire = toWire.ToFrozenDictionary();
-        s_fromWire = fromWire.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
-        s_fromNumeric = fromNumeric.ToFrozenDictionary();
+        s_toWire = toWire;
+        s_fromWire = fromWire;
+        s_fromNumeric = fromNumeric;
         s_unknownValue = unknown;
     }
 
@@ -65,28 +63,7 @@ public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(Dynam
     {
         if (reader.TokenType == JsonTokenType.String)
         {
-            var length = reader.HasValueSequence ? checked((int)reader.ValueSequence.Length) : reader.ValueSpan.Length;
-            if (length <= 128)
-            {
-                Span<char> charBuffer = stackalloc char[128];
-                var written = reader.CopyString(charBuffer);
-                var span = charBuffer[..written];
-                if (span.IsEmpty)
-                {
-                    return s_unknownValue;
-                }
-
-                var lookup = s_fromWire.GetAlternateLookup<ReadOnlySpan<char>>();
-                return lookup.TryGetValue(span, out var fastParsed) ? fastParsed : s_unknownValue;
-            }
-
-            var raw = reader.GetString();
-            if (string.IsNullOrEmpty(raw))
-            {
-                return s_unknownValue;
-            }
-
-            return s_fromWire.TryGetValue(raw, out var parsed) ? parsed : s_unknownValue;
+            return reader.GetString() is { } value && s_fromWire.TryGetValue(value, out var parsed) ? parsed : s_unknownValue;
         }
 
         if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var numeric))

@@ -1,4 +1,3 @@
-using System.Collections.Frozen;
 using System.Net;
 
 namespace GeminiGatewayClient;
@@ -9,14 +8,6 @@ namespace GeminiGatewayClient;
 /// </summary>
 public sealed class GeminiApiException : Exception
 {
-    private static readonly FrozenSet<string> s_transientRpcStatuses = new[]
-    {
-        "RESOURCE_EXHAUSTED",
-        "UNAVAILABLE",
-        "DEADLINE_EXCEEDED",
-        "INTERNAL"
-    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
-
     /// <summary>
     /// Initializes a new instance of <see cref="GeminiApiException"/> with a default message.
     /// </summary>
@@ -123,19 +114,25 @@ public sealed class GeminiApiException : Exception
     /// <summary>
     /// <c>true</c> when the failure is typically transient and the request may succeed if retried
     /// (HTTP 408, 429, 500, 502, 503, or 504, or a transient Google RPC status such as <c>RESOURCE_EXHAUSTED</c>,
-    /// <c>UNAVAILABLE</c>, <c>DEADLINE_EXCEEDED</c>, or <c>INTERNAL</c>). Honor <see cref="RetryAfter"/> when present.
+    /// <c>UNAVAILABLE</c>, <c>DEADLINE_EXCEEDED</c>, or <c>INTERNAL</c>), unless the RPC status says the request itself is
+    /// at fault, such as <c>INVALID_ARGUMENT</c>. Honor <see cref="RetryAfter"/> when present.
     /// </summary>
     public bool IsTransient =>
-        StatusCode is HttpStatusCode.RequestTimeout
+        !IsPermanentRpcStatus(ErrorStatus) &&
+        (StatusCode is HttpStatusCode.RequestTimeout
             or HttpStatusCode.TooManyRequests
             or HttpStatusCode.InternalServerError
             or HttpStatusCode.BadGateway
             or HttpStatusCode.ServiceUnavailable
             or HttpStatusCode.GatewayTimeout
-        || IsTransientRpcStatus(ErrorStatus);
+         || IsTransientRpcStatus(ErrorStatus));
 
     private static bool IsTransientRpcStatus(string? status) =>
-        status is not null && s_transientRpcStatuses.Contains(status);
+        status?.ToUpperInvariant() is "RESOURCE_EXHAUSTED" or "UNAVAILABLE" or "DEADLINE_EXCEEDED" or "INTERNAL";
+
+    private static bool IsPermanentRpcStatus(string? status) =>
+        status?.ToUpperInvariant() is "INVALID_ARGUMENT" or "FAILED_PRECONDITION" or "OUT_OF_RANGE" or "NOT_FOUND"
+            or "ALREADY_EXISTS" or "PERMISSION_DENIED" or "UNAUTHENTICATED" or "UNIMPLEMENTED";
 
     private static string FormatExceptionMessage(
         string message,

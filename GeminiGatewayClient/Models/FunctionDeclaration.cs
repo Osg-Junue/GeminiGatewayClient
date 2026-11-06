@@ -66,19 +66,6 @@ public sealed class FunctionDeclaration
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
-    internal FunctionDeclaration Clone()
-    {
-        var clone = (FunctionDeclaration)MemberwiseClone();
-        clone.Parameters = Parameters?.Clone();
-        clone.Response = Response?.Clone();
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
-
     /// <summary>
     /// Validates required and mutually exclusive schema members.
     /// </summary>

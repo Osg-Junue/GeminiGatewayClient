@@ -246,7 +246,7 @@ public sealed class LongConversationExploratoryTests(ExploratoryTestFixture fixt
     }
 
     [ExploratoryFact]
-    public async Task MultiTurn_NativeStreaming_ToModelContentAsync_CoalescesChunksForSubsequentTurns()
+    public async Task MultiTurn_NativeStreaming_ToModelContentAsync_KeepsPartsForSubsequentTurns()
     {
         LogSection("Multi-Turn Native StreamGenerateContentAsync + ToModelContentAsync()");
         using var client = CreateGeminiClient();
