@@ -267,10 +267,9 @@ Console.WriteLine($"[Thoughts Tokens] {response.UsageMetadata?.ThoughtsTokenCoun
 
 ### Via `IChatClient`
 
-`ChatOptions.Reasoning` throws `NotSupportedException`: which thinking settings a model accepts is yours to decide. Set `ThinkingConfig` through `RawRepresentationFactory`, which must return a new request on each call. A model that does not accept a value answers HTTP 400:
+`ChatOptions.Reasoning` sends `thinkingLevel`, which Gemini 3 and later understand. `Effort` maps `None` to `MINIMAL`, because no level turns thinking off, and `ExtraHigh` to `HIGH`. `Output` sets `IncludeThoughts`: `false` for `None`, `true` otherwise. Which values a model accepts is yours to decide, and a model that does not accept one answers HTTP 400. For `ThinkingBudget`, set `ThinkingConfig` through `RawRepresentationFactory`, which must return a new request on each call and wins over `Reasoning`:
 
 ```csharp
-using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
 
 IChatClient chatClient = client.AsIChatClient();
@@ -279,13 +278,7 @@ var response = await chatClient.GetResponseAsync(
     "Calculate 2^10 - 2^5.",
     new ChatOptions
     {
-        RawRepresentationFactory = _ => new GenerateContentRequest
-        {
-            GenerationConfig = new GenerationConfig
-            {
-                ThinkingConfig = new ThinkingConfig { ThinkingLevel = ThinkingLevel.Low, IncludeThoughts = true }
-            }
-        }
+        Reasoning = new ReasoningOptions { Effort = ReasoningEffort.Low, Output = ReasoningOutput.Summary }
     });
 
 // Filter out empty signature-carrier TextReasoningContent items when displaying thought summaries:

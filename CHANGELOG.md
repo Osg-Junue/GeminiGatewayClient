@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.1.0] - 2026-11-06
+
+### Added
+- **`ChatOptions.Reasoning` is supported again**, without looking at the model. `Effort` sets `thinkingLevel`, which Gemini 3 and later understand: `None` becomes `MINIMAL`, because no level turns thinking off, and `ExtraHigh` becomes `HIGH`. `Output` sets `includeThoughts`. A model that does not accept a value answers with an error status. `ThinkingConfig` from `RawRepresentationFactory` wins, and is the way to set `thinkingBudget`.
+
 ## [4.0.2] - 2026-11-06
 
 ### Fixed

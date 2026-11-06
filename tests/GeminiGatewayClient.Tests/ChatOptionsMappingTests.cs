@@ -57,17 +57,78 @@ public class ChatOptionsMappingTests
         Assert.Equal("text/plain", body.GetProperty("generationConfig").GetProperty("responseMimeType").GetString());
     }
 
-    [Fact]
-    public async Task Reasoning_IsRejectedBeforeAnythingIsSent()
+    private static JsonElement ThinkingConfigOf(JsonElement body) => body.GetProperty("generationConfig").GetProperty("thinkingConfig");
+
+    [Theory]
+    [InlineData(ReasoningEffort.None, "MINIMAL")]
+    [InlineData(ReasoningEffort.Low, "LOW")]
+    [InlineData(ReasoningEffort.Medium, "MEDIUM")]
+    [InlineData(ReasoningEffort.High, "HIGH")]
+    [InlineData(ReasoningEffort.ExtraHigh, "HIGH")]
+    public async Task ReasoningEffort_MapsToTheThinkingLevel(ReasoningEffort effort, string expected)
     {
-        using var handler = new RecordingHandler(OkResponse);
-        using var client = CreateClient(handler);
-        var options = new ChatOptions { Reasoning = new ReasoningOptions { Effort = ReasoningEffort.None } };
+        var body = await SentBodyAsync(new ChatOptions { Reasoning = new ReasoningOptions { Effort = effort } });
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => client.AsIChatClient().GetResponseAsync("hi", options));
-        Assert.Throws<NotSupportedException>(() => client.AsIChatClient().GetStreamingResponseAsync("hi", options));
+        var thinking = ThinkingConfigOf(body);
+        Assert.Equal(expected, thinking.GetProperty("thinkingLevel").GetString());
+        Assert.False(thinking.TryGetProperty("thinkingBudget", out _));
+        Assert.False(thinking.TryGetProperty("includeThoughts", out _));
+    }
 
-        Assert.Empty(handler.Requests);
+    [Theory]
+    [InlineData(ReasoningOutput.None, false)]
+    [InlineData(ReasoningOutput.Summary, true)]
+    [InlineData(ReasoningOutput.Full, true)]
+    public async Task ReasoningOutput_DecidesWhetherThoughtsAreIncluded(ReasoningOutput output, bool expected)
+    {
+        var body = await SentBodyAsync(new ChatOptions { Reasoning = new ReasoningOptions { Output = output } });
+
+        var thinking = ThinkingConfigOf(body);
+        Assert.Equal(expected, thinking.GetProperty("includeThoughts").GetBoolean());
+        Assert.False(thinking.TryGetProperty("thinkingLevel", out _));
+    }
+
+    [Fact]
+    public async Task EmptyReasoningOptions_SendNoThinkingConfig()
+    {
+        var body = await SentBodyAsync(new ChatOptions { Reasoning = new ReasoningOptions() });
+
+        Assert.False(body.TryGetProperty("generationConfig", out var config) && config.TryGetProperty("thinkingConfig", out _));
+    }
+
+    [Fact]
+    public async Task RawThinkingConfig_WinsOverReasoning()
+    {
+        var body = await SentBodyAsync(new ChatOptions
+        {
+            Reasoning = new ReasoningOptions { Effort = ReasoningEffort.Low, Output = ReasoningOutput.Summary },
+            RawRepresentationFactory = _ => new GenerateContentRequest
+            {
+                GenerationConfig = new GenerationConfig { ThinkingConfig = new ThinkingConfig { ThinkingLevel = ThinkingLevel.High, IncludeThoughts = false } }
+            }
+        });
+
+        var thinking = ThinkingConfigOf(body);
+        Assert.Equal("HIGH", thinking.GetProperty("thinkingLevel").GetString());
+        Assert.False(thinking.GetProperty("includeThoughts").GetBoolean());
+    }
+
+    [Fact]
+    public async Task RawThinkingBudget_IsNotJoinedByALevel()
+    {
+        var body = await SentBodyAsync(new ChatOptions
+        {
+            Reasoning = new ReasoningOptions { Effort = ReasoningEffort.High, Output = ReasoningOutput.Full },
+            RawRepresentationFactory = _ => new GenerateContentRequest
+            {
+                GenerationConfig = new GenerationConfig { ThinkingConfig = new ThinkingConfig { ThinkingBudget = 1024 } }
+            }
+        });
+
+        var thinking = ThinkingConfigOf(body);
+        Assert.Equal(1024, thinking.GetProperty("thinkingBudget").GetInt32());
+        Assert.False(thinking.TryGetProperty("thinkingLevel", out _));
+        Assert.True(thinking.GetProperty("includeThoughts").GetBoolean());
     }
 
     [Fact]
