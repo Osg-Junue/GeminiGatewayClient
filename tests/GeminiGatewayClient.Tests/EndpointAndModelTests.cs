@@ -10,6 +10,48 @@ namespace GeminiGatewayClient.Tests;
 public class EndpointAndModelTests
 {
     [Fact]
+    public async Task JapaneseText_IsSentAsUtf8ByEveryRequest()
+    {
+        using var handler = new RecordingHandler("""{"candidates":[],"embedding":{"values":[1]},"embeddings":[{"values":[1]}]}""");
+        using var client = new GeminiClient(new GeminiClientOptions { Model = "m" }, new HttpClient(handler));
+
+        await client.GenerateContentAsync("東京");
+        Assert.Contains("東京", handler.LastRequestBody!, StringComparison.Ordinal);
+
+        await foreach (var _ in client.StreamGenerateContentAsync("京都"))
+        {
+        }
+
+        Assert.Contains("京都", handler.LastRequestBody!, StringComparison.Ordinal);
+
+        await client.EmbedContentAsync("大阪");
+        Assert.Contains("大阪", handler.LastRequestBody!, StringComparison.Ordinal);
+
+        await client.BatchEmbedContentsAsync(new BatchEmbedContentsRequest { Requests = [EmbedContentRequest.FromText("奈良")] });
+        Assert.Contains("奈良", handler.LastRequestBody!, StringComparison.Ordinal);
+
+        await client.AsIChatClient().GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("c1", "f")]),
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", "神戸")])
+        ]);
+        Assert.Contains("神戸", handler.LastRequestBody!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HtmlSensitiveText_StaysEscapedAndKeepsItsMeaning()
+    {
+        using var handler = new RecordingHandler("""{"candidates":[]}""");
+        using var client = new GeminiClient(new GeminiClientOptions { Model = "m" }, new HttpClient(handler));
+
+        await client.GenerateContentAsync("<b>&🌸");
+
+        Assert.DoesNotContain("<b>", handler.LastRequestBody!, StringComparison.Ordinal);
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal("<b>&🌸", body.RootElement.GetProperty("contents")[0].GetProperty("parts")[0].GetProperty("text").GetString());
+    }
+
+    [Fact]
     public async Task EmbedContent_ReservedCharacterInTheModel_IsEscapedOnlyInTheUrl()
     {
         using var handler = new RecordingHandler("""{"embedding":{"values":[1]}}""");
