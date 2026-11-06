@@ -170,7 +170,7 @@ public static class GeminiClientExtensions
     /// <summary>
     /// Collects the parts of streamed <see cref="GenerateContentResponse"/> chunks into a single model <see cref="Content"/>
     /// suitable for multi-turn conversation history, omitting empty placeholder parts. Parts keep their boundaries
-    /// because Gemini forbids merging a part that carries a <c>thoughtSignature</c> with another part.
+    /// so that each <c>thoughtSignature</c> goes back on the part that carried it.
     /// </summary>
     /// <param name="chunks">The streamed response chunks.</param>
     /// <returns>

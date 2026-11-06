@@ -81,7 +81,7 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
         }
         else if (!string.IsNullOrEmpty(signature))
         {
-            // A signature on its own part stays there: Gemini forbids merging a signed part with an unsigned one.
+            // A signature on its own part stays there, so it goes back as it arrived.
             parts.Add(WithMetadata(new Part { Text = string.Empty, Thought = raw?.Thought }, raw, signature));
         }
     }
