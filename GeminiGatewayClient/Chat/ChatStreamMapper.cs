@@ -6,7 +6,8 @@ namespace GeminiGatewayClient.Chat;
 
 /// <summary>
 /// Converts the chunks of one streamed response into <see cref="ChatResponseUpdate"/> instances. Later chunks depend on
-/// earlier ones: citation offsets count from the start of the response, and a function call decides the final finish reason.
+/// earlier ones: citation offsets count from the start of the response, grounding chunk indices count across all chunks, and
+/// a function call decides the final finish reason.
 /// </summary>
 /// <remarks>
 /// A delivered update is never changed afterwards, so citations travel on an annotation-only <see cref="AIContent"/> in
@@ -15,6 +16,7 @@ namespace GeminiGatewayClient.Chat;
 internal sealed class ChatStreamMapper(string? modelId)
 {
     private readonly StringBuilder _text = new();
+    private readonly List<GroundingChunk> _groundingChunks = [];
     private GenerateContentResponse? _lastUsageChunk;
     private bool _sawFunctionCall;
 
@@ -37,9 +39,10 @@ internal sealed class ChatStreamMapper(string? modelId)
             _text.Append(text.Text);
         }
 
-        if (candidate is not null)
+        // Copying the text for every chunk would make a long response quadratic.
+        if (candidate is { CitationMetadata: not null } or { GroundingMetadata: not null })
         {
-            CitationAnnotator.AddAnnotationContent(candidate, contents, _text.ToString());
+            CitationAnnotator.AddAnnotationContent(candidate, contents, _text.ToString(), _groundingChunks);
         }
 
         return new ChatResponseUpdate(ChatRole.Assistant, contents)

@@ -39,7 +39,7 @@ internal static class GeminiErrorParser
     /// </summary>
     public static GeminiApiException FromErrorElement(JsonElement error, string rawBody, HttpStatusCode httpStatusCode)
     {
-        var details = error.ValueKind == JsonValueKind.Object ? ParseErrorObject(error) : new ErrorDetails(null, null, error.ToString(), null);
+        var details = ParseError(error);
 
         // The HTTP status of such a response says nothing about the failure, and a 2xx status must never be reported as one.
         var statusCode = details.Code is >= 400 and <= 599 ? (HttpStatusCode)details.Code.Value
@@ -109,7 +109,7 @@ internal static class GeminiErrorParser
         try
         {
             using var document = JsonDocument.Parse(body);
-            return FindError(document.RootElement) is { } error ? ParseErrorObject(error) : default;
+            return FindError(document.RootElement) is { } error ? ParseError(error) : default;
         }
         catch (JsonException)
         {
@@ -125,10 +125,20 @@ internal static class GeminiErrorParser
 
         return body.ValueKind == JsonValueKind.Object &&
                body.TryGetProperty("error", out var error) &&
-               error.ValueKind == JsonValueKind.Object
+               error.ValueKind != JsonValueKind.Null
             ? error
             : null;
     }
+
+    /// <summary>
+    /// A gateway may send text instead of Google's object. A flag or number, as in <c>{"error":true}</c>, says nothing to report.
+    /// </summary>
+    private static ErrorDetails ParseError(JsonElement error) => error.ValueKind switch
+    {
+        JsonValueKind.Object => ParseErrorObject(error),
+        JsonValueKind.String or JsonValueKind.Array => new ErrorDetails(null, null, error.ToString(), null),
+        _ => default
+    };
 
     private static ErrorDetails ParseErrorObject(JsonElement error)
     {

@@ -104,6 +104,54 @@ public class ChatFeatureTests
         Assert.Equal("東京", "日本語東京"[region.StartIndex!.Value..region.EndIndex!.Value]);
     }
 
+    private static string GroundedEvent(string text, string[] uris, string supports) =>
+        "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"" + text + "\"}]},\"groundingMetadata\":{" +
+        "\"groundingChunks\":[" + string.Join(",", uris.Select(uri => "{\"web\":{\"uri\":\"" + uri + "\"}}")) + "]," +
+        "\"groundingSupports\":[" + supports + "]}}]}\n\n";
+
+    private static async Task<List<ChatResponseUpdate>> StreamAsync(string body)
+    {
+        using var handler = new RecordingHandler(body);
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in CreateClient(handler).AsIChatClient().GetStreamingResponseAsync("hi"))
+        {
+            updates.Add(update);
+        }
+
+        return updates;
+    }
+
+    private static List<CitationAnnotation> CitationsOf(ChatResponseUpdate update) =>
+        update.Contents.SelectMany(content => content.Annotations ?? []).OfType<CitationAnnotation>().ToList();
+
+    [Fact]
+    public async Task GroundingIndices_InAStream_CountChunksAcrossAllResponses()
+    {
+        var first = GroundedEvent("ab", ["https://a.example/", "https://b.example/"],
+            """{"segment":{"startIndex":0,"endIndex":2},"groundingChunkIndices":[1]}""");
+        var second = GroundedEvent("cd", ["https://c.example/", "https://d.example/"],
+            """{"segment":{"startIndex":2,"endIndex":3},"groundingChunkIndices":[2]},{"segment":{"startIndex":3,"endIndex":4},"groundingChunkIndices":[1]}""");
+
+        var updates = await StreamAsync(first + second);
+
+        var cited = CitationsOf(updates[1]).Where(c => c.AnnotatedRegions is { Count: > 0 }).ToList();
+        Assert.Equal(["https://c.example/", "https://b.example/"], cited.Select(c => c.Url?.ToString()));
+        var region = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(cited[1].AnnotatedRegions!));
+        Assert.Equal("d", "abcd"[region.StartIndex!.Value..region.EndIndex!.Value]);
+    }
+
+    [Fact]
+    public async Task UnreferencedGroundingChunk_InAStream_IsReportedOnlyWithTheResponseThatCarriedIt()
+    {
+        var first = GroundedEvent("ab", ["https://a.example/"], string.Empty);
+        var second = GroundedEvent("cd", ["https://b.example/"], string.Empty);
+
+        var updates = await StreamAsync(first + second);
+
+        Assert.Equal("https://a.example/", Assert.Single(CitationsOf(updates[0])).Url?.ToString());
+        Assert.Equal("https://b.example/", Assert.Single(CitationsOf(updates[1])).Url?.ToString());
+    }
+
     [Theory]
     [InlineData("auto", "AUTO")]
     [InlineData("none", "NONE")]

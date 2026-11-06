@@ -24,7 +24,8 @@ internal sealed class GeminiRequestHeaders
     }
 
     /// <summary>
-    /// Captures the headers configured on <paramref name="options"/>. A header that cannot be sent fails here, not on the first request.
+    /// Captures the headers configured on <paramref name="options"/>. A line break or NUL in a value, a name .NET refuses, and a
+    /// repeated header fail here, not on the first request. A non-ASCII value fails when it is sent.
     /// </summary>
     /// <exception cref="ArgumentException">A header cannot be sent, or both a key and a key provider are set.</exception>
     public static GeminiRequestHeaders Create(GeminiClientOptions options)

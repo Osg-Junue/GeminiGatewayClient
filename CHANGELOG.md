@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.0.2] - 2026-11-06
+
+### Fixed
+- Streamed citations now resolve `groundingChunkIndices` against the grounding chunks of all responses, as the API documents. When grounding metadata is split across several chunks, a citation no longer loses its source or points at the wrong one. Metadata that arrives in one chunk maps as before.
+- An `error` sent as text or an array keeps its text in `GeminiApiException.ErrorMessage` on an error status too. A stream `error` event or an event-less body that carries one reports status 500, not its 2xx status.
+- An `error` sent as a flag or number, such as `{"error":true}`, no longer puts `True` in `ErrorMessage`.
+- `TryGetModelContent`, `ToModelContent`, and `ToModelContentAsync` no longer change the response they read: a part whose empty text is left out of the result is now a copy.
+- Streaming through `IChatClient` copies the response text only for chunks with citation or grounding metadata, not for every chunk.
+
 ## [4.0.1] - 2026-11-06
 
 ### Fixed

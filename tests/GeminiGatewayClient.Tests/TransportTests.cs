@@ -432,6 +432,44 @@ public class TransportTests
         Assert.Equal(HttpStatusCode.InternalServerError, error.StatusCode);
     }
 
+    [Theory]
+    [InlineData("""{"error":"quota exceeded"}""")]
+    [InlineData("""{"error":["quota exceeded"]}""")]
+    [InlineData("""[{"error":"quota exceeded"}]""")]
+    public async Task Generate_ErrorOfAnyShapeOnAnErrorStatus_KeepsTheMessage(string body)
+    {
+        using var client = CreateClient(Body(body, "application/json", HttpStatusCode.Unauthorized));
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync(Request()));
+
+        Assert.Contains("quota exceeded", error.ErrorMessage, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.Unauthorized, error.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("""{"error":null}""")]
+    [InlineData("""{"error":true,"message":"rate limited"}""")]
+    [InlineData("""{"error":false,"message":"rate limited"}""")]
+    [InlineData("""{"error":401}""")]
+    public async Task Generate_ErrorWithoutTextOnAnErrorStatus_HasNoMessage(string body)
+    {
+        using var client = CreateClient(Body(body, "application/json", HttpStatusCode.Unauthorized));
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync(Request()));
+
+        Assert.Null(error.ErrorMessage);
+        Assert.Equal(HttpStatusCode.Unauthorized, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task Stream_ErrorEventWithATextError_IsNotReportedWithA2xxStatus()
+    {
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body("event: error\ndata: {\"error\":\"quota exceeded\"}\n\n")));
+
+        Assert.Equal("quota exceeded", error.ErrorMessage);
+        Assert.Equal(HttpStatusCode.InternalServerError, error.StatusCode);
+    }
+
     [Fact]
     public async Task Generate_NullError_IsNotAFailure()
     {

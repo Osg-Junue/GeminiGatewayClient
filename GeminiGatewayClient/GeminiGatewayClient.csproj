@@ -22,7 +22,7 @@
     <RepositoryUrl>https://github.com/Osg-Junue/GeminiGatewayClient</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>gemini;google;generative-ai;llm;ai;ichatclient;iembeddinggenerator;embeddings;grounding;microsoft-extensions-ai;api-gateway;proxy;apim;cloudflare;aot</PackageTags>
-    <Version>4.0.1</Version>
+    <Version>4.0.2</Version>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
     <PackageRequireLicenseAcceptance>False</PackageRequireLicenseAcceptance>
