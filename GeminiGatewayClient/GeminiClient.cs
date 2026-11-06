@@ -25,7 +25,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
     private const string StreamGenerateContentOperation = "streamGenerateContent";
     private const string EmbedContentOperation = "embedContent";
     private const string BatchEmbedContentsOperation = "batchEmbedContents";
-    private const int MaxResponseBytes = 64 * 1024 * 1024;
+    internal const int MaxResponseBytes = 64 * 1024 * 1024;
 
     private static readonly TimeSpan s_pooledConnectionLifetime = TimeSpan.FromMinutes(2);
 
@@ -38,7 +38,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
     /// Initializes a new <see cref="GeminiClient"/> for the Gemini Developer API using the default endpoint and header.
     /// </summary>
     /// <param name="apiKey">The Gemini API key.</param>
-    /// <param name="model">The default model, for example <c>gemini-2.5-flash</c>.</param>
+    /// <param name="model">The default model, for example <c>gemini-flash-latest</c>.</param>
     /// <exception cref="ArgumentException"><paramref name="apiKey"/> or <paramref name="model"/> is <c>null</c> or whitespace.</exception>
     public GeminiClient(string apiKey, string model)
         : this(CreateDefaultOptions(apiKey, model))
@@ -259,7 +259,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         var body = new ResponseBodyStream(content, _settings.StreamIdleTimeout, httpResponse.StatusCode);
         await using (body.ConfigureAwait(false))
         {
-            await foreach (var chunk in GeminiResponseReader.ReadChunksAsync(body, httpResponse.StatusCode, cancellationToken).ConfigureAwait(false))
+            await foreach (var chunk in GeminiResponseReader.ReadChunksAsync(body, httpResponse.StatusCode, _httpClient.MaxResponseContentBufferSize, cancellationToken).ConfigureAwait(false))
             {
                 yield return chunk;
             }

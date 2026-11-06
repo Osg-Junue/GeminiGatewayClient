@@ -194,6 +194,12 @@ public static class GeminiClientExtensions
             .Where(part => part is { IsEmptyText: false })
             .ToList();
 
+        // Gemini rejects text next to other data on a part, even when that text is empty.
+        foreach (var part in parts.Where(part => part is { Text: "", HasNonTextData: true }))
+        {
+            part.Text = null;
+        }
+
         return parts.Count > 0 ? new Content { Role = Role.Model, Parts = parts } : null;
     }
 

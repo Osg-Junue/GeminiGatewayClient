@@ -55,6 +55,12 @@ internal static class ChatResponseMapper
 
     public static ChatFinishReason? ToFinishReason(FinishReason? reason, BlockReason? blockReason, bool hasFunctionCall)
     {
+        // A failed tool call is not reported as ToolCalls, even next to functionCall parts.
+        if (reason is FinishReason.MalformedFunctionCall or FinishReason.UnexpectedToolCall or FinishReason.TooManyToolCalls)
+        {
+            return null;
+        }
+
         if (hasFunctionCall)
         {
             return ChatFinishReason.ToolCalls;

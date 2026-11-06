@@ -90,9 +90,51 @@ public class GatewayCredentialTests
     [Theory]
     [InlineData("鍵")]
     [InlineData("café")]
+    [InlineData("line\nbreak")]
     public void NonAsciiKey_FailsWhenTheClientIsCreated(string key)
     {
-        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions { ApiKey = key, Model = "gemini-2.5-flash" }));
+        var ex = Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions { ApiKey = key, Model = "gemini-2.5-flash" }));
+
+        Assert.Equal(nameof(GeminiClientOptions.ApiKey), ex.ParamName);
+        Assert.DoesNotContain(key, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InvalidKeyHeaderName_IsReportedOnApiKeyHeader()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            new GeminiClient(new GeminiClientOptions { ApiKey = "k", ApiKeyHeader = "bad header", Model = "gemini-2.5-flash" }));
+
+        Assert.Equal(nameof(GeminiClientOptions.ApiKeyHeader), ex.ParamName);
+    }
+
+    [Fact]
+    public void NonAsciiKeyHeaderName_IsReportedOnApiKeyHeader()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            new GeminiClient(new GeminiClientOptions { ApiKey = "k", ApiKeyHeader = "x-鍵", Model = "gemini-2.5-flash" }));
+
+        Assert.Equal(nameof(GeminiClientOptions.ApiKeyHeader), ex.ParamName);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NonAsciiKeyPrefix_IsReportedOnApiKeyPrefix(bool useProvider)
+    {
+        var options = new GeminiClientOptions { ApiKeyPrefix = "Bearér ", Model = "gemini-2.5-flash" };
+        if (useProvider)
+        {
+            options.ApiKeyProvider = _ => ValueTask.FromResult("k");
+        }
+        else
+        {
+            options.ApiKey = "k";
+        }
+
+        var ex = Assert.Throws<ArgumentException>(() => new GeminiClient(options));
+
+        Assert.Equal(nameof(GeminiClientOptions.ApiKeyPrefix), ex.ParamName);
     }
 
     [Fact]

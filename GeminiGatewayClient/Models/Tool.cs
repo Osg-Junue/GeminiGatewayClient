@@ -42,6 +42,18 @@ public sealed class Tool
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    /// <summary>
+    /// Returns a copy that also declares <paramref name="declarations"/>, because the caller may reuse this instance.
+    /// </summary>
+    internal Tool WithDeclarations(IEnumerable<FunctionDeclaration> declarations) => new()
+    {
+        FunctionDeclarations = [.. FunctionDeclarations ?? [], .. declarations],
+        GoogleSearch = GoogleSearch,
+        CodeExecution = CodeExecution,
+        UrlContext = UrlContext,
+        ExtensionData = ExtensionData
+    };
 }
 
 /// <summary>

@@ -56,6 +56,27 @@ internal static class GeminiErrorParser
             errorCode: details.Code);
     }
 
+    /// <summary>
+    /// Builds an exception from a 2xx body that holds no usable response, reporting the Google error it may carry instead.
+    /// </summary>
+    public static GeminiApiException FromUnusableBody(string message, string body, HttpStatusCode httpStatusCode, Exception? innerException = null)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (FindError(document.RootElement) is { } error)
+            {
+                return FromErrorElement(error, body, httpStatusCode);
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON, for example an HTML page from a gateway; keep the raw body only.
+        }
+
+        return new GeminiApiException(message, httpStatusCode, body.Length > 0 ? body : null, innerException);
+    }
+
     private static async Task<string?> ReadBodyAsync(HttpContent content, TimeSpan? readTimeout, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -67,6 +88,7 @@ internal static class GeminiErrorParser
         try
         {
             // Gemini speaks UTF-8; a gateway's charset parameter may be wrong or unknown to .NET.
+            await content.LoadIntoBufferAsync(GeminiClient.MaxResponseBytes, timeout.Token).ConfigureAwait(false);
             var bytes = await content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
             return Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
         }
@@ -87,23 +109,25 @@ internal static class GeminiErrorParser
         try
         {
             using var document = JsonDocument.Parse(body);
-
-            // Google's streaming endpoints wrap an error in a single-element array.
-            var root = document.RootElement.ValueKind == JsonValueKind.Array && document.RootElement.GetArrayLength() > 0
-                ? document.RootElement[0]
-                : document.RootElement;
-
-            return root.ValueKind == JsonValueKind.Object &&
-                   root.TryGetProperty("error", out var error) &&
-                   error.ValueKind == JsonValueKind.Object
-                ? ParseErrorObject(error)
-                : default;
+            return FindError(document.RootElement) is { } error ? ParseErrorObject(error) : default;
         }
         catch (JsonException)
         {
             // Non-JSON or truncated error body (for example an HTML page from a gateway); keep the raw body only.
             return default;
         }
+    }
+
+    private static JsonElement? FindError(JsonElement root)
+    {
+        // Google's streaming endpoints wrap an error in a single-element array.
+        var body = root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 0 ? root[0] : root;
+
+        return body.ValueKind == JsonValueKind.Object &&
+               body.TryGetProperty("error", out var error) &&
+               error.ValueKind == JsonValueKind.Object
+            ? error
+            : null;
     }
 
     private static ErrorDetails ParseErrorObject(JsonElement error)

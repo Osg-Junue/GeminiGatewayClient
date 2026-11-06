@@ -241,7 +241,7 @@ public sealed class GroundingAndEmbeddingsExploratoryTests(ExploratoryTestFixtur
         Assert.NotNull(metadata);
         Assert.Equal(DefaultEmbeddingModel, metadata.DefaultModelId);
 
-        // 1. Single input -> routes to :embedContent
+        // 1. Single input -> routes to :batchEmbedContents
         var single = await generator.GenerateAsync(
             ["APIゲートウェイ経由でGeminiを呼び出す.NETクライアント"],
             new EmbeddingGenerationOptions { Dimensions = 128 });

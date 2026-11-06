@@ -80,6 +80,25 @@ public class ChatBehaviorTests
         Assert.NotEqual(ChatFinishReason.ToolCalls, result.FinishReason);
     }
 
+    [Theory]
+    [InlineData("MALFORMED_FUNCTION_CALL")]
+    [InlineData("UNEXPECTED_TOOL_CALL")]
+    [InlineData("TOO_MANY_TOOL_CALLS")]
+    public async Task FailedToolCall_WithFunctionCallParts_DoesNotClaimToolCalls(string finishReason)
+    {
+        var response = "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"f\",\"args\":{}}}]},\"finishReason\":\"" + finishReason + "\"}]}";
+        using var singleHandler = new RecordingHandler(response);
+        using var streamHandler = new RecordingHandler("data: " + response + "\n\n", contentType: "text/event-stream");
+
+        var buffered = await CreateClient(singleHandler).AsIChatClient().GetResponseAsync("hi");
+        var updates = await CreateClient(streamHandler).AsIChatClient().GetStreamingResponseAsync("hi").ToListAsync();
+
+        Assert.Null(buffered.FinishReason);
+        Assert.Single(buffered.Messages[0].Contents.OfType<FunctionCallContent>());
+        Assert.All(updates, update => Assert.Null(update.FinishReason));
+        Assert.Null(updates.ToChatResponse().FinishReason);
+    }
+
     [Fact]
     public async Task ResultWhoseSynthesizedCallWasTrimmed_KeepsTheFunctionName()
     {

@@ -126,6 +126,10 @@ internal static class ToolJsonConverter
                 writer.WriteEndObject();
                 break;
 
+            // A read-only dictionary of value types cannot be walked without reflection, but its own metadata can write it.
+            case not null when TrySerializeDictionary(writer, value, options):
+                break;
+
             case IEnumerable sequence:
                 writer.WriteStartArray();
                 foreach (var item in sequence)
@@ -148,6 +152,19 @@ internal static class ToolJsonConverter
         if (options.TypeInfoResolver is null ||
             !options.TryGetTypeInfo(value.GetType(), out var typeInfo) ||
             (typeInfo.Kind is JsonTypeInfoKind.Enumerable or JsonTypeInfoKind.Dictionary && options.ReferenceHandler is null))
+        {
+            return false;
+        }
+
+        JsonSerializer.Serialize(writer, value, typeInfo);
+        return true;
+    }
+
+    private static bool TrySerializeDictionary(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
+    {
+        if (options.TypeInfoResolver is null ||
+            !options.TryGetTypeInfo(value.GetType(), out var typeInfo) ||
+            typeInfo.Kind != JsonTypeInfoKind.Dictionary)
         {
             return false;
         }

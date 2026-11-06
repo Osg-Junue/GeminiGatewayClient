@@ -29,7 +29,7 @@ public sealed class GenerateContentResponse
     public UsageMetadata? UsageMetadata { get; set; }
 
     /// <summary>
-    /// Identifier and version of the model that produced the response (for example <c>gemini-2.5-flash</c>).
+    /// Identifier and version of the model that produced the response.
     /// </summary>
     [JsonPropertyName("modelVersion")]
     public string? ModelVersion { get; set; }

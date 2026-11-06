@@ -41,7 +41,7 @@ flowchart LR
     Gateway --> Gemini
 ```
 
-一番の特徴は「認証ヘッダーを自由に構成する」です。ヘッダー名、接頭辞、リクエストごとのキー、キーなしのすべてに対応します。
+一番の特徴は「認証ヘッダーを自由に構成する」です。ヘッダー名、接頭辞、呼び出しごとのキー、キーなしのすべてに対応します。
 
 ## 2. 層と依存の向き
 
@@ -151,7 +151,7 @@ classDiagram
     class GeminiResponseReader {
         <<internal static>>
         +Parse(utf8Json, typeInfo, selector, status)$
-        +ReadChunksAsync(body, status, ct)$
+        +ReadChunksAsync(body, status, maxBufferSize, ct)$
     }
 
     class ResponseBodyStream {
@@ -378,7 +378,7 @@ sequenceDiagram
     Client->>Client: JSON を UTF-8 に直列化(Content-Length 付き)
     Client->>Headers: ApplyAsync(message)
     opt ApiKeyProvider あり
-        Headers->>App: キーを取得(リクエストごと)
+        Headers->>App: キーを取得(呼び出しごと)
     end
     Client->>Http: SendAsync(ResponseContentRead)
     Http->>GW: POST .../models/{model}:generateContent

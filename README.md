@@ -34,7 +34,7 @@ flowchart LR
 | Capability | `GeminiGatewayClient` | Official `Google.GenAI` |
 |---|---|---|
 | **Replace `x-goog-api-key` header** (`Ocp-Apim-Subscription-Key`, `Authorization`) | ✅ Built-in (`ApiKeyHeader` + `ApiKeyPrefix`) | ⚠️ Manual `HttpOptions` wiring |
-| **Rotate short-lived OAuth / JWT tokens per request** | ✅ Built-in (`ApiKeyProvider` async callback) | ❌ Custom handler required |
+| **Rotate short-lived OAuth / JWT tokens per call** | ✅ Built-in (`ApiKeyProvider` async callback) | ❌ Custom handler required |
 | **Keyless client when gateway injects key upstream** (`ApiKey = null`) | ✅ Built-in | ⚠️ Custom auth workaround |
 | **Accurate `CitationAnnotation` spans on `IChatClient`** (UTF-8 to UTF-16, including Japanese text) | ✅ Built-in | ❌ Read `RawRepresentation` yourself |
 | **Cross-host redirect credential leak protection** (`AllowAutoRedirect = false`) | ✅ Built-in | ❌ Manual handler required |
@@ -62,7 +62,7 @@ var services = new ServiceCollection();
 services.AddGeminiClient(options =>
 {
     options.Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta");
-    options.Model = "gemini-3-flash-preview";
+    options.Model = "gemini-flash-latest";
     options.EmbeddingModel = "gemini-embedding-001";
     options.ApiKey = Environment.GetEnvironmentVariable("GEMINI_SUBSCRIPTION_KEY");
     options.ApiKeyHeader = "Ocp-Apim-Subscription-Key"; // Sends only this header; x-goog-api-key is omitted
@@ -84,7 +84,7 @@ using GeminiGatewayClient;
 
 using var client = new GeminiClient(
     apiKey: Environment.GetEnvironmentVariable("GEMINI_API_KEY")!,
-    model: "gemini-3-flash-preview");
+    model: "gemini-flash-latest");
 
 var response = await client.GenerateContentAsync("Explain quantum computing in three sentences.");
 Console.WriteLine(response.Text);
@@ -100,7 +100,7 @@ Console.WriteLine(response.Text);
 var options = new GeminiClientOptions
 {
     Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta"),
-    Model = "gemini-3-flash-preview",
+    Model = "gemini-flash-latest",
     ApiKey = "<apim-subscription-key>",
     ApiKeyHeader = "Ocp-Apim-Subscription-Key"
 };
@@ -112,10 +112,10 @@ var options = new GeminiClientOptions
 var options = new GeminiClientOptions
 {
     Endpoint = new Uri("https://llm-gateway.internal/gemini/v1beta"),
-    Model = "gemini-3-flash-preview",
+    Model = "gemini-flash-latest",
     ApiKeyHeader = "Authorization",
     ApiKeyPrefix = "Bearer ",
-    // Invoked before each HTTP request so short-lived Entra ID / OAuth tokens rotate cleanly:
+    // Invoked once per client call, so short-lived Entra ID / OAuth tokens rotate cleanly (HTTP handler retries resend the same value):
     ApiKeyProvider = async ct => await tokenProvider.GetAccessTokenAsync(ct)
 };
 ```
@@ -126,7 +126,7 @@ var options = new GeminiClientOptions
 var options = new GeminiClientOptions
 {
     Endpoint = new Uri("https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/google-ai-studio/v1beta"),
-    Model = "gemini-3-flash-preview",
+    Model = "gemini-flash-latest",
     ApiKey = "<gemini-api-key>", // Or set to null if Cloudflare injects the key via BYOK / Unified Billing
     AdditionalHeaders = new Dictionary<string, string>
     {
@@ -158,7 +158,7 @@ Core behavior is covered by deterministic unit tests ([`tests/GeminiGatewayClien
 
 | Failure Scenario | Exception Thrown | Operational Guidance |
 |---|---|---|
-| **Non-2xx HTTP status** or **in-stream `{"error": ...}`** after HTTP 200 | `GeminiApiException` | Check `ex.IsTransient` (`408`, `429`, `500`, `502`, `503`, `504`, `RESOURCE_EXHAUSTED`, `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `INTERNAL`), `ex.StatusCode`, `ex.ErrorStatus`, and honor `ex.RetryAfter` when present. |
+| **Non-2xx HTTP status** or **in-stream `{"error": ...}`** after HTTP 200 | `GeminiApiException` | Check `ex.IsTransient` (`408`, `429`, `500`, `502`, `503`, `504`, `RESOURCE_EXHAUSTED`, `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `INTERNAL`, but never a status that blames the request, such as `INVALID_ARGUMENT`), `ex.StatusCode`, `ex.ErrorStatus`, and honor `ex.RetryAfter` when present. |
 | **Stalled stream** (no bytes received within `StreamIdleTimeout`, default **2 min**) | `TimeoutException` | An upstream proxy or connection hung mid-stream after the headers arrived. |
 | **Request timeout** (`Timeout`, default **5 min**, covering a complete response or the headers of a stream) or **caller cancellation** | `OperationCanceledException` (`TaskCanceledException`) | Distinguish caller cancellation (`ct.IsCancellationRequested`) from `HttpClient.Timeout` expiration (`!ct.IsCancellationRequested`). |
 | **Connection lost** before the response, or while reading a successful response body or stream | `HttpRequestException` (`HttpRequestError` gives the failure category when known; `StatusCode` is set when a stream loses its connection) | Safe to retry only if your request is idempotent and any partial stream output is discarded. Resilience handlers do not see failures after the headers because streaming bodies are read outside the handler pipeline. |

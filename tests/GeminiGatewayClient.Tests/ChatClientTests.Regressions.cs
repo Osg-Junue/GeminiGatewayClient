@@ -238,7 +238,7 @@ public partial class ChatClientTests
     }
 
     [Fact]
-    public async Task IChatClient_ReasoningEffortNone_ClampsToLowForGemini3Pro()
+    public async Task IChatClient_ReasoningEffortNone_SendsMinimalEvenForGemini3Pro()
     {
         using var handler = new RecordingHandler(OkResponseJson);
         using var httpClient = new HttpClient(handler);
@@ -256,8 +256,81 @@ public partial class ChatClientTests
         Assert.NotNull(handler.LastRequestBody);
         using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
         var thinkingConfig = sentDoc.RootElement.GetProperty("generationConfig").GetProperty("thinkingConfig");
-        Assert.Equal("LOW", thinkingConfig.GetProperty("thinkingLevel").GetString());
+        Assert.Equal("MINIMAL", thinkingConfig.GetProperty("thinkingLevel").GetString());
         Assert.False(thinkingConfig.TryGetProperty("thinkingBudget", out _));
+    }
+
+    [Theory]
+    [InlineData("gemini-3-flash-preview", "None", "MINIMAL")]
+    [InlineData("gemini-3.8-flash", "None", "MINIMAL")]
+    [InlineData("gemini-4-argon", "None", "MINIMAL")]
+    [InlineData("gemini-flash-latest", "None", "MINIMAL")]
+    [InlineData("gemini-flash-lite-latest", "None", "MINIMAL")]
+    [InlineData("gemini-pro-latest", "None", "MINIMAL")]
+    [InlineData("models/gemini-pro-latest", "Low", "LOW")]
+    [InlineData("gemini-flash-latest", "Medium", "MEDIUM")]
+    [InlineData("gemini-pro-latest", "High", "HIGH")]
+    [InlineData("gemini-3-pro-preview", "Low", "LOW")]
+    [InlineData("gemini-3-pro-preview", "Medium", "MEDIUM")]
+    [InlineData("gemini-3.1-pro-preview", "Medium", "MEDIUM")]
+    [InlineData("gemini-3.8-flash", "ExtraHigh", "HIGH")]
+    [InlineData("my-gateway-alias", "None", "MINIMAL")]
+    public async Task IChatClient_ReasoningEffort_UsesThinkingLevelOutsideGemini25(string model, string effort, string expected)
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+
+        await geminiClient.AsIChatClient().GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Hi")],
+            new ChatOptions { ModelId = model, Reasoning = new ReasoningOptions { Effort = Enum.Parse<ReasoningEffort>(effort) } });
+
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        var thinkingConfig = sentDoc.RootElement.GetProperty("generationConfig").GetProperty("thinkingConfig");
+        Assert.Equal(expected, thinkingConfig.GetProperty("thinkingLevel").GetString());
+        Assert.False(thinkingConfig.TryGetProperty("thinkingBudget", out _));
+    }
+
+    [Theory]
+    [InlineData("gemini-2.5-flash", "None", 0)]
+    [InlineData("gemini-2.5-pro", "None", 0)]
+    [InlineData("models/gemini-2.5-pro-preview", "None", 0)]
+    [InlineData("gemini-2.5-flash-lite", "None", 0)]
+    [InlineData("gemini-2.5-flash", "Low", 1024)]
+    [InlineData("gemini-2.5-flash", "Medium", 8192)]
+    [InlineData("gemini-2.5-pro", "High", 24576)]
+    [InlineData("gemini-2.5-pro", "ExtraHigh", 24576)]
+    public async Task IChatClient_ReasoningEffort_UsesThinkingBudgetOnGemini25(string model, string effort, int expected)
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+
+        await geminiClient.AsIChatClient().GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Hi")],
+            new ChatOptions { ModelId = model, Reasoning = new ReasoningOptions { Effort = Enum.Parse<ReasoningEffort>(effort) } });
+
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        var thinkingConfig = sentDoc.RootElement.GetProperty("generationConfig").GetProperty("thinkingConfig");
+        Assert.Equal(expected, thinkingConfig.GetProperty("thinkingBudget").GetInt32());
+        Assert.False(thinkingConfig.TryGetProperty("thinkingLevel", out _));
+    }
+
+    [Theory]
+    [InlineData("gemini-2.0-flash")]
+    [InlineData("gemini-1.5-pro")]
+    public async Task IChatClient_ReasoningEffort_SendsNoThinkingConfigBeforeGemini25(string model)
+    {
+        using var handler = new RecordingHandler(OkResponseJson);
+        using var httpClient = new HttpClient(handler);
+        using var geminiClient = CreateClient(httpClient);
+
+        await geminiClient.AsIChatClient().GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Hi")],
+            new ChatOptions { ModelId = model, Reasoning = new ReasoningOptions { Effort = ReasoningEffort.None } });
+
+        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.False(sentDoc.RootElement.TryGetProperty("generationConfig", out var config) && config.TryGetProperty("thinkingConfig", out _));
     }
 
     [Fact]

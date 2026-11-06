@@ -11,8 +11,19 @@ namespace GeminiGatewayClient.Http;
 /// </summary>
 internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, HttpStatusCode statusCode) : Stream
 {
+    private readonly MemoryStream _head = new();
     private ReadOnlyMemory<byte> _unread;
     private bool _ended;
+
+    /// <summary>
+    /// The start of the body as received, without a byte order mark. It shows what a response without events really was.
+    /// </summary>
+    public string Head => Encoding.UTF8.GetString(_head.GetBuffer(), 0, (int)_head.Length).TrimStart('﻿').TrimEnd();
+
+    /// <summary>
+    /// The number of body bytes received so far, without the blank line added at the end.
+    /// </summary>
+    public long BytesReceived { get; private set; }
 
     public override bool CanRead => true;
 
@@ -34,18 +45,29 @@ internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, Ht
     public async ValueTask<byte?> PeekAsync(CancellationToken cancellationToken)
     {
         var buffer = new byte[256];
+        var length = 0;
         while (true)
         {
-            var read = await ReadBodyAsync(buffer, cancellationToken).ConfigureAwait(false);
-            _unread = buffer.AsMemory(0, read);
+            var read = await ReadBodyAsync(buffer.AsMemory(length), cancellationToken).ConfigureAwait(false);
+            length += read;
 
-            var content = _unread.Span;
-            content = content.StartsWith(Encoding.UTF8.Preamble) ? content[Encoding.UTF8.Preamble.Length..] : content;
+            var content = buffer.AsSpan(0, length);
+            var preamble = Encoding.UTF8.Preamble;
+            if (read > 0 && content.Length < preamble.Length && preamble.StartsWith(content))
+            {
+                // The rest of a byte order mark is still on its way.
+                continue;
+            }
+
+            content = content.StartsWith(preamble) ? content[preamble.Length..] : content;
             content = content.TrimStart(" \t\r\n"u8);
             if (read == 0 || !content.IsEmpty)
             {
+                _unread = buffer.AsMemory(0, length);
                 return content.IsEmpty ? null : content[0];
             }
+
+            length = 0;
         }
     }
 
@@ -79,7 +101,10 @@ internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, Ht
 
         try
         {
-            return await inner.ReadAsync(buffer, idle.Token).ConfigureAwait(false);
+            var read = await inner.ReadAsync(buffer, idle.Token).ConfigureAwait(false);
+            BytesReceived += read;
+            _head.Write(buffer.Span[..Math.Min(read, GeminiErrorParser.MaxErrorBodyChars - (int)_head.Length)]);
+            return read;
         }
         catch (OperationCanceledException ex) when (idle.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {

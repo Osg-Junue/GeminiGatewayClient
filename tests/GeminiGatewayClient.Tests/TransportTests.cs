@@ -214,9 +214,85 @@ public class TransportTests
     [Theory]
     [InlineData("")]
     [InlineData(": keep-alive\n\n")]
+    [InlineData("data: [DONE]\n\n")]
+    [InlineData("data:\n\n")]
+    [InlineData("data: \n\ndata: [DONE]\n\n")]
+    [InlineData(": keep-alive\n\nevent: ping\ndata:\n\ndata: [DONE]\n\n")]
     public async Task Stream_WithoutAnyEvent_IsReportedAsEmpty(string body)
     {
         await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(body)));
+    }
+
+    private static GeminiClient CreateClientWithBufferLimit(HttpMessageHandler handler, long maxBufferSize) =>
+        new(new GeminiClientOptions { ApiKey = "test-key", Model = "gemini-2.5-flash" }, new HttpClient(handler) { MaxResponseContentBufferSize = maxBufferSize });
+
+    private const string TextResponsePrefix = "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"";
+    private const string TextResponseSuffix = "\"}]}}]}";
+
+    private static string ResponseOfLength(int length) =>
+        TextResponsePrefix + new string('x', length - TextResponsePrefix.Length - TextResponseSuffix.Length) + TextResponseSuffix;
+
+    [Theory]
+    [InlineData("application/json")]
+    [InlineData("text/event-stream")]
+    public async Task Stream_SingleJsonBodyOverTheBufferLimit_FailsLikeANonStreamingBody(string mediaType)
+    {
+        var body = ResponseOfLength(4096);
+        using var streaming = CreateClientWithBufferLimit(Body(body, mediaType), 1024);
+        using var buffered = CreateClientWithBufferLimit(Body(body, "application/json"), 1024);
+
+        var streamError = await Assert.ThrowsAsync<HttpRequestException>(async () =>
+        {
+            await foreach (var _ in streaming.StreamGenerateContentAsync(Request()))
+            {
+            }
+        });
+        var bufferedError = await Assert.ThrowsAsync<HttpRequestException>(() => buffered.GenerateContentAsync(Request()));
+
+        Assert.Equal(bufferedError.HttpRequestError, streamError.HttpRequestError);
+        Assert.Equal(HttpRequestError.ConfigurationLimitExceeded, streamError.HttpRequestError);
+    }
+
+    [Fact]
+    public async Task Stream_SingleJsonBodyAtTheBufferLimit_IsRead()
+    {
+        using var client = CreateClientWithBufferLimit(Stream(new TrickleStream(Encoding.UTF8.GetBytes(ResponseOfLength(1024))), "application/json"), 1024);
+        var chunks = new List<GenerateContentResponse>();
+
+        await foreach (var chunk in client.StreamGenerateContentAsync(Request()))
+        {
+            chunks.Add(chunk);
+        }
+
+        Assert.Equal(new string('x', 1024 - TextResponsePrefix.Length - TextResponseSuffix.Length), Assert.Single(chunks).Text);
+    }
+
+    [Fact]
+    public async Task Stream_SingleJsonBodyOneByteOverTheBufferLimit_Fails()
+    {
+        using var client = CreateClientWithBufferLimit(Body(ResponseOfLength(1025), "application/json"), 1024);
+
+        await Assert.ThrowsAsync<HttpRequestException>(async () =>
+        {
+            await foreach (var _ in client.StreamGenerateContentAsync(Request()))
+            {
+            }
+        });
+    }
+
+    [Fact]
+    public async Task Stream_EventsLongerThanTheBufferLimitInTotal_AreNotLimited()
+    {
+        var events = string.Concat(Enumerable.Repeat($"data: {ResponseOfLength(800)}\n\n", 4));
+        using var client = CreateClientWithBufferLimit(Body(events), 1024);
+        var received = 0;
+
+        await foreach (var _ in client.StreamGenerateContentAsync(Request()))
+        {
+            received++;
+        }
+
+        Assert.Equal(4, received);
     }
 
     [Fact]
@@ -249,6 +325,90 @@ public class TransportTests
 
         Assert.Equal(HttpStatusCode.TooManyRequests, error.StatusCode);
         Assert.Equal("slow down", error.ErrorMessage);
+    }
+
+    private const string ArrayError =
+        """[{"error":{"code":429,"message":"slow down","status":"RESOURCE_EXHAUSTED","details":[{"retryDelay":"15s"}]}}]""";
+
+    private static void AssertRetryableQuotaError(GeminiApiException error)
+    {
+        Assert.Equal(HttpStatusCode.TooManyRequests, error.StatusCode);
+        Assert.Equal("RESOURCE_EXHAUSTED", error.ErrorStatus);
+        Assert.Equal("slow down", error.ErrorMessage);
+        Assert.Equal(TimeSpan.FromSeconds(15), error.RetryAfter);
+        Assert.True(error.IsTransient);
+    }
+
+    [Fact]
+    public async Task Stream_ErrorWrappedInAnArrayWithA2xxStatus_KeepsTheErrorDetails()
+    {
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(ArrayError, "application/json")));
+
+        AssertRetryableQuotaError(error);
+        Assert.Equal(ArrayError, error.ErrorContent);
+    }
+
+    [Fact]
+    public async Task Generate_ErrorWrappedInAnArrayWithA2xxStatus_KeepsTheErrorDetails()
+    {
+        using var client = CreateClient(Body(ArrayError, "application/json"));
+
+        AssertRetryableQuotaError(await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync(Request())));
+    }
+
+    [Fact]
+    public async Task Stream_PlainJsonErrorAfterKeepAliveComments_KeepsTheErrorDetails()
+    {
+        var body = $": keep-alive\n\n: keep-alive\n\n{ArrayError}\n";
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(body, "application/json")));
+
+        AssertRetryableQuotaError(error);
+    }
+
+    [Fact]
+    public async Task Stream_PrettyPrintedJsonErrorAfterAKeepAliveComment_KeepsTheErrorDetails()
+    {
+        const string body = ": keep-alive\n\n{\n  \"error\": {\n    \"code\": 503,\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n";
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(body, "application/json")));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task Stream_PlainTextBody_KeepsTheBodyForDiagnosis()
+    {
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body("Service temporarily unavailable", "text/plain")));
+
+        Assert.Equal(HttpStatusCode.OK, error.StatusCode);
+        Assert.Equal("Service temporarily unavailable", error.ErrorContent);
+    }
+
+    [Fact]
+    public async Task Stream_EmptyBody_HasNoErrorContent()
+    {
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(string.Empty)));
+
+        Assert.Null(error.ErrorContent);
+    }
+
+    [Fact]
+    public async Task Stream_ByteOrderMarkSplitAcrossReads_StillRecognizesAJsonError()
+    {
+        byte[] body = [.. Encoding.UTF8.Preamble, .. Encoding.UTF8.GetBytes(ArrayError)];
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Stream(new TrickleStream(body), "application/json")));
+
+        AssertRetryableQuotaError(error);
+    }
+
+    [Fact]
+    public async Task Stream_ByteOrderMarkSplitAcrossReads_KeepsTheFirstEvent()
+    {
+        byte[] body = [.. Encoding.UTF8.Preamble, .. Encoding.UTF8.GetBytes($"data: {Chunk}\n\n")];
+
+        Assert.Equal(["hi"], await StreamTextsAsync(Stream(new TrickleStream(body))));
     }
 
     [Fact]
@@ -362,6 +522,30 @@ public class TransportTests
             () => StreamTextsAsync(Stream(new StallingStream([]), "application/json", HttpStatusCode.BadGateway), TimeSpan.FromMilliseconds(100)));
 
         Assert.Equal(HttpStatusCode.BadGateway, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task Stream_ErrorStatusWithAnEndlessBody_StopsReadingAndKeepsTheStatus()
+    {
+        var body = new EndlessStream();
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Stream(body, "application/json", HttpStatusCode.BadGateway)));
+
+        Assert.Equal(HttpStatusCode.BadGateway, error.StatusCode);
+        Assert.Null(error.ErrorContent);
+        Assert.InRange(body.BytesRead, 64 * 1024 * 1024, 65 * 1024 * 1024);
+    }
+
+    private sealed class EndlessStream : MemoryStream
+    {
+        public long BytesRead { get; private set; }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            buffer.Span.Fill((byte)'x');
+            BytesRead += buffer.Length;
+            return ValueTask.FromResult(buffer.Length);
+        }
     }
 
     private sealed class StubHandler(Func<HttpResponseMessage> respond) : HttpMessageHandler

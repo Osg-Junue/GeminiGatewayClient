@@ -133,7 +133,7 @@ Reference: [`GenerateContentResponse`](https://ai.google.dev/api/generate-conten
 | `modelVersion` | `string` | ✅ Supported | `GenerateContentResponse.ModelVersion` | Model version identifier used for generation |
 | `responseId` | `string` | ✅ Supported | `GenerateContentResponse.ResponseId` | Unique response identifier |
 | `candidates[].content` | `Content` | ✅ Supported | `Candidate.Content` | Generated model message parts |
-| `candidates[].finishReason` | `FinishReason` | ✅ Supported | `Candidate.FinishReason` | All 17 official values (`Stop`, `MaxTokens`, `Safety`, `MalformedFunctionCall`, `UnexpectedToolCall`, etc.) + `Unknown` fallback |
+| `candidates[].finishReason` | `FinishReason` | ✅ Supported | `Candidate.FinishReason` | All 19 official values (`Stop`, `MaxTokens`, `Safety`, `MalformedFunctionCall`, `UnexpectedToolCall`, etc.) + `Unknown` fallback |
 | `candidates[].safetyRatings` | `SafetyRating[]` | ✅ Supported | `Candidate.SafetyRatings` | `Category`, `Probability`, `ProbabilityScore`, `Severity`, `SeverityScore`, `Blocked` |
 | `candidates[].citationMetadata` | `CitationMetadata` | ✅ Supported | `Candidate.CitationMetadata` | `Citations` (`StartIndex`, `EndIndex`, `Uri`, `Title`, `License`, `PublicationDate`) |
 | `candidates[].groundingMetadata` | `GroundingMetadata` | ✅ Supported | `Candidate.GroundingMetadata` | `WebSearchQueries`, `SearchEntryPoint` (`RenderedContent`, `SdkBlob`), `GroundingChunks` (`Web`, `RetrievedContext`), `GroundingSupports` (`Segment`, `GroundingChunkIndices`, `ConfidenceScores`) |

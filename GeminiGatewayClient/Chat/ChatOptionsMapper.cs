@@ -117,12 +117,17 @@ internal static class ChatOptionsMapper
         var declarations = new List<FunctionDeclaration>();
         var added = new List<Tool>();
 
-        foreach (var tool in tools)
+        for (var i = 0; i < tools.Count; i++)
         {
+            var tool = tools[i];
             switch (tool)
             {
+                case null:
+                    throw new ArgumentException($"ChatOptions.Tools[{i}] cannot be null.", "options");
+
                 case AIFunctionDeclaration function:
-                    if (!existing.Any(t => t.FunctionDeclarations?.Any(d => d?.Name == function.Name) == true))
+                    if (!existing.Any(t => t.FunctionDeclarations?.Any(d => d?.Name == function.Name) == true) &&
+                        !declarations.Any(d => d.Name == function.Name))
                     {
                         declarations.Add(ToDeclaration(function));
                     }
@@ -152,11 +157,13 @@ internal static class ChatOptionsMapper
             }
         }
 
+        var sent = request.Tools?.ToList() ?? [];
         if (declarations.Count > 0)
         {
-            if (existing.Find(t => t.FunctionDeclarations is not null) is { } functionTool)
+            var functionTool = sent.FindIndex(t => t?.FunctionDeclarations is not null);
+            if (functionTool >= 0)
             {
-                functionTool.FunctionDeclarations = [.. functionTool.FunctionDeclarations!, .. declarations];
+                sent[functionTool] = sent[functionTool].WithDeclarations(declarations);
             }
             else
             {
@@ -164,10 +171,7 @@ internal static class ChatOptionsMapper
             }
         }
 
-        if (added.Count > 0)
-        {
-            request.Tools = [.. request.Tools ?? [], .. added];
-        }
+        request.Tools = [.. sent, .. added];
     }
 
     private static FunctionDeclaration ToDeclaration(AIFunctionDeclaration function) => new()
@@ -179,8 +183,7 @@ internal static class ChatOptionsMapper
     };
 
     /// <summary>
-    /// Returns the JSON schema of a function's parameters, or <c>null</c> for parameterless functions
-    /// (Gemini rejects an empty <c>properties</c> object).
+    /// Returns the JSON schema of a function's parameters, or <c>null</c> for parameterless functions.
     /// </summary>
     private static JsonElement? ToParametersSchema(JsonElement schema)
     {

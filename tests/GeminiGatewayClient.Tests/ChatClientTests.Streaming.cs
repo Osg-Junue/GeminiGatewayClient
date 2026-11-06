@@ -12,7 +12,7 @@ namespace GeminiGatewayClient.Tests;
 public partial class ChatClientTests
 {
     [Fact]
-    public async Task Stream_SseKeepAliveOrDoneOnly_CompletesCleanlyWithZeroChunks()
+    public async Task Stream_SseKeepAliveOrDoneOnly_IsReportedAsEmpty()
     {
         const string keepAliveAndDone = ": keep-alive\n\ndata: [DONE]\n\n";
         using var handler = new RecordingHandler(keepAliveAndDone, HttpStatusCode.OK, contentType: "text/event-stream");
@@ -24,12 +24,16 @@ public partial class ChatClientTests
         }, httpClient);
 
         var count = 0;
-        await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
+        var error = await Assert.ThrowsAsync<GeminiApiException>(async () =>
         {
-            count++;
-        }
+            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
+            {
+                count++;
+            }
+        });
 
         Assert.Equal(0, count);
+        Assert.Equal(HttpStatusCode.OK, error.StatusCode);
     }
 
     [Theory]

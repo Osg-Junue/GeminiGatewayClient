@@ -312,6 +312,30 @@ public sealed class ValidationAndToolJsonTests
         Assert.Throws<FormatException>(() => ToolJsonConverter.ToResponseObject(Failing(), AIJsonUtilities.DefaultOptions));
     }
 
+    [Fact]
+    public void ToResponseObject_CustomReadOnlyDictionary_IsWrittenAsAnObject()
+    {
+        var element = ToolJsonConverter.ToResponseObject(new ReadOnlyCounts(), AIJsonUtilities.DefaultOptions);
+
+        Assert.Equal("""{"a":1}""", Raw(element));
+    }
+
+    [Fact]
+    public void ToResponseObject_CustomReadOnlyDictionary_UsesSourceGeneratedMetadata()
+    {
+        var options = new JsonSerializerOptions { TypeInfoResolver = ReadOnlyCountsContext.Default };
+
+        Assert.Equal("""{"a":1}""", Raw(ToolJsonConverter.ToResponseObject(new ReadOnlyCounts(), options)));
+    }
+
+    [Fact]
+    public void ToResponseObject_CustomReadOnlyDictionaryWithoutMetadata_AsksForMetadata()
+    {
+        var options = new JsonSerializerOptions { TypeInfoResolver = GeminiJsonContext.Default };
+
+        Assert.Throws<InvalidOperationException>(() => ToolJsonConverter.ToResponseObject(new ReadOnlyCounts(), options));
+    }
+
     #endregion
 
     #region Function-call arguments: property counts and raw reuse (pattern 5)
@@ -1248,6 +1272,29 @@ public sealed class ValidationAndToolJsonTests
         GeminiJsonContext.Default.GenerateContentResponse)!;
 
     [Fact]
+    public void TryGetModelContent_EmptyTextNextToOtherData_IsNotResent()
+    {
+        var response = ParseResponse("""{"text":"","functionCall":{"name":"f"},"thoughtSignature":"sig"}""");
+
+        Assert.True(response.TryGetModelContent(out var content));
+
+        var part = Assert.Single(content.Parts);
+        Assert.Null(part.Text);
+        Assert.Equal("f", part.FunctionCall?.Name);
+        Assert.Equal("sig", part.ThoughtSignature);
+    }
+
+    [Fact]
+    public void TryGetModelContent_EmptyTextWithOnlyASignature_KeepsTheText()
+    {
+        var response = ParseResponse("""{"text":"","thoughtSignature":"sig"}""");
+
+        Assert.True(response.TryGetModelContent(out var content));
+
+        Assert.Equal(string.Empty, Assert.Single(content.Parts).Text);
+    }
+
+    [Fact]
     public void InlineData_WithoutMimeType_KeepsTheResponseAndFallsBackToOctetStream()
     {
         var response = ParseResponse("""{"text":"ok"},{"inlineData":{"data":"AQID"}}""");
@@ -1486,3 +1533,27 @@ public sealed class ValidationAndToolJsonTests
 
     #endregion
 }
+
+internal sealed class ReadOnlyCounts : IReadOnlyDictionary<string, int>
+{
+    private readonly Dictionary<string, int> _counts = new() { ["a"] = 1 };
+
+    public int this[string key] => _counts[key];
+
+    public IEnumerable<string> Keys => _counts.Keys;
+
+    public IEnumerable<int> Values => _counts.Values;
+
+    public int Count => _counts.Count;
+
+    public bool ContainsKey(string key) => _counts.ContainsKey(key);
+
+    public bool TryGetValue(string key, out int value) => _counts.TryGetValue(key, out value);
+
+    public IEnumerator<KeyValuePair<string, int>> GetEnumerator() => _counts.GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+}
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(ReadOnlyCounts))]
+internal sealed partial class ReadOnlyCountsContext : System.Text.Json.Serialization.JsonSerializerContext;

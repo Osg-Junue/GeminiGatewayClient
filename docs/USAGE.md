@@ -32,7 +32,7 @@ When APIM stores the upstream Gemini API key in a Named Value and your client au
 var options = new GeminiClientOptions
 {
     Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta"),
-    Model = "gemini-3-flash-preview",
+    Model = "gemini-flash-latest",
     ApiKey = "<apim-subscription-key>",
     ApiKeyHeader = "Ocp-Apim-Subscription-Key" // Replaces x-goog-api-key completely
 };
@@ -46,7 +46,7 @@ Send both the Gemini API key and the Cloudflare AI Gateway authentication header
 var options = new GeminiClientOptions
 {
     Endpoint = new Uri("https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/google-ai-studio/v1beta"),
-    Model = "gemini-3-flash-preview",
+    Model = "gemini-flash-latest",
     ApiKey = "<gemini-api-key>",
     AdditionalHeaders = new Dictionary<string, string>
     {
@@ -63,10 +63,10 @@ var options = new GeminiClientOptions
 var options = new GeminiClientOptions
 {
     Endpoint = new Uri("https://llm-proxy.internal/gemini/v1beta"),
-    Model = "gemini-3-flash-preview",
+    Model = "gemini-flash-latest",
     ApiKeyHeader = "Authorization",
     ApiKeyPrefix = "Bearer ",
-    // Invoked before each HTTP request so short-lived OAuth / JWT tokens rotate cleanly:
+    // Invoked once per client call, so short-lived OAuth / JWT tokens rotate cleanly (HTTP handler retries resend the same value):
     ApiKeyProvider = async ct => await tokenProvider.GetAccessTokenAsync(ct)
 };
 ```
@@ -87,7 +87,7 @@ var services = new ServiceCollection();
 services.AddGeminiClient(options =>
 {
     options.Endpoint = new Uri("https://contoso.azure-api.net/gemini/v1beta");
-    options.Model = "gemini-3-flash-preview";
+    options.Model = "gemini-flash-latest";
     options.ApiKeyProvider = async ct => await tokenService.GetTokenAsync(ct);
     options.AdditionalHeaders["x-client-scenario"] = "order-assistant";
     options.Timeout = TimeSpan.FromMinutes(3);
@@ -127,7 +127,7 @@ using GeminiGatewayClient.Models;
 
 using var client = new GeminiClient(
     apiKey: Environment.GetEnvironmentVariable("GEMINI_API_KEY")!,
-    model: "gemini-3-flash-preview");
+    model: "gemini-flash-latest");
 
 var response = await client.GenerateContentAsync(
     prompt: "What is the capital of Japan and which region is it in? Answer in one sentence.",
@@ -208,7 +208,9 @@ var request = GenerateContentRequest.FromPrompt(
     });
 
 var response = await client.GenerateContentAsync(request);
-var catalog = JsonSerializer.Deserialize<LanguageCatalog>(response.Text!);
+
+// Source-generated metadata keeps this working under trimming and Native AOT.
+var catalog = JsonSerializer.Deserialize(response.Text!, CatalogJsonContext.Default.LanguageCatalog);
 
 public sealed record LanguageCatalog(
     [property: JsonPropertyName("languages")] IReadOnlyList<LanguageEntry> Languages);
@@ -217,6 +219,9 @@ public sealed record LanguageEntry(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("paradigm")] string Paradigm,
     [property: JsonPropertyName("isStaticallyTyped")] bool IsStaticallyTyped);
+
+[JsonSerializable(typeof(LanguageCatalog))]
+internal sealed partial class CatalogJsonContext : JsonSerializerContext;
 ```
 
 ---
@@ -261,7 +266,7 @@ Console.WriteLine($"[Thoughts Tokens] {response.UsageMetadata?.ThoughtsTokenCoun
 
 ### Via `IChatClient` (`ReasoningOptions`)
 
-When using `IChatClient`, `ChatOptions.Reasoning.Effort` is automatically mapped according to the target model (`gemini-3*` -> `thinkingLevel`, `gemini-2.5*` -> `thinkingBudget`):
+When using `IChatClient`, `ChatOptions.Reasoning.Effort` is automatically mapped according to the target model (`gemini-2.5*` -> `thinkingBudget`; other models, including aliases such as `gemini-flash-latest` -> `thinkingLevel`; `gemini-1*` and `gemini-2.0*` send neither):
 
 ```csharp
 using Microsoft.Extensions.AI;
@@ -290,12 +295,14 @@ foreach (var reasoning in response.Messages
 Console.WriteLine(response.Text);
 ```
 
-| `ReasoningEffort` | Gemini 2.5 (`thinkingBudget`) | Gemini 3+ (`thinkingLevel`) |
+| `ReasoningEffort` | Gemini 2.5 (`thinkingBudget`) | Other models (`thinkingLevel`) |
 |---|---|---|
-| `None` | `0` (Pro: `128`, the minimum) | `Minimal` (Pro: `Low`) |
+| `None` | `0` | `Minimal` |
 | `Low` | `1024` | `Low` |
-| `Medium` | `8192` | `Medium` (`gemini-3-pro*`: `High`) |
+| `Medium` | `8192` | `Medium` |
 | `High` / `ExtraHigh` | `24576` | `High` |
+
+The value closest to the requested effort is sent as is, whatever the model. A model that does not accept it fails with `GeminiApiException` (HTTP 400) instead of quietly thinking more or less than asked: for example, Gemini 2.5 Pro rejects a budget of `0`, and some models and aliases, such as `gemini-flash-latest`, reject `Minimal`. Pick an effort the model supports, or set `ThinkingConfig` through `RawRepresentationFactory`, which takes precedence over `Reasoning.Effort`.
 
 ---
 
@@ -493,6 +500,27 @@ foreach (var citation in response.Messages.SelectMany(m => m.Contents).SelectMan
 }
 ```
 
+### Combining Functions with Google Search or Code Execution
+
+Gemini answers HTTP 400 when `ChatOptions.Tools` mixes functions with `HostedWebSearchTool` or `HostedCodeInterpreterTool`, unless the request sets `toolConfig.includeServerSideToolInvocations`. Set it through `RawRepresentationFactory`, returning a new request for each call:
+
+```csharp
+var options = new ChatOptions
+{
+    Tools = [getWeather, new HostedWebSearchTool()],
+    RawRepresentationFactory = _ => new GenerateContentRequest
+    {
+        ToolConfig = new ToolConfig
+        {
+            ExtensionData = new Dictionary<string, JsonElement>
+            {
+                ["includeServerSideToolInvocations"] = JsonDocument.Parse("true").RootElement
+            }
+        }
+    }
+};
+```
+
 ### URL Context & Grounding via `GeminiClient`
 
 With `GeminiClient`, enable `GoogleSearchTool` or `UrlContextTool` on `GenerateContentRequest.Tools` and inspect `Candidate.GroundingMetadata` or `Candidate.UrlContextMetadata`:
@@ -575,8 +603,8 @@ Settings without a `ChatOptions` counterpart go through `ChatOptions.RawRepresen
 |---|---|---|
 | `GeminiApiException` | • Non-2xx HTTP status from Gemini or the gateway<br>• In-stream `{"error": ...}` payload arriving after an HTTP 200 header<br>• Empty or malformed JSON response body | Inspect `StatusCode`, `ErrorStatus` (e.g., `RESOURCE_EXHAUSTED`, `UNAVAILABLE`), `ErrorCode`, `ErrorMessage`, and `ErrorContent` (up to 64 KB). Retry when `IsTransient == true`, honoring `RetryAfter` when present. |
 | `TimeoutException` | No streaming chunk bytes arrive within `GeminiClientOptions.StreamIdleTimeout` (default: **2 minutes**). | Indicates a stalled stream or hung upstream connection after headers were received. Safe to retry if the operation is idempotent. |
-| `OperationCanceledException` / `TaskCanceledException` | • The caller's `CancellationToken` was canceled (`ex.CancellationToken == ct`)<br>• `HttpClient.Timeout` (`GeminiClientOptions.Timeout`, default: **5 minutes**, covering a complete response or the headers of a stream) elapsed | Distinguish caller cancellation (`ct.IsCancellationRequested`) from initial header timeout (`!ct.IsCancellationRequested`). Increase `GeminiClientOptions.Timeout` for deep thinking requests. |
-| `HttpRequestException` | Transport-level DNS, socket, or TLS failure, including the connection being lost while reading a response body or stream. `StatusCode` is set only for a stream. | Check gateway reachability, TLS certificates, or proxy settings. `HttpRequestError` gives the failure category when known. |
+| `OperationCanceledException` / `TaskCanceledException` | • The caller's `CancellationToken` was canceled<br>• `HttpClient.Timeout` (`GeminiClientOptions.Timeout`, default: **5 minutes**, covering a complete response or the headers of a stream) elapsed | Tell them apart with your own token: `ct.IsCancellationRequested` is `true` for caller cancellation and `false` for the timeout. Do not compare `ex.CancellationToken` with `ct`: the client links tokens, so the exception may carry another token. Increase `GeminiClientOptions.Timeout` for deep thinking requests. |
+| `HttpRequestException` | • Transport-level DNS, socket, or TLS failure, including the connection being lost while reading a response body or stream. `StatusCode` is set only for a stream.<br>• A response body read as a whole (a non-streaming call, or a stream answered with a single JSON or HTML body) is larger than `HttpClient.MaxResponseContentBufferSize` (64 MiB on clients this library creates) | Check gateway reachability, TLS certificates, or proxy settings. `HttpRequestError` gives the failure category when known (`ConfigurationLimitExceeded` for an oversized body). |
 | `InvalidOperationException` | • Neither per-call `model` nor `GeminiClientOptions.Model` was set<br>• `ApiKeyProvider` returned an empty, whitespace-only, or non-ASCII token | Fix client configuration or token provider implementation. |
 | `ArgumentException` / `ArgumentNullException` | Invalid `GenerateContentRequest` or `GeminiClientOptions` (thrown **eagerly** before network I/O, including when calling `StreamGenerateContentAsync` before enumeration starts). | Fix request parameters (e.g., empty `Contents`, conflicting `ThinkingLevel` and `ThinkingBudget`, or `Unknown` wire enum values). |
 
@@ -635,10 +663,10 @@ When you pass your own `HttpClient` to `new GeminiClient(options, httpClient)`, 
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `Endpoint` | `Uri` | `https://generativelanguage.googleapis.com/v1beta` | Base URI of the Gemini API or gateway (without `:generateContent`). Query strings are preserved. |
-| `Model` | `string?` | `null` | Default model ID (`"gemini-3-flash-preview"`) or resource path (`"models/..."`, `"tunedModels/..."`). |
+| `Model` | `string?` | `null` | Default model ID (`"gemini-flash-latest"`) or resource path (`"models/..."`, `"tunedModels/..."`). An alias such as `gemini-flash-latest` follows the current model; pin a version ID when the model must not change. `GET /v1beta/models` can list a model that still answers 404 to new users. |
 | `EmbeddingModel` | `string?` | `null` | Default embedding model ID (`"gemini-embedding-001"`) used by `EmbedContentAsync`, `BatchEmbedContentsAsync`, and `IEmbeddingGenerator`. Falls back to `Model` when `null`. |
 | `ApiKey` | `string?` | `null` | Static API key or gateway credential. Mutually exclusive with `ApiKeyProvider`. |
-| `ApiKeyProvider` | `Func<CancellationToken, ValueTask<string>>?` | `null` | Async callback invoked per request to obtain a fresh API key or bearer token. |
+| `ApiKeyProvider` | `Func<CancellationToken, ValueTask<string>>?` | `null` | Async callback invoked once per client call to obtain a fresh API key or bearer token. Retries inside an HTTP handler, such as `AddStandardResilienceHandler`, resend the same value. |
 | `ApiKeyHeader` | `string` | `"x-goog-api-key"` | Header name used to send `ApiKey` or the value returned by `ApiKeyProvider`. |
 | `ApiKeyPrefix` | `string?` | `null` | Prefix prepended to the key value (for example `"Bearer "`). |
 | `AdditionalHeaders` | `IDictionary<string, string>` | Empty | Extra request headers sent on every call. Validated against CRLF injection and duplicates. |

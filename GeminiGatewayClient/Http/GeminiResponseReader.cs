@@ -43,23 +43,24 @@ internal static class GeminiResponseReader
         }
         catch (JsonException ex)
         {
-            throw new GeminiApiException("Failed to deserialize the Gemini API response.", statusCode, ToBoundedString(utf8Json), ex);
+            throw GeminiErrorParser.FromUnusableBody("Failed to deserialize the Gemini API response.", ToBoundedString(utf8Json), statusCode, ex);
         }
     }
 
     /// <summary>
     /// Reads the chunks of a <c>:streamGenerateContent</c> response. A gateway may answer with a JSON error or an HTML page
-    /// whatever its <c>Content-Type</c> says, so the body itself shows whether it is an event stream.
+    /// whatever its <c>Content-Type</c> says, so the body itself shows whether it is an event stream. Such a body is read
+    /// whole, so it is limited to <paramref name="maxBufferSize"/> bytes like the body of a non-streaming call.
     /// </summary>
     public static async IAsyncEnumerable<GenerateContentResponse> ReadChunksAsync(
         ResponseBodyStream body,
         HttpStatusCode statusCode,
+        long maxBufferSize,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (await body.PeekAsync(cancellationToken).ConfigureAwait(false) is (byte)'{' or (byte)'[' or (byte)'<')
         {
-            using var buffer = new MemoryStream();
-            await body.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+            using var buffer = await ReadToEndAsync(body, maxBufferSize, cancellationToken).ConfigureAwait(false);
             yield return ParseChunk(buffer.GetBuffer().AsSpan(0, (int)buffer.Length), statusCode);
             yield break;
         }
@@ -68,17 +69,60 @@ internal static class GeminiResponseReader
         var isEmpty = true;
         await foreach (var item in parser.EnumerateAsync(cancellationToken).ConfigureAwait(false))
         {
-            isEmpty = false;
             if (item.Data is { } chunk)
             {
+                isEmpty = false;
                 yield return chunk;
             }
         }
 
         if (isEmpty)
         {
-            throw new GeminiApiException("The Gemini API returned an empty streaming response.", statusCode);
+            throw GeminiErrorParser.FromUnusableBody("The Gemini API returned an empty streaming response.", SkipToJson(body.Head), statusCode);
         }
+    }
+
+    /// <summary>
+    /// Copies <paramref name="body"/> into memory, failing like <see cref="HttpClient"/> does for a buffered body once more
+    /// than <paramref name="maxBufferSize"/> bytes have been received.
+    /// </summary>
+    private static async Task<MemoryStream> ReadToEndAsync(ResponseBodyStream body, long maxBufferSize, CancellationToken cancellationToken)
+    {
+        var buffer = new MemoryStream();
+        try
+        {
+            var chunk = new byte[16 * 1024];
+            int read;
+            while ((read = await body.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                if (body.BytesReceived > maxBufferSize)
+                {
+                    throw new HttpRequestException(
+                        HttpRequestError.ConfigurationLimitExceeded,
+                        $"Cannot write more bytes to the buffer than the configured maximum buffer size: {maxBufferSize}.");
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            return buffer;
+        }
+        catch
+        {
+            await buffer.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// An event stream ignores what is not an event, such as a plain JSON error sent after keep-alive comments, so the
+    /// body of a response without events starts at its first JSON line.
+    /// </summary>
+    private static string SkipToJson(string body)
+    {
+        var lines = body.Split('\n');
+        var start = Array.FindIndex(lines, line => line.TrimStart() is ['{' or '[', ..]);
+        return start > 0 ? string.Join('\n', lines[start..]) : body;
     }
 
     private static GenerateContentResponse ParseChunk(ReadOnlySpan<byte> utf8Json, HttpStatusCode statusCode) =>

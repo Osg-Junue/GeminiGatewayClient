@@ -58,7 +58,7 @@ public sealed class GeminiClientOptions
     } = DefaultEndpoint;
 
     /// <summary>
-    /// Default model used when a call does not specify one, for example <c>gemini-2.5-flash</c>.
+    /// Default model used when a call does not specify one, for example <c>gemini-flash-latest</c>.
     /// Bare IDs are resolved as <c>models/{id}</c>; resource names containing <c>/</c> (such as <c>tunedModels/my-model</c>) are used as-is.
     /// </summary>
     public string? Model { get; set; }
@@ -80,9 +80,9 @@ public sealed class GeminiClientOptions
     public string? ApiKey { get; set; }
 
     /// <summary>
-    /// Asynchronously supplies the credential for every request (for example a short-lived OAuth access token or gateway JWT).
+    /// Asynchronously supplies the credential for every client call (for example a short-lived OAuth access token or gateway JWT).
     /// Mutually exclusive with <see cref="ApiKey"/>. The value is combined with <see cref="ApiKeyPrefix"/> and sent in <see cref="ApiKeyHeader"/>.
-    /// Implementations should cache tokens; the delegate is invoked once per request.
+    /// Implementations should cache tokens; the delegate is invoked once per client call, so retries inside an HTTP handler resend the same value.
     /// </summary>
     public Func<CancellationToken, ValueTask<string>>? ApiKeyProvider { get; set; }
 
@@ -132,14 +132,14 @@ public sealed class GeminiClientOptions
     /// <summary>
     /// Maximum time to wait for the next chunk of a streaming response before failing with <see cref="TimeoutException"/>.
     /// Defaults to <see cref="DefaultStreamIdleTimeout"/> (2 minutes). Set to <c>null</c> or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to disable.
-    /// Must be positive or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> when set.
+    /// Must be positive and below about 49.7 days, or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>, when set.
     /// </summary>
     public TimeSpan? StreamIdleTimeout
     {
         get;
         set => field = value is null || (value > TimeSpan.Zero && value <= MaxStreamIdleTimeout) || value == System.Threading.Timeout.InfiniteTimeSpan
             ? value
-            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamIdleTimeout must be positive or Timeout.InfiniteTimeSpan.");
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamIdleTimeout must be positive and below about 49.7 days, or Timeout.InfiniteTimeSpan.");
     } = DefaultStreamIdleTimeout;
 
     /// <summary>
@@ -151,15 +151,16 @@ public sealed class GeminiClientOptions
     /// <summary>
     /// Optional <see cref="JsonSerializerOptions"/> used by the <c>IChatClient</c> adapter when serializing custom
     /// tool/function return values that are not covered by the built-in primitive types.
-    /// Provide options backed by a source-generated <see cref="System.Text.Json.Serialization.JsonSerializerContext"/> when publishing with NativeAOT.
+    /// The options need a <see cref="JsonSerializerOptions.TypeInfoResolver"/> for those types, also outside Native AOT;
+    /// a source-generated <see cref="System.Text.Json.Serialization.JsonSerializerContext"/> works everywhere.
     /// </summary>
     public JsonSerializerOptions? ToolSerializerOptions { get; set; }
 
     internal string RedactedEndpoint => FormatEndpoint(Endpoint);
 
     /// <summary>
-    /// Formats option members while redacting <see cref="ApiKey"/>, <see cref="AdditionalHeaders"/> values, and sensitive
-    /// <see cref="Endpoint"/> query parameters so credentials are never leaked through <c>ToString()</c> or structured logging.
+    /// Formats option members while redacting <see cref="ApiKey"/>, <see cref="AdditionalHeaders"/> values, and the whole
+    /// <see cref="Endpoint"/> query string so credentials are never leaked through <c>ToString()</c> or structured logging.
     /// </summary>
     public override string ToString()
     {

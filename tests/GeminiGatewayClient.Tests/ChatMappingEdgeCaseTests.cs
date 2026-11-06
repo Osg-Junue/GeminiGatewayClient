@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.ObjectModel;
 using System.Net;
 using System.Text;
@@ -455,27 +454,6 @@ public sealed class ChatMappingEdgeCaseTests
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
         Assert.False(replayedCall.Args!.Value.GetProperty("enabled").GetBoolean());
         Assert.Equal(10, replayedCall.Args!.Value.GetProperty("count").GetInt32());
-    }
-
-    #endregion
-
-    #region Helper Types
-
-    private sealed class CustomReadOnlyPartList(Part[] items) : IList<Part>
-    {
-        public Part this[int index] { get => items[index]; set => throw new NotSupportedException(); }
-        public int Count => items.Length;
-        public bool IsReadOnly => true;
-        public void Add(Part item) => throw new NotSupportedException();
-        public void Clear() => throw new NotSupportedException();
-        public bool Contains(Part item) => items.Contains(item);
-        public void CopyTo(Part[] array, int arrayIndex) => items.CopyTo(array, arrayIndex);
-        public IEnumerator<Part> GetEnumerator() => ((IEnumerable<Part>)items).GetEnumerator();
-        public int IndexOf(Part item) => Array.IndexOf(items, item);
-        public void Insert(int index, Part item) => throw new NotSupportedException();
-        public bool Remove(Part item) => throw new NotSupportedException();
-        public void RemoveAt(int index) => throw new NotSupportedException();
-        IEnumerator IEnumerable.GetEnumerator() => items.GetEnumerator();
     }
 
     #endregion

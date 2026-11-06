@@ -4,7 +4,7 @@
 **ドキュメントバージョン**: 1.0.0  
 **対象プロジェクト**: `GeminiGatewayClient`  
 **検証対象テストプロジェクト**: `tests/GeminiGatewayClient.ExploratoryTests`  
-**関連プロジェクト**: `tests/GeminiGatewayClient.Tests` (単体テスト 185 件)
+**関連プロジェクト**: `tests/GeminiGatewayClient.Tests` (単体テスト)
 
 ---
 
@@ -17,8 +17,8 @@
 本ソリューションにおけるテスト体系は、以下の 2 段階で構成されています：
 
 1. **単体テスト (`tests/GeminiGatewayClient.Tests`)**:
-   - `MockHttpMessageHandler` 等を用いた決定論的なテスト（全 185 件）。
-   - クライアントの電文シリアライズ、ヘッダー付与、URL 構築、SSE/JSON Array パーサーの境界値、メモリ割り当てなどを高速・オフラインに検証。
+   - `MockHttpMessageHandler` 等を用いた決定論的なテスト。
+   - クライアントの電文シリアライズ、ヘッダー付与、URL 構築、SSE の読み取りの境界値などを高速・オフラインに検証。
 2. **探索的テスト (`tests/GeminiGatewayClient.ExploratoryTests`)**:
    - 実際の Google Gemini API エンドポイント（デフォルト: `gemini-3-flash-preview` または `gemini-2.5-flash`）に対して直接 HTTP リクエストを発行し、実 API の生きた挙動とクライアントの統合性を確認するライブ検証スイート。
 
@@ -154,7 +154,7 @@ Gemini API の無料枠・プレビューモデルには 1 分間あたりのリ
 - **背景と課題**:
   Gemini REST API のスキーマバリデーションは非常に厳格であり、ツールの引数が存在しない場合に空の JSON スキーマオブジェクト `{ "type": "object", "properties": {} }` を送信すると、サーバーから `HTTP 400 Bad Request`（`"Invalid JSON payload received. Unknown property: properties"` 等）が返却されます。
 - **クライアント実装仕様**:
-  `ChatOptionsMapper.cs` の `ExtractParametersJsonSchema` では、引数なし（またはプロパティが空）の関数について `FunctionDeclaration.ParametersJsonSchema` を明示的に `null` に設定します。
+  `ChatOptionsMapper.cs` の `ToParametersSchema` では、引数なし（またはプロパティが空）の関数について `FunctionDeclaration.ParametersJsonSchema` を明示的に `null` に設定します。
 - **検証ポイント**:
   - `AIFunctionFactory.Create(() => GetServerStatus(), "get_server_status")` のように、引数を一切持たない C# 関数を登録。
   - `FunctionInvokingChatClient` 経由で実行した際、HTTP 400 エラーが発生せず正常にツールが呼び出され、返却値が回答に反映されること。
@@ -224,7 +224,7 @@ IChatClient client = new ChatClientBuilder(geminiChatClient)
 2. **マルチモーダル入力 (`DataContent`)**:
    `ChatMessage` にテキストだけでなく `DataContent`（インライン画像や PDF、音声のバイト列）を含めて `IChatClient.GetResponseAsync` を呼び出した際、`ChatRequestMapper` が適切に `Part.FromBytes` に変換して実 API が内容を解析できること。
 3. **ReasoningOptions (Thinking) とファンクションコールの併用**:
-   - `gemini-3-flash-preview` 等の推論モデルで `ChatOptions.ReasoningOptions`（`ReasoningEffort.Low` 等）を指定し、かつ `UseFunctionInvocation()` を有効化。
+   - `gemini-3-flash-preview` 等の推論モデルで `ChatOptions.Reasoning`（`ReasoningEffort.Low` 等）を指定し、かつ `UseFunctionInvocation()` を有効化。
    - モデルがツール呼び出し前に推論（Thinking）を行い、ツール結果受信後にも推論を行って最終回答を導出するフローを検証。
    - **Thought Signature の保持**:
      Gemini は推論過程の改ざんを防止するため、推論を含むメッセージに `thoughtSignature` を付与します。`FunctionInvokingChatClient` が複数ターンを往復する際、この署名が維持され、Google サーバーから「署名が無効または欠落している」というエラー（HTTP 400）が発生しないことを実証。
@@ -361,7 +361,7 @@ Gemini API では、大量のプロンプト（ドキュメント集、コード
 
 - **リクエスト**: `GenerateContentRequest.CachedContent = "cachedContents/sample-cache-id"`
 - **レスポンス**: `UsageMetadata.CachedContentTokenCount`（キャッシュから読み出されたプロンプトトークン数）
-- **MEAI 連携**: `ChatOptions.AdditionalProperties["cachedContent"]` からのリクエストマッピングおよび `Usage.CachedInputTokenCount` への透過的マッピング。
+- **MEAI 連携**: `ChatOptions.RawRepresentationFactory` の `GenerateContentRequest.CachedContent` からのリクエストマッピングおよび `Usage.CachedInputTokenCount` への透過的マッピング。
 
 #### 3.4.2 探索的テストでの検証アプローチ
 キャッシュ作成は最小 32,768 トークン以上のプロンプトと時間課金が必要となるため、CI 上で一時キャッシュを都度作成することは現実的ではありません。
@@ -382,7 +382,7 @@ Gemini は、ヘイトスピーチ、ハラスメント、危険なコンテン�
 - **レスポンスフィードバック**:
   - `Candidate.SafetyRatings`: 各カテゴリにおける確率（`HarmProbability`）と深刻度（`HarmSeverity`）。
   - `PromptFeedback.BlockReason`: プロンプト全体が有害と判定された場合のブロック理由。
-  - `response.IsBlocked`: `FinishReason.Safety` または `PromptFeedback.BlockReason` に基づくブロック判定ヘルパー。
+  - `response.IsBlocked`(探索テスト内の拡張メソッド `ExploratoryResponseExtensions.IsBlocked`): `FinishReason.Safety` または `PromptFeedback.BlockReason` に基づくブロック判定ヘルパー。
 - **検証ポイント**:
   カスタムのセーフティ閾値を設定したリクエストが実 API で正しく受け入れられ、無害なプロンプトに対して各カテゴリの `SafetyRating` リスト（評価スコア）がレスポンスに正しく返却されること。
 
@@ -408,7 +408,7 @@ Gemini は、ヘイトスピーチ、ハラスメント、危険なコンテン�
 
 ## 4. 既存テストの網羅状況と差分分析（マトリクス表形式）
 
-現行の `tests/GeminiGatewayClient.ExploratoryTests`（全 24 件）および `tests/GeminiGatewayClient.Tests`（全 185 件）の網羅状況を調査し、実 API に対する探索的テストのギャップをマトリクス形式で整理しました。
+現行の `tests/GeminiGatewayClient.ExploratoryTests` および `tests/GeminiGatewayClient.Tests` の網羅状況を調査し、実 API に対する探索的テストのギャップをマトリクス形式で整理しました。
 
 ### 凡例
 - **Covered (網羅)**: 実 API に対する探索的テストが存在し、動作が確認されている。
@@ -522,7 +522,7 @@ Milestone 2 において `tests/GeminiGatewayClient.ExploratoryTests` に実装�
 - **テストメソッド名**: `IChatClient_UseFunctionInvocation_WithReasoningOptions_PreservesThoughtSignaturesAcrossTurns`
 - **対象機能**: 推論プロセスを伴うマルチターンツール呼び出しでの Thought Signature 整合性 (GAP-MEAI-06)
 - **前提条件**:
-  - `ChatOptions.ReasoningOptions = new() { Effort = ReasoningEffort.Low }`
+  - `ChatOptions.Reasoning = new() { Effort = ReasoningEffort.Low }`
   - ツール関数と `UseFunctionInvocation()` を設定。
 - **入力プロンプト**:
   論理的推論と数値計算を要するプロンプト。
@@ -635,7 +635,7 @@ Milestone 2 において `tests/GeminiGatewayClient.ExploratoryTests` に実装�
 # 1. 探索的テストプロジェクトのコンパイル確認（警告・エラーゼロ）
 dotnet build tests/GeminiGatewayClient.ExploratoryTests/GeminiGatewayClient.ExploratoryTests.csproj
 
-# 2. 既存単体テストの全件成功確認（リグレッション防止、全 185 件パス）
+# 2. 既存単体テストの全件成功確認（リグレッション防止）
 dotnet test tests/GeminiGatewayClient.Tests/GeminiGatewayClient.Tests.csproj
 
 # 3. 探索的テストの実行（GeminiAPIKey が設定されている場合は実API実行、未設定時は全件スキップ）

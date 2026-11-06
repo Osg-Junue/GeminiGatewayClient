@@ -12,7 +12,7 @@ public static class GeminiChatPropertyNames
     public const string BlockReason = "gemini.blockReason";
 
     /// <summary>
-    /// <c>FunctionCallContent.AdditionalProperties</c> key holding the <c>thoughtSignature</c> of a function call part.
+    /// <c>AIContent.AdditionalProperties</c> key holding the <c>thoughtSignature</c> of a part, such as a function call.
     /// Stored here (not only in <c>RawRepresentation</c>) so it survives serialization of chat history; Gemini 3 models reject
     /// replayed function calls whose signature is missing.
     /// </summary>

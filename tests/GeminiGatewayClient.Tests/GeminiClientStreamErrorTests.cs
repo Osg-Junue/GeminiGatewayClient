@@ -6,9 +6,6 @@ public class GeminiClientStreamErrorTests
 {
     private const string DefaultModel = "gemini-2.5-flash";
 
-    private const string ErrorEvent =
-        """{"error":{"code":503,"message":"The model is overloaded.","status":"UNAVAILABLE","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"5s"}]}}""";
-
     [Fact]
     public async Task Generate_NullJsonBody_ThrowsGeminiApiException()
     {

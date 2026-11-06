@@ -12,7 +12,7 @@ namespace GeminiGatewayClient.ExploratoryTests;
 
 /// <summary>
 /// Exploratory tests for core <see cref="GeminiClient"/> operations:
-/// model discovery, single-turn generation, SSE and JSON-array streaming, structured JSON output,
+/// model discovery, single-turn generation, SSE streaming, structured JSON output,
 /// thinking/reasoning configuration, and inline multimodal image input.
 /// </summary>
 public sealed class BasicGenerationExploratoryTests(ExploratoryTestFixture fixture, ITestOutputHelper output)

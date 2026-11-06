@@ -360,11 +360,8 @@ public sealed class ChatEdgeCaseTests
 
         ChatOptionsMapper.Apply(request, options, DefaultModel);
 
-        Assert.NotNull(existingTool.FunctionDeclarations);
-        Assert.NotSame(readOnlyDecls, existingTool.FunctionDeclarations);
-        Assert.Equal(2, existingTool.FunctionDeclarations.Count);
-        Assert.Equal("fn_one", existingTool.FunctionDeclarations[0].Name);
-        Assert.Equal("fn_two", existingTool.FunctionDeclarations[1].Name);
+        Assert.Equal(["fn_one", "fn_two"], Assert.Single(request.Tools!).FunctionDeclarations!.Select(d => d.Name));
+        Assert.Same(readOnlyDecls, existingTool.FunctionDeclarations);
     }
 
     [Fact]
@@ -386,11 +383,27 @@ public sealed class ChatEdgeCaseTests
 
         ChatOptionsMapper.Apply(request, options, DefaultModel);
 
-        Assert.NotNull(existingTool.FunctionDeclarations);
-        Assert.NotSame(declArray, existingTool.FunctionDeclarations);
-        Assert.Equal(2, existingTool.FunctionDeclarations.Count);
-        Assert.Equal("fn_one", existingTool.FunctionDeclarations[0].Name);
-        Assert.Equal("fn_two", existingTool.FunctionDeclarations[1].Name);
+        Assert.Equal(["fn_one", "fn_two"], Assert.Single(request.Tools!).FunctionDeclarations!.Select(d => d.Name));
+        Assert.Same(declArray, existingTool.FunctionDeclarations);
+    }
+
+    [Fact]
+    public void ChatOptionsMapper_ToolSharedBetweenRequests_KeepsOnlyTheFunctionsOfEachCall()
+    {
+        var shared = new Tool { FunctionDeclarations = [new FunctionDeclaration { Name = "fn_shared" }], UrlContext = new UrlContextTool() };
+
+        foreach (var name in new[] { "fn_first", "fn_second" })
+        {
+            var request = new GenerateContentRequest { Tools = [shared] };
+
+            ChatOptionsMapper.Apply(request, new ChatOptions { Tools = [AIFunctionFactory.Create(() => "res", name)] }, DefaultModel);
+
+            var sent = Assert.Single(request.Tools!);
+            Assert.Equal(["fn_shared", name], sent.FunctionDeclarations!.Select(d => d.Name));
+            Assert.Same(shared.UrlContext, sent.UrlContext);
+        }
+
+        Assert.Equal("fn_shared", Assert.Single(shared.FunctionDeclarations).Name);
     }
 
     [Fact]
@@ -433,6 +446,59 @@ public sealed class ChatEdgeCaseTests
         Assert.Equal(2, request.Tools.Count);
         Assert.Equal("fn_array", request.Tools[0].FunctionDeclarations![0].Name);
         Assert.NotNull(request.Tools[1].CodeExecution);
+    }
+
+    [Fact]
+    public void ChatOptionsMapper_SameFunctionNameTwiceInOptions_IsDeclaredOnce()
+    {
+        var first = AIFunctionFactory.Create(() => "a", "fn_dup", "first");
+        var options = new ChatOptions
+        {
+            Tools = [first, AIFunctionFactory.Create(() => "b", "fn_dup", "second"), AIFunctionFactory.Create(() => "c", "fn_other")]
+        };
+
+        var request = new GenerateContentRequest();
+        ChatOptionsMapper.Apply(request, options, DefaultModel);
+
+        var declarations = Assert.Single(request.Tools!).FunctionDeclarations!;
+        Assert.Equal(["fn_dup", "fn_other"], declarations.Select(d => d.Name));
+        Assert.Equal("first", declarations[0].Description);
+    }
+
+    [Fact]
+    public void ChatOptionsMapper_SameFunctionNameTwiceInOptions_NextToATemplateTool_IsDeclaredOnce()
+    {
+        var request = new GenerateContentRequest { Tools = [new Tool { FunctionDeclarations = [new FunctionDeclaration { Name = "fn_template" }] }] };
+        var options = new ChatOptions
+        {
+            Tools = [AIFunctionFactory.Create(() => "a", "fn_dup"), AIFunctionFactory.Create(() => "b", "fn_dup"), AIFunctionFactory.Create(() => "c", "fn_template")]
+        };
+
+        ChatOptionsMapper.Apply(request, options, DefaultModel);
+
+        Assert.Equal(["fn_template", "fn_dup"], Assert.Single(request.Tools!).FunctionDeclarations!.Select(d => d.Name));
+    }
+
+    [Fact]
+    public void ChatOptionsMapper_NullToolInOptions_ThrowsArgumentException()
+    {
+        var options = new ChatOptions { Tools = [AIFunctionFactory.Create(() => "a", "fn_ok"), null!] };
+
+        var ex = Assert.Throws<ArgumentException>(() => ChatOptionsMapper.Apply(new GenerateContentRequest(), options, DefaultModel));
+
+        Assert.Equal("options", ex.ParamName);
+        Assert.Contains("Tools[1]", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IChatClient_NullToolInOptions_ThrowsArgumentExceptionBeforeSending()
+    {
+        using var handler = new RecordingHandler("""{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}""");
+        using var client = new GeminiClient(new GeminiClientOptions { ApiKey = "k", Model = DefaultModel }, new HttpClient(handler));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.AsIChatClient().GetResponseAsync("hi", new ChatOptions { Tools = [null!] }));
+        Assert.Null(handler.LastRequest);
     }
 
     [Fact]

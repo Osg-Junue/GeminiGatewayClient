@@ -121,8 +121,8 @@ internal sealed class GeminiEndpoint
     }
 
     /// <summary>
-    /// Converts a model identifier to a URL path relative to the endpoint. Bare IDs (<c>gemini-2.5-flash</c>) become
-    /// <c>models/gemini-2.5-flash</c>; resource names containing <c>/</c> (<c>models/x</c>, <c>tunedModels/x</c>) are used as-is.
+    /// Converts a model identifier to a URL path relative to the endpoint. Bare IDs (<c>gemini-flash-latest</c>) become
+    /// <c>models/gemini-flash-latest</c>; resource names containing <c>/</c> (<c>models/x</c>, <c>tunedModels/x</c>) are used as-is.
     /// Each segment is percent-encoded.
     /// </summary>
     internal static string? ToResourcePath(string? model)

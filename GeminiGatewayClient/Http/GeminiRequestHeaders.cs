@@ -51,18 +51,18 @@ internal sealed class GeminiRequestHeaders
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using var probe = new HttpRequestMessage();
 
+        if (hasStaticKey || hasDynamicKeyProvider)
+        {
+            // The key from ApiKeyProvider is resolved and checked per client call.
+            ValidateName(probe, options.ApiKeyHeader, nameof(GeminiClientOptions.ApiKeyHeader));
+            ValidateValue(options.ApiKeyHeader, options.ApiKeyPrefix, nameof(GeminiClientOptions.ApiKeyPrefix));
+            seenNames.Add(options.ApiKeyHeader);
+        }
+
         if (hasStaticKey)
         {
-            var headerValue = $"{options.ApiKeyPrefix}{options.ApiKey}";
-            Validate(probe, options.ApiKeyHeader, headerValue, nameof(GeminiClientOptions.ApiKeyHeader));
-            seenNames.Add(options.ApiKeyHeader);
-            headers.Add(new KeyValuePair<string, string>(options.ApiKeyHeader, headerValue));
-        }
-        else if (hasDynamicKeyProvider)
-        {
-            // Validate the header name and prefix up front; the actual key is resolved per request by ApiKeyProvider.
-            Validate(probe, options.ApiKeyHeader, $"{options.ApiKeyPrefix}probe", nameof(GeminiClientOptions.ApiKeyHeader));
-            seenNames.Add(options.ApiKeyHeader);
+            ValidateValue(options.ApiKeyHeader, options.ApiKey, nameof(GeminiClientOptions.ApiKey));
+            headers.Add(new KeyValuePair<string, string>(options.ApiKeyHeader, $"{options.ApiKeyPrefix}{options.ApiKey}"));
         }
 
         if (options.AdditionalHeaders is { } additionalHeaders)
@@ -79,7 +79,8 @@ internal sealed class GeminiRequestHeaders
                         nameof(GeminiClientOptions.AdditionalHeaders));
                 }
 
-                Validate(probe, name, value, nameof(GeminiClientOptions.AdditionalHeaders));
+                ValidateName(probe, name, nameof(GeminiClientOptions.AdditionalHeaders));
+                ValidateValue(name, value, nameof(GeminiClientOptions.AdditionalHeaders));
                 headers.Add(new KeyValuePair<string, string>(name, value));
             }
         }
@@ -115,18 +116,29 @@ internal sealed class GeminiRequestHeaders
         }
     }
 
-    private static void Validate(HttpRequestMessage probe, string name, string value, string paramName)
+    private static void ValidateName(HttpRequestMessage probe, string name, string paramName)
     {
-        if (IsInvalidHeaderText(name, allowHorizontalTab: false) || IsInvalidHeaderText(value, allowHorizontalTab: true))
+        if (IsInvalidHeaderText(name, allowHorizontalTab: false))
         {
-            throw new ArgumentException($"Header '{name}' must contain only printable ASCII characters.", paramName);
+            throw new ArgumentException($"Header name '{name}' must contain only printable ASCII characters.", paramName);
         }
 
-        if (!probe.Headers.TryAddWithoutValidation(name, value))
+        if (!probe.Headers.TryAddWithoutValidation(name, string.Empty))
         {
             throw new ArgumentException(
                 $"Header '{name}' is not a valid request header (content headers such as 'Content-Type' cannot be set via AdditionalHeaders or ApiKeyHeader).",
                 paramName);
+        }
+    }
+
+    /// <summary>
+    /// Checks one piece of a header value. The text is left out of the message, because it may be a credential.
+    /// </summary>
+    private static void ValidateValue(string name, string? value, string paramName)
+    {
+        if (value is not null && IsInvalidHeaderText(value, allowHorizontalTab: true))
+        {
+            throw new ArgumentException($"The value of header '{name}' must contain only printable ASCII characters.", paramName);
         }
     }
 
