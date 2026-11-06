@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.0.1] - 2026-11-06
+
+### Fixed
+- Request bodies keep Japanese and other non-ASCII text as UTF-8 again, which halves that text on the wire and keeps it readable in gateway logs. The JSON means the same, and HTML-sensitive characters and emoji stay escaped.
+
 ## [4.0.0] - 2026-11-06
 
 The library is now much smaller: it favors plain code and the base class library over hand-written infrastructure and allocation tuning.

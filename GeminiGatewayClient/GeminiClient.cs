@@ -96,7 +96,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         return SendAsync(
             requestUri,
             request,
-            GeminiJsonContext.Default.GenerateContentRequest,
+            GeminiJsonContext.Wire.GenerateContentRequest,
             GeminiJsonContext.Default.GenerateContentResponse,
             static r => r.ExtensionData,
             cancellationToken);
@@ -127,7 +127,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         return SendAsync(
             requestUri,
             request.WithModel(resourceName),
-            GeminiJsonContext.Default.EmbedContentRequest,
+            GeminiJsonContext.Wire.EmbedContentRequest,
             GeminiJsonContext.Default.EmbedContentResponse,
             static r => r.ExtensionData,
             cancellationToken);
@@ -153,7 +153,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         return SendAsync(
             requestUri,
             wireRequest,
-            GeminiJsonContext.Default.BatchEmbedContentsRequest,
+            GeminiJsonContext.Wire.BatchEmbedContentsRequest,
             GeminiJsonContext.Default.BatchEmbedContentsResponse,
             static r => r.ExtensionData,
             cancellationToken);
@@ -231,7 +231,7 @@ public sealed class GeminiClient : IGeminiClient, IDisposable
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(requestCancellationToken, enumeratorCancellationToken);
         var cancellationToken = linkedCts.Token;
 
-        using var httpRequest = await CreateRequestMessageAsync(requestUri, request, GeminiJsonContext.Default.GenerateContentRequest, _settings.UseServerSentEvents, cancellationToken).ConfigureAwait(false);
+        using var httpRequest = await CreateRequestMessageAsync(requestUri, request, GeminiJsonContext.Wire.GenerateContentRequest, _settings.UseServerSentEvents, cancellationToken).ConfigureAwait(false);
         using var httpResponse = await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         await ThrowIfFailedAsync(httpResponse, _settings.StreamIdleTimeout, cancellationToken).ConfigureAwait(false);
 
