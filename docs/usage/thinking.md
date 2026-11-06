@@ -91,7 +91,7 @@ Models change, so treat this as an example.
 
 ### Gemini 2.5 and Other Settings
 
-`Reasoning` only sends `thinkingLevel`. For `ThinkingBudget`, set `ThinkingConfig` through `RawRepresentationFactory`, which wins over `Reasoning` and must return a new request on each call:
+`Reasoning` never sends `thinkingBudget`. For that, set `ThinkingConfig` through `RawRepresentationFactory`, which wins over `Reasoning` and must return a new request on each call:
 
 ```csharp
 using GeminiGatewayClient.Models;
@@ -111,7 +111,16 @@ var options = new ChatOptions
 
 ## Thought Signatures
 
-Gemini may return a `thoughtSignature`, which must go back unchanged on the next turn. Gemini 3 models reject a replayed function call whose signature is missing.
+Gemini may return a `thoughtSignature`. Send it back unchanged on the next turn, on the part that carried it. Measured on `gemini-3.8-flash` and `gemini-3-flash-preview` on 2026-11-06:
+
+| Sent back | Result |
+|---|---|
+| A function call without its signature | HTTP 400 |
+| A text without its signature | Accepted |
+| A text with its signature moved onto merged text | Accepted |
+| An altered signature | HTTP 400 |
+
+Only the function call case breaks a conversation today, but resending parts as they arrived is what Google's guide asks for, and the safe choice.
 
 - With `GeminiClient`, resend the `Content` from `TryGetModelContent` or `ToModelContent`.
 - With `IChatClient`, resend the messages. See [Persisting History](chat-client.md#persisting-history).

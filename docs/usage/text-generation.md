@@ -98,7 +98,7 @@ var request = new GenerateContentRequest { Contents = [Content.FromText("Tell me
 Content? streamedContent = await client.StreamGenerateContentAsync(request).ToModelContentAsync();
 ```
 
-To show the text while you collect it, gather the chunks yourself and call `chunks.ToModelContent()`. Keep the parts as they are: each `thoughtSignature` must go back unchanged, and Gemini forbids merging a signed part with an unsigned one.
+To show the text while you collect it, gather the chunks yourself and call `chunks.ToModelContent()`. Keep the parts as they are, so that each [`thoughtSignature`](thinking.md#thought-signatures) goes back on the part that carried it.
 
 ## Safety Settings
 

@@ -276,8 +276,7 @@ The loop above already handles them. Several `functionCall` parts in one turn ar
 using System.Text.Json;
 using GeminiGatewayClient.Models;
 
-var response = await client.GenerateContentAsync("Check Sapporo and Fukuoka.");
-
+// response came from a request with tools, as in the loop above.
 var parts = await Task.WhenAll(response.FunctionCalls.Select(async call =>
 {
     JsonElement result = await RunAsync(call);
@@ -316,10 +315,10 @@ Add `modelContent` to the history as in step 6.
 | Symptom | Cause | What to do |
 |---|---|---|
 | `FinishReason.MalformedFunctionCall` | The model produced an invalid call | Retry, or simplify the schema |
-| `FinishReason.UnexpectedToolCall` | The model called a function that was not offered | Check the declared tools |
+| `FinishReason.UnexpectedToolCall` | The model called a tool when none was enabled or expected | Check the declared tools and `ToolConfig` |
 | `FinishReason.TooManyToolCalls` | Too many calls in a row | Reduce the work per request |
 | `FinishReason.MissingThoughtSignature` | A signature did not come back | Resend the model's turn unchanged |
-| HTTP 400 on the next request | The model's turn or a response was changed or left out | Follow step 6 |
+| HTTP 400 on the next request, naming `thought_signature` | The model's turn was changed, and a function call lost its signature | Follow step 6 |
 | `ArgumentException` from `Part.FromFunctionResponse` | The result is not a JSON object | Wrap it in an object |
 
 Treat a limit on rounds as required: the loop has no end of its own.

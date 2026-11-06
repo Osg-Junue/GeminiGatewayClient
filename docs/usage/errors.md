@@ -52,8 +52,6 @@ catch (OperationCanceledException) when (!ct.IsCancellationRequested)
 }
 ```
 
-`catch` order matters only for your own base classes: these types are unrelated, apart from `TaskCanceledException` deriving from `OperationCanceledException`.
-
 ## `GeminiApiException`
 
 | Property | Value |
@@ -72,7 +70,7 @@ These come from Gemini or your gateway, and the library passes them on unchanged
 
 | Status | Typical `ErrorStatus` | Typical cause | Retry? |
 |---|---|---|---|
-| 400 | `INVALID_ARGUMENT` | Invalid request, a value the model rejects, a batch over 100 items | No |
+| 400 | `INVALID_ARGUMENT` | Invalid request, a value the model rejects, a batch over 100 items, a function call without its signature | No |
 | 401, 403 | `UNAUTHENTICATED`, `PERMISSION_DENIED` | Wrong or missing credential | No |
 | 404 | `NOT_FOUND` | Wrong model name, or a model no longer offered to you | No |
 | 429 | `RESOURCE_EXHAUSTED` | Rate limit or quota | Yes, honoring `RetryAfter` |
@@ -168,7 +166,7 @@ A gateway may report a failure with HTTP 200. Any `error` value other than `null
 
 ### Responses That Cannot Be Used
 
-These throw `GeminiApiException` with the 2xx status, keeping the body in `ErrorContent`:
+These throw `GeminiApiException` with the 2xx status. Any body that arrived is in `ErrorContent`, which is `null` for an empty one:
 
 | Case | Message starts with |
 |---|---|

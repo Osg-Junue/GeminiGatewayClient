@@ -1,6 +1,6 @@
 # Embeddings
 
-The model comes from the call, then `GeminiClientOptions.EmbeddingModel`, then `GeminiClientOptions.Model`.
+The model comes from the call, then `EmbedContentRequest.Model`, then `GeminiClientOptions.EmbeddingModel`, then `GeminiClientOptions.Model`.
 
 ## One Text
 
@@ -17,7 +17,7 @@ var response = await client.EmbedContentAsync(
 IList<float>? vector = response.Embedding?.Values;
 ```
 
-`title` applies only to `TaskType.RetrievalDocument`. For other content, pass an `EmbedContentRequest`.
+`title` needs `TaskType.RetrievalDocument`. With any other task type, or none, the API answers HTTP 400. For other content, pass an `EmbedContentRequest`.
 
 ## Several Texts
 
@@ -46,8 +46,8 @@ foreach (var embedding in response.Embeddings)
 - Results keep the order of the requests.
 - The URL uses the `model` argument, then the first item's `Model`, then the default.
 - An item without `Model` gets the same model, written as `models/{model}`, without changing your request.
-- An item that sets its own `Model` keeps it. Sending one that differs from the URL is your decision, and the API answers it.
-- The API accepts at most 100 items. Split larger batches yourself.
+- An item that sets its own `Model` keeps it. The API did not reject one that differed from the URL when checked on 2026-11-06, so make sure they match yourself.
+- The API accepts 1 to 100 items, and answers HTTP 400 otherwise. Split larger batches yourself.
 
 ## `IEmbeddingGenerator`
 
@@ -63,7 +63,7 @@ var embeddings = await generator.GenerateAsync(["First document", "Second docume
 ReadOnlyMemory<float> vector = embeddings[0].Vector;
 ```
 
-Every call is one `:batchEmbedContents` request, so more than 100 inputs fail with HTTP 400. Split them yourself. An empty input is sent as it is too.
+Every call is one `:batchEmbedContents` request, so more than 100 inputs fail with HTTP 400. Split them yourself. An empty input is sent as it is, and fails the same way.
 
 An `EmbedContentRequest` from `RawRepresentationFactory` supplies the settings shared by all inputs:
 
