@@ -185,7 +185,7 @@ Reference: [`Embeddings`](https://ai.google.dev/api/embeddings)
 | `ChatToolMode.Auto` / `None` / `RequireAny` | `FunctionCallingMode.Auto` / `None` / `Any` (with `AllowedFunctionNames` when `RequiredFunctionName` is specified) |
 | `ChatResponseFormatText` | `GenerationConfig.ResponseMimeType = "text/plain"` |
 | `ChatResponseFormatJson` | `GenerationConfig.ResponseMimeType = "application/json"` + `ResponseJsonSchema` |
-| `ChatOptions.Reasoning` | Throws `NotSupportedException`. Set `ThinkingConfig` through `RawRepresentationFactory` |
+| `ChatOptions.Reasoning` | `Effort` to `ThinkingConfig.ThinkingLevel` (`None` to `MINIMAL`, `ExtraHigh` to `HIGH`) and `Output` to `IncludeThoughts`. Set `ThinkingBudget` through `RawRepresentationFactory` |
 | `ChatOptions.RawRepresentationFactory` | Accepts a `GenerateContentRequest` template, which the client modifies, so return a new instance on each call |
 | `IEmbeddingGenerator<string, Embedding<float>>` | Always one `:batchEmbedContents` call, limited by the API to 100 inputs; maps `EmbeddingGenerationOptions.ModelId`, `Dimensions` (`outputDimensionality`), and `RawRepresentationFactory` (`EmbedContentRequest`) |
 

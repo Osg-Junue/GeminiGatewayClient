@@ -13,11 +13,6 @@ internal static class ChatOptionsMapper
 {
     public static void Apply(GenerateContentRequest request, ChatOptions options)
     {
-        if (options.Reasoning is not null)
-        {
-            throw new NotSupportedException("ChatOptions.Reasoning is not supported. Set ThinkingConfig through ChatOptions.RawRepresentationFactory.");
-        }
-
         ApplyGenerationConfig(request, options);
         ApplyTools(request, options);
         ApplyToolMode(request, options);
@@ -28,7 +23,7 @@ internal static class ChatOptionsMapper
         if (options is
             {
                 Temperature: null, TopP: null, TopK: null, MaxOutputTokens: null, PresencePenalty: null,
-                FrequencyPenalty: null, Seed: null, ResponseFormat: null
+                FrequencyPenalty: null, Seed: null, ResponseFormat: null, Reasoning: null
             } &&
             options.StopSequences is not { Count: > 0 })
         {
@@ -49,6 +44,43 @@ internal static class ChatOptionsMapper
         }
 
         ApplyResponseFormat(config, options.ResponseFormat);
+        ApplyReasoning(config, options.Reasoning);
+    }
+
+    /// <summary>
+    /// Sends <c>thinkingLevel</c>, which Gemini 3 and later understand. No value turns thinking off, so <see cref="ReasoningEffort.None"/>
+    /// asks for the least. A model that does not accept a level answers with an error; <c>thinkingBudget</c> goes through
+    /// <see cref="ChatOptions.RawRepresentationFactory"/>.
+    /// </summary>
+    private static void ApplyReasoning(GenerationConfig config, ReasoningOptions? reasoning)
+    {
+        ThinkingLevel? level = reasoning?.Effort switch
+        {
+            ReasoningEffort.None => ThinkingLevel.Minimal,
+            ReasoningEffort.Low => ThinkingLevel.Low,
+            ReasoningEffort.Medium => ThinkingLevel.Medium,
+            ReasoningEffort.High or ReasoningEffort.ExtraHigh => ThinkingLevel.High,
+            _ => null
+        };
+        bool? includeThoughts = reasoning?.Output switch
+        {
+            ReasoningOutput.None => false,
+            ReasoningOutput.Summary or ReasoningOutput.Full => true,
+            _ => null
+        };
+
+        if (level is null && includeThoughts is null)
+        {
+            return;
+        }
+
+        var thinking = config.ThinkingConfig ??= new ThinkingConfig();
+        if (thinking is { ThinkingLevel: null, ThinkingBudget: null })
+        {
+            thinking.ThinkingLevel = level;
+        }
+
+        thinking.IncludeThoughts ??= includeThoughts;
     }
 
     private static void ApplyResponseFormat(GenerationConfig config, ChatResponseFormat? format)
