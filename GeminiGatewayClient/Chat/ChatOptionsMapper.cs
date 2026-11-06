@@ -171,7 +171,7 @@ internal static class ChatOptionsMapper
 
     private static void ApplyToolMode(GenerateContentRequest request, ChatOptions options)
     {
-        if (request.ToolConfig is not null)
+        if (request.ToolConfig?.FunctionCallingConfig is not null)
         {
             return;
         }
@@ -190,7 +190,7 @@ internal static class ChatOptionsMapper
 
         if (callingConfig is not null)
         {
-            request.ToolConfig = new ToolConfig { FunctionCallingConfig = callingConfig };
+            (request.ToolConfig ??= new ToolConfig()).FunctionCallingConfig = callingConfig;
         }
     }
 }

@@ -40,7 +40,7 @@ public sealed class GeminiApiException : Exception
     /// </summary>
     /// <param name="message">High-level error description.</param>
     /// <param name="statusCode">HTTP status code returned by the endpoint or gateway.</param>
-    /// <param name="errorContent">Raw response body returned by the server (truncated to 64 KB), if available.</param>
+    /// <param name="errorContent">Raw response body returned by the server (truncated to 64 KB; <c>null</c> on a stream when it is longer), if available.</param>
     /// <param name="innerException">Underlying exception, if any.</param>
     public GeminiApiException(
         string message,
@@ -56,7 +56,7 @@ public sealed class GeminiApiException : Exception
     /// </summary>
     /// <param name="message">High-level error description.</param>
     /// <param name="statusCode">HTTP status code returned by the endpoint or gateway.</param>
-    /// <param name="errorContent">Raw response body returned by the server (truncated to 64 KB), if available.</param>
+    /// <param name="errorContent">Raw response body returned by the server (truncated to 64 KB; <c>null</c> on a stream when it is longer), if available.</param>
     /// <param name="errorStatus">Canonical Google RPC status string (e.g. <c>RESOURCE_EXHAUSTED</c>, <c>INVALID_ARGUMENT</c>), if present.</param>
     /// <param name="errorMessage">Parsed <c>error.message</c> from the JSON error payload, if present.</param>
     /// <param name="retryAfter">Suggested retry delay parsed from <c>RetryInfo.retryDelay</c> or the HTTP <c>Retry-After</c> header, if present.</param>

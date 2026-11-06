@@ -167,7 +167,7 @@ Reference: [`Embeddings`](https://ai.google.dev/api/embeddings)
 
 | `Microsoft.Extensions.AI` Type | Gemini Wire Mapping |
 |---|---|
-| `ChatRole.System` | Merged into `GenerateContentRequest.SystemInstruction` |
+| `ChatRole.System` | Merged into `GenerateContentRequest.SystemInstruction`, unless a `RawRepresentationFactory` template sets it: the template wins, and system messages and `ChatOptions.Instructions` are not sent |
 | `ChatRole.User` / `ChatRole.Tool` | `Content` with `Role.User` |
 | `ChatRole.Assistant` | `Content` with `Role.Model` |
 | `TextContent` | `Part.Text` (preserves trailing `ThoughtSignature` via `AdditionalProperties`) |

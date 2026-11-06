@@ -91,6 +91,25 @@ public class ChatOptionsMappingTests
         Assert.Equal("NONE", body.GetProperty("toolConfig").GetProperty("functionCallingConfig").GetProperty("mode").GetString());
     }
 
+    [Fact]
+    public async Task ToolMode_FillsInAToolConfigThatLeavesItUnset()
+    {
+        using var flag = JsonDocument.Parse("true");
+
+        var body = await SentBodyAsync(new ChatOptions
+        {
+            ToolMode = ChatToolMode.RequireAny,
+            RawRepresentationFactory = _ => new GenerateContentRequest
+            {
+                ToolConfig = new ToolConfig { ExtensionData = new Dictionary<string, JsonElement> { ["includeServerSideToolInvocations"] = flag.RootElement.Clone() } }
+            }
+        });
+
+        var toolConfig = body.GetProperty("toolConfig");
+        Assert.Equal("ANY", toolConfig.GetProperty("functionCallingConfig").GetProperty("mode").GetString());
+        Assert.True(toolConfig.GetProperty("includeServerSideToolInvocations").GetBoolean());
+    }
+
     [Theory]
     [InlineData("""{"type":"object","additionalProperties":{"type":"string"}}""", "additionalProperties")]
     [InlineData("""{"type":"object","allOf":[{"properties":{"a":{"type":"string"}}}]}""", "allOf")]

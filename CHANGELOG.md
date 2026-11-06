@@ -44,7 +44,6 @@ The library is now much smaller: it favors plain code and the base class library
 - **`IGeminiClient.Endpoint` and `ProviderUri` in the chat and embedding metadata leave out the query string and user info**, which may hold credentials. The query string is still sent.
 - **`Part.FromBytes(byte[], string)` is removed.** The `ReadOnlySpan<byte>` overload accepts a `byte[]` and copies it. A `null` array now gives an empty part.
 - **Request bodies use the default JSON encoder**, which writes non-ASCII text as `\uXXXX` escapes. The content is the same, but Japanese text takes about twice the bytes.
-
 - **The prompt overloads of `GenerateContentAsync`, `StreamGenerateContentAsync`, and `EmbedContentAsync` take `model` second**, like the request overloads. Positional arguments after the prompt or text change meaning.
 - **An `error` value of any shape on a 2xx response throws `GeminiApiException`**, not only Google's object.
 - **A streamed `FinishReason` comes only from the chunk that ends the response**, so a failure after a function call is no longer reported as `ToolCalls`. A stream without any finish reason reports none.
@@ -109,12 +108,7 @@ The library is now much smaller: it favors plain code and the base class library
 
 ## [2.1.0] - 2026-11-04
 
-- **The prompt overloads of `GenerateContentAsync`, `StreamGenerateContentAsync`, and `EmbedContentAsync` take `model` second**, like the request overloads. Positional arguments after the prompt or text change meaning.
-- **An `error` value of any shape on a 2xx response throws `GeminiApiException`**, not only Google's object.
-- **A streamed `FinishReason` comes only from the chunk that ends the response**, so a failure after a function call is no longer reported as `ToolCalls`. A stream without any finish reason reports none.
-
 ### Added
-- `GeminiClientOptions.UseServerSentEvents`, for a gateway that rejects `alt=sse`. With `false`, the client sends what version 1.0.3 sent and reads the JSON array Gemini answers with.
 - **Google Search grounding & URL context support (#10)**:
   - Added strongly-typed `GroundingMetadata` (`WebSearchQueries`, `SearchEntryPoint`, `GroundingChunks`, `GroundingSupports`, `GroundingSegment`) and `UrlContextMetadata` (`UrlMetadata`, `UrlRetrievalStatus`) on `Candidate`, plus `UrlContextTool` (`Tool.UrlContext`).
   - Mapped `CitationMetadata` and `GroundingMetadata` onto `Microsoft.Extensions.AI` `TextContent.Annotations` (`CitationAnnotation` with UTF-8 byte -> UTF-16 `char` span conversion across streaming and non-streaming responses) and exposed `WebSearchQueries` in `ChatResponse.AdditionalProperties[GeminiChatPropertyNames.WebSearchQueries]`.
@@ -157,12 +151,7 @@ The library is now much smaller: it favors plain code and the base class library
 
 ## [2.0.0] - 2026-11-02
 
-- **The prompt overloads of `GenerateContentAsync`, `StreamGenerateContentAsync`, and `EmbedContentAsync` take `model` second**, like the request overloads. Positional arguments after the prompt or text change meaning.
-- **An `error` value of any shape on a 2xx response throws `GeminiApiException`**, not only Google's object.
-- **A streamed `FinishReason` comes only from the chunk that ends the response**, so a failure after a function call is no longer reported as `ToolCalls`. A stream without any finish reason reports none.
-
 ### Added
-- `GeminiClientOptions.UseServerSentEvents`, for a gateway that rejects `alt=sse`. With `false`, the client sends what version 1.0.3 sent and reads the JSON array Gemini answers with.
 - **Unified `GeminiClient` & `IGeminiClient` architecture**:
   - Added `IGeminiClient` for unit testing and dependency injection (`Endpoint`, `DefaultModel`, `GenerateContentAsync`, `StreamGenerateContentAsync`).
   - Added `GeminiClient` with convenience constructor `new GeminiClient(apiKey, model)` and full options constructor `new GeminiClient(GeminiClientOptions, HttpClient?)`.
