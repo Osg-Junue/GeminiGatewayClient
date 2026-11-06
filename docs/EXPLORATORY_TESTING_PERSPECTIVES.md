@@ -20,7 +20,7 @@
    - `MockHttpMessageHandler` 等を用いた決定論的なテスト。
    - クライアントの電文シリアライズ、ヘッダー付与、URL 構築、SSE の読み取りの境界値などを高速・オフラインに検証。
 2. **探索的テスト (`tests/GeminiGatewayClient.ExploratoryTests`)**:
-   - 実際の Google Gemini API エンドポイント（デフォルト: `gemini-3-flash-preview` または `gemini-2.5-flash`）に対して直接 HTTP リクエストを発行し、実 API の生きた挙動とクライアントの統合性を確認するライブ検証スイート。
+   - 実際の Google Gemini API エンドポイント（デフォルト: `gemini-3-flash-preview`）に対して直接 HTTP リクエストを発行し、実 API の生きた挙動とクライアントの統合性を確認するライブ検証スイート。
 
 #### 探索的テストが果たす中核的価値
 - **実 API のプロトコル互換性保証**:
