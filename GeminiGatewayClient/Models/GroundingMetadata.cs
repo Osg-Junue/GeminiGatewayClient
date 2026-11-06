@@ -194,19 +194,19 @@ public sealed class GroundingSupport
 public sealed class GroundingSegment
 {
     /// <summary>
-    /// Zero-based index of the <see cref="Part"/> within <see cref="Content.Parts"/>.
+    /// Zero-based index of the <see cref="Part"/> within <see cref="Content.Parts"/>. The API usually omits it.
     /// </summary>
     [JsonPropertyName("partIndex")]
     public int? PartIndex { get; set; }
 
     /// <summary>
-    /// Inclusive start offset of the segment in the part text, measured in UTF-8 bytes.
+    /// Inclusive start offset of the segment in the response text, measured in UTF-8 bytes.
     /// </summary>
     [JsonPropertyName("startIndex")]
     public int? StartIndex { get; set; }
 
     /// <summary>
-    /// Exclusive end offset of the segment in the part text, measured in UTF-8 bytes.
+    /// Exclusive end offset of the segment in the response text, measured in UTF-8 bytes.
     /// </summary>
     [JsonPropertyName("endIndex")]
     public int? EndIndex { get; set; }

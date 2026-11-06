@@ -36,12 +36,12 @@ flowchart LR
 | **Replace `x-goog-api-key` header** (`Ocp-Apim-Subscription-Key`, `Authorization`) | ✅ Built-in (`ApiKeyHeader` + `ApiKeyPrefix`) | ⚠️ Manual `HttpOptions` wiring |
 | **Rotate short-lived OAuth / JWT tokens per request** | ✅ Built-in (`ApiKeyProvider` async callback) | ❌ Custom handler required |
 | **Keyless client when gateway injects key upstream** (`ApiKey = null`) | ✅ Built-in | ⚠️ Custom auth workaround |
-| **Zero `HttpClient.DefaultRequestHeaders` mutation** (per-request header isolation) | ✅ Guaranteed | ⚠️ Mutates shared client defaults |
+| **Accurate `CitationAnnotation` spans on `IChatClient`** (UTF-8 to UTF-16, including Japanese text) | ✅ Built-in | ❌ Read `RawRepresentation` yourself |
 | **Cross-host redirect credential leak protection** (`AllowAutoRedirect = false`) | ✅ Built-in | ❌ Manual handler required |
 | **`IHttpClientFactory` + `IOptions<T>` DI** (`services.AddGeminiClient()`) | ✅ Built-in (`IHttpClientBuilder`) | ❌ Manual registration |
 | **`Microsoft.Extensions.AI` (`IChatClient` & `IEmbeddingGenerator`) + `thoughtSignature` recovery** | ✅ Built-in (`AsIChatClient()`, `AsIEmbeddingGenerator()` / DI) | ⚠️ Requires raw part retention |
-| **NativeAOT & Trim-aware design** (`<IsAotCompatible>true</IsAotCompatible>`) | ✅ Source-generated wire DTO serialization (`GeminiJsonContext`) and reflection-free hot paths | ⚠️ Requires manual validation for gateway/AOT-specific behavior |
-| **Per-chunk stream idle watchdog** (`StreamIdleTimeout`) | ✅ Built-in (default 2 min) | ❌ Manual cancellation |
+| **Native AOT** (`dotnet publish -p:PublishAot=true`) | ✅ No warnings; CI runs a native smoke test | ⚠️ 9 IL warnings (version 1.28.0), so behavior is not guaranteed |
+| **Stream idle timeout** (`StreamIdleTimeout`) | ✅ Built-in (default 2 min) | ❌ Only a total timeout, which also ends healthy slow streams |
 
 ---
 
@@ -141,14 +141,14 @@ var options = new GeminiClientOptions
 
 Core behavior is covered by deterministic unit tests ([`tests/GeminiGatewayClient.Tests`](tests/GeminiGatewayClient.Tests)); live end-to-end scenarios are additionally covered by exploratory tests when API credentials are configured ([`tests/GeminiGatewayClient.ExploratoryTests`](tests/GeminiGatewayClient.ExploratoryTests)):
 
-- **Real-Time Streaming**: SSE (`?alt=sse`) and JSON-array streaming with `ArrayPool<byte>` buffering, split `\r\n` handling, in-stream HTTP 200 `{"error": ...}` detection, and `StreamIdleTimeout` watchdog.
+- **Real-Time Streaming**: Server-Sent Events (`?alt=sse`) read with `System.Net.ServerSentEvents`, error payloads sent with HTTP 200, and `StreamIdleTimeout`.
 - **Automatic & Parallel Tool Calling**: Multi-step `IChatClient` tool chains via `.UseFunctionInvocation()`, plus native parallel function calling and forced tool execution (`FunctionCallingMode.Any`).
 - **Google Search & URL Context Grounding**: Full typed response models (`GroundingMetadata`, `GroundingChunk`, `GroundingSupport`, `UrlContextMetadata`, `UrlRetrievalStatus`) and automatic `IChatClient` mapping to `CitationAnnotation` (converting Gemini UTF-8 byte offsets into UTF-16 `char` spans on `TextSpanAnnotatedRegion`) and `AdditionalProperties[GeminiChatPropertyNames.WebSearchQueries]`.
-- **Embeddings & `IEmbeddingGenerator<string, Embedding<float>>`**: Stateless `:embedContent` and `:batchEmbedContents` support (`EmbedContentAsync`, `BatchEmbedContentsAsync`, `AsIEmbeddingGenerator()`, and `GeminiClientOptions.EmbeddingModel`).
+- **Embeddings & `IEmbeddingGenerator<string, Embedding<float>>`**: `EmbedContentAsync`, `BatchEmbedContentsAsync`, `AsIEmbeddingGenerator()` (always `:batchEmbedContents`), and `GeminiClientOptions.EmbeddingModel`.
 - **Gemini 3 & 2.5 Thinking / Reasoning**: Supports `ThinkingLevel` (`Minimal`, `Low`, `Medium`, `High`), `ThinkingBudget`, `IncludeThoughts`, and model-aware `ChatOptions.Reasoning.Effort` mapping.
-- **Lossless Chat History Persistence**: Round-trips Gemini 3 `thoughtSignature` and synthesized tool call IDs through `AdditionalProperties` (`GeminiChatPropertyNames`) even when `RawRepresentation` is stripped by database/JSON serialization.
+- **Chat History Persistence**: Round-trips Gemini 3 `thoughtSignature` and synthesized tool call IDs through `AdditionalProperties` (`GeminiChatPropertyNames`) even when `RawRepresentation` is stripped by database/JSON serialization. Part kinds with no chat mapping need `RawRepresentation` to survive.
 - **Structured Output & Multimodal**: `ResponseJsonSchema` (`JsonElement`), OpenAPI `Schema`, inline binary `Blob` (`Part.FromBytes`), and `FileData` (`Part.FromUri`).
-- **Spec-Change Resilience**: All DTOs include `[JsonExtensionData]` and all 16 wire enums use a zero-allocation `LenientStringEnumConverter<T>` with `Unknown` fallback.
+- **Spec-Change Resilience**: All DTOs include `[JsonExtensionData]` and all 16 wire enums use a `LenientStringEnumConverter<T>` with `Unknown` fallback.
 
 ---
 
@@ -159,9 +159,9 @@ Core behavior is covered by deterministic unit tests ([`tests/GeminiGatewayClien
 | Failure Scenario | Exception Thrown | Operational Guidance |
 |---|---|---|
 | **Non-2xx HTTP status** or **in-stream `{"error": ...}`** after HTTP 200 | `GeminiApiException` | Check `ex.IsTransient` (`408`, `429`, `500`, `502`, `503`, `504`, `RESOURCE_EXHAUSTED`, `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `INTERNAL`), `ex.StatusCode`, `ex.ErrorStatus`, and honor `ex.RetryAfter` when present. |
-| **Stalled response body or stream** (no bytes received within `StreamIdleTimeout`, default **2 min**) | `TimeoutException` | Thrown by `StreamIdleWatchdog` when an upstream proxy or connection hangs mid-stream after headers arrive. |
-| **Initial header timeout** (`Timeout`, default **5 min**) or **caller cancellation** | `OperationCanceledException` (`TaskCanceledException`) | Distinguish caller cancellation (`ct.IsCancellationRequested`) from `HttpClient.Timeout` expiration (`!ct.IsCancellationRequested`). |
-| **Connection lost** before the response, or while reading a successful response body or stream | `HttpRequestException` (`HttpRequestError` gives the failure category when known; `StatusCode` is set once headers arrived) | Safe to retry only if your request is idempotent and any partial stream output is discarded. Resilience handlers do not see failures after the headers because streaming bodies are read outside the handler pipeline. |
+| **Stalled stream** (no bytes received within `StreamIdleTimeout`, default **2 min**) | `TimeoutException` | An upstream proxy or connection hung mid-stream after the headers arrived. |
+| **Request timeout** (`Timeout`, default **5 min**, covering a complete response or the headers of a stream) or **caller cancellation** | `OperationCanceledException` (`TaskCanceledException`) | Distinguish caller cancellation (`ct.IsCancellationRequested`) from `HttpClient.Timeout` expiration (`!ct.IsCancellationRequested`). |
+| **Connection lost** before the response, or while reading a successful response body or stream | `HttpRequestException` (`HttpRequestError` gives the failure category when known; `StatusCode` is set when a stream loses its connection) | Safe to retry only if your request is idempotent and any partial stream output is discarded. Resilience handlers do not see failures after the headers because streaming bodies are read outside the handler pipeline. |
 | **Invalid request or options** (including `StreamGenerateContentAsync` before enumeration) | `ArgumentException` / `InvalidOperationException` | Validated eagerly before any network call is made. |
 
 ### Production Deployment Checklist
@@ -169,7 +169,7 @@ Core behavior is covered by deterministic unit tests ([`tests/GeminiGatewayClien
 - **Resilience Handler Timeouts**: `Microsoft.Extensions.Http.Resilience`'s `AddStandardResilienceHandler()` defaults to a **10-second** per-attempt timeout, which will prematurely cancel Gemini 2.5 / 3 thinking requests. Explicitly increase `AttemptTimeout`, `TotalRequestTimeout`, and `CircuitBreaker.SamplingDuration` (see [`docs/USAGE.md`](docs/USAGE.md#2-dependency-injection-ihttpclientfactory--resilience)).
 - **Caller-Supplied `HttpClient`**: Passing a custom `HttpClient` to `new GeminiClient(options, httpClient)` does not overwrite `httpClient.Timeout` or handler redirect settings. Ensure `SocketsHttpHandler.AllowAutoRedirect = false` is set on custom handlers to prevent credential headers from leaking on redirects (`services.AddGeminiClient()` configures this automatically).
 - **API Scope & Vertex AI Compatibility**:
-  - **In Scope**: Stateless generation, streaming, and embeddings (`:generateContent`, `:streamGenerateContent` via SSE or JSON array, `:embedContent`, `:batchEmbedContents`, `tunedModels/{id}`, consuming `fileData.fileUri` and `cachedContent`).
+  - **In Scope**: Stateless generation, streaming, and embeddings (`:generateContent`, `:streamGenerateContent` via SSE, `:embedContent`, `:batchEmbedContents`, `tunedModels/{id}`, consuming `fileData.fileUri` and `cachedContent`).
   - **Out of Scope**: Stateful/management endpoints (`files` upload, `cachedContents` CRUD, `batches`, `countTokens`, and WebSocket `BidiGenerateContent` Live API).
   - **Vertex AI-Only Fields**: `GenerateContentRequest.Labels` and `GenerationConfig.AudioTimestamp` are supported for Vertex AI gateways (`aiplatform.googleapis.com`) and are rejected with HTTP 400 by Google AI Studio (`generativelanguage.googleapis.com`). See [`docs/API_COMPATIBILITY.md`](docs/API_COMPATIBILITY.md) for the full field matrix.
 

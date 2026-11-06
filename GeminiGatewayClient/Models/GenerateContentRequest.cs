@@ -103,53 +103,6 @@ public sealed class GenerateContentRequest
     }
 
     /// <summary>
-    /// Creates a copy of this request that uses <paramref name="contents"/> as its conversation turns
-    /// with isolated top-level collection and configuration containers. Null elements are kept so <see cref="Validate"/>
-    /// reports them instead of a clone silently hiding them.
-    /// </summary>
-    internal GenerateContentRequest CloneWithContents(IList<Content> contents)
-    {
-        var clone = (GenerateContentRequest)MemberwiseClone();
-        clone.Contents = contents;
-        clone.SystemInstruction = SystemInstruction?.Clone();
-        clone.GenerationConfig = GenerationConfig?.Clone();
-        clone.ToolConfig = ToolConfig?.Clone();
-        if (Tools is not null)
-        {
-            var clonedTools = new List<Tool>(Tools.Count);
-            for (var i = 0; i < Tools.Count; i++)
-            {
-                clonedTools.Add(Tools[i]?.Clone()!);
-            }
-
-            clone.Tools = clonedTools;
-        }
-
-        if (SafetySettings is not null)
-        {
-            var clonedSettings = new List<SafetySetting>(SafetySettings.Count);
-            for (var i = 0; i < SafetySettings.Count; i++)
-            {
-                clonedSettings.Add(SafetySettings[i]?.Clone()!);
-            }
-
-            clone.SafetySettings = clonedSettings;
-        }
-
-        if (Labels is not null)
-        {
-            clone.Labels = new Dictionary<string, string>(Labels, StringComparer.Ordinal);
-        }
-
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
-
-    /// <summary>
     /// Validates client-side invariants that the API would otherwise reject with HTTP 400.
     /// </summary>
     /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>

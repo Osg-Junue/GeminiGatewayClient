@@ -30,9 +30,6 @@ public static class GeminiClientExtensions
         /// returned an empty or invalid value.
         /// </exception>
         /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
-        /// <exception cref="TimeoutException">
-        /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
-        /// </exception>
         /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
         /// <exception cref="OperationCanceledException">
         /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
@@ -104,9 +101,6 @@ public static class GeminiClientExtensions
         /// returned an empty or invalid value.
         /// </exception>
         /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
-        /// <exception cref="TimeoutException">
-        /// No response body bytes were received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
-        /// </exception>
         /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
         /// <exception cref="OperationCanceledException">
         /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
@@ -133,8 +127,8 @@ public static class GeminiClientExtensions
         /// <param name="defaultModelId">The model used when <see cref="ChatOptions.ModelId"/> is not set; defaults to <see cref="IGeminiClient.DefaultModel"/>.</param>
         /// <param name="toolSerializerOptions">
         /// Serializer options for function arguments and results of custom types. In NativeAOT applications, supply options backed by
-        /// your <c>JsonSerializerContext</c>. Defaults to <see cref="GeminiClientOptions.ToolSerializerOptions"/> (when <paramref name="client"/>
-        /// is a <see cref="GeminiClient"/>) or <see cref="AIJsonUtilities.DefaultOptions"/>.
+        /// your <c>JsonSerializerContext</c>. Defaults to <see cref="IGeminiClient.ToolSerializerOptions"/>,
+        /// then <see cref="AIJsonUtilities.DefaultOptions"/>.
         /// </param>
         /// <returns>An <see cref="IChatClient"/> backed by <paramref name="client"/>.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
@@ -176,70 +170,14 @@ public static class GeminiClientExtensions
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        if (response.Candidates is [{ Content: { Parts: { Count: > 0 } parts } candidateContent }, ..])
-        {
-            var meaningfulCount = 0;
-            var needsNormalization = false;
-            for (var i = 0; i < parts.Count; i++)
-            {
-                if (parts[i] is not { } part || IsPureEmptyTextPart(part))
-                {
-                    needsNormalization = true;
-                    continue;
-                }
-
-                meaningfulCount++;
-                if (string.IsNullOrEmpty(part.Text) && HasNonTextPrimaryDataField(part))
-                {
-                    needsNormalization = true;
-                }
-            }
-
-            if (meaningfulCount > 0)
-            {
-                if (!needsNormalization)
-                {
-                    content = candidateContent;
-                    return true;
-                }
-
-                var normalizedParts = new List<Part>(meaningfulCount);
-                for (var i = 0; i < parts.Count; i++)
-                {
-                    if (parts[i] is not { } part || IsPureEmptyTextPart(part))
-                    {
-                        continue;
-                    }
-
-                    var clonedPart = part.Clone();
-                    if (string.IsNullOrEmpty(clonedPart.Text) && HasNonTextPrimaryDataField(clonedPart))
-                    {
-                        clonedPart.Text = null;
-                    }
-
-                    normalizedParts.Add(clonedPart);
-                }
-
-                content = new Content
-                {
-                    Role = candidateContent.Role,
-                    Parts = normalizedParts,
-                    ExtensionData = candidateContent.ExtensionData is not null
-                        ? new Dictionary<string, JsonElement>(candidateContent.ExtensionData, StringComparer.Ordinal)
-                        : null
-                };
-                return true;
-            }
-        }
-
-        content = null;
-        return false;
+        content = ToModelContent([response]);
+        return content is not null;
     }
 
     /// <summary>
-    /// Aggregates a sequence of streamed <see cref="GenerateContentResponse"/> chunks into a single model <see cref="Content"/>
-    /// suitable for multi-turn conversation history, coalescing consecutive thought parts, consecutive text parts, and
-    /// trailing <c>thoughtSignature</c> parts while omitting empty placeholder chunks.
+    /// Collects the parts of streamed <see cref="GenerateContentResponse"/> chunks into a single model <see cref="Content"/>
+    /// suitable for multi-turn conversation history, omitting empty placeholder parts. Parts keep their boundaries
+    /// because Gemini forbids merging a part that carries a <c>thoughtSignature</c> with another part.
     /// </summary>
     /// <param name="chunks">The streamed response chunks.</param>
     /// <returns>
@@ -251,46 +189,16 @@ public static class GeminiClientExtensions
     {
         ArgumentNullException.ThrowIfNull(chunks);
 
-        var aggregatedParts = new List<Part>();
-        var role = Role.Model;
-        StringBuilder? textBuilder = null;
-        Part? activeBuilderPart = null;
+        var parts = chunks
+            .SelectMany(chunk => chunk?.Candidates is [{ Content: { } content }, ..] ? content.Parts : [])
+            .Where(part => part is { IsEmptyText: false })
+            .ToList();
 
-        foreach (var chunk in chunks)
-        {
-            if (chunk?.Candidates is not [{ Content: { } content }, ..])
-            {
-                continue;
-            }
-
-            if (content.Role is { } contentRole)
-            {
-                role = contentRole;
-            }
-
-            if (content.Parts is not { Count: > 0 } parts)
-            {
-                continue;
-            }
-
-            for (var i = 0; i < parts.Count; i++)
-            {
-                if (parts[i] is { } part)
-                {
-                    AppendAggregatedPart(aggregatedParts, part, ref activeBuilderPart, ref textBuilder);
-                }
-            }
-        }
-
-        FlushTextBuilder(ref activeBuilderPart, textBuilder);
-
-        return aggregatedParts.Count > 0
-            ? new Content { Role = role, Parts = aggregatedParts }
-            : null;
+        return parts.Count > 0 ? new Content { Role = Role.Model, Parts = parts } : null;
     }
 
     /// <summary>
-    /// Asynchronously consumes a stream of <see cref="GenerateContentResponse"/> chunks and aggregates them into a single
+    /// Asynchronously consumes a stream of <see cref="GenerateContentResponse"/> chunks and collects them into a single
     /// model <see cref="Content"/> suitable for multi-turn conversation history.
     /// </summary>
     /// <param name="chunks">The async stream of response chunks.</param>
@@ -306,169 +214,12 @@ public static class GeminiClientExtensions
     {
         ArgumentNullException.ThrowIfNull(chunks);
 
-        var aggregatedParts = new List<Part>();
-        var role = Role.Model;
-        StringBuilder? textBuilder = null;
-        Part? activeBuilderPart = null;
-
+        var received = new List<GenerateContentResponse>();
         await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (chunk?.Candidates is not [{ Content: { } content }, ..])
-            {
-                continue;
-            }
-
-            if (content.Role is { } contentRole)
-            {
-                role = contentRole;
-            }
-
-            if (content.Parts is not { Count: > 0 } parts)
-            {
-                continue;
-            }
-
-            for (var i = 0; i < parts.Count; i++)
-            {
-                if (parts[i] is { } part)
-                {
-                    AppendAggregatedPart(aggregatedParts, part, ref activeBuilderPart, ref textBuilder);
-                }
-            }
+            received.Add(chunk);
         }
 
-        FlushTextBuilder(ref activeBuilderPart, textBuilder);
-
-        return aggregatedParts.Count > 0
-            ? new Content { Role = role, Parts = aggregatedParts }
-            : null;
+        return received.ToModelContent();
     }
-
-    private static void AppendAggregatedPart(
-        List<Part> aggregatedParts,
-        Part part,
-        ref Part? activeBuilderPart,
-        ref StringBuilder? textBuilder)
-    {
-        if (IsPureEmptyTextPart(part))
-        {
-            return;
-        }
-
-        var isTextOnly = part.InlineData is null &&
-                         part.FileData is null &&
-                         part.FunctionCall is null &&
-                         part.FunctionResponse is null &&
-                         part.ExecutableCode is null &&
-                         part.CodeExecutionResult is null &&
-                         part.VideoMetadata is null &&
-                         (part.ExtensionData is null || part.ExtensionData.Count == 0);
-
-        if (isTextOnly)
-        {
-            // Signature-only carrier chunk (e.g., {"text": "", "thoughtSignature": "..."} or {"thoughtSignature": "..."})
-            if (string.IsNullOrEmpty(part.Text) && !string.IsNullOrEmpty(part.ThoughtSignature))
-            {
-                if (aggregatedParts.Count > 0)
-                {
-                    var last = aggregatedParts[^1];
-                    if (string.IsNullOrEmpty(last.ThoughtSignature))
-                    {
-                        FlushTextBuilder(ref activeBuilderPart, textBuilder);
-                        last.ThoughtSignature = part.ThoughtSignature;
-                        return;
-                    }
-
-                    if (string.Equals(last.ThoughtSignature, part.ThoughtSignature, StringComparison.Ordinal))
-                    {
-                        return;
-                    }
-                }
-
-                FlushTextBuilder(ref activeBuilderPart, textBuilder);
-                aggregatedParts.Add(new Part { ThoughtSignature = part.ThoughtSignature });
-                return;
-            }
-
-            // Thought text chunk or normal text chunk: coalesce consecutive chunks of the same kind
-            // only while the preceding part has not yet been closed with a thoughtSignature.
-            if (!string.IsNullOrEmpty(part.Text) && aggregatedParts.Count > 0)
-            {
-                var last = aggregatedParts[^1];
-                var lastIsSameTextKind =
-                    last.Text is not null &&
-                    (last.Thought == true) == (part.Thought == true) &&
-                    last.InlineData is null &&
-                    last.FileData is null &&
-                    last.FunctionCall is null &&
-                    last.FunctionResponse is null &&
-                    last.ExecutableCode is null &&
-                    last.CodeExecutionResult is null &&
-                    last.VideoMetadata is null &&
-                    (last.ExtensionData is null || last.ExtensionData.Count == 0) &&
-                    string.IsNullOrEmpty(last.ThoughtSignature);
-
-                if (lastIsSameTextKind)
-                {
-                    if (!ReferenceEquals(activeBuilderPart, last))
-                    {
-                        FlushTextBuilder(ref activeBuilderPart, textBuilder);
-                        textBuilder ??= new StringBuilder(Math.Max(64, last.Text!.Length + part.Text.Length));
-                        textBuilder.Clear();
-                        textBuilder.Append(last.Text);
-                        activeBuilderPart = last;
-                    }
-
-                    textBuilder!.Append(part.Text);
-                    if (!string.IsNullOrEmpty(part.ThoughtSignature))
-                    {
-                        last.ThoughtSignature = part.ThoughtSignature;
-                        FlushTextBuilder(ref activeBuilderPart, textBuilder);
-                    }
-
-                    return;
-                }
-            }
-        }
-
-        FlushTextBuilder(ref activeBuilderPart, textBuilder);
-
-        var cloned = part.Clone();
-        if (string.IsNullOrEmpty(cloned.Text) && HasNonTextPrimaryDataField(cloned))
-        {
-            cloned.Text = null;
-        }
-
-        aggregatedParts.Add(cloned);
-    }
-
-    private static void FlushTextBuilder(ref Part? activeBuilderPart, StringBuilder? textBuilder)
-    {
-        if (activeBuilderPart is not null && textBuilder is not null)
-        {
-            activeBuilderPart.Text = textBuilder.ToString();
-            activeBuilderPart = null;
-            textBuilder.Clear();
-        }
-    }
-
-    private static bool HasNonTextPrimaryDataField(Part part) =>
-        part.InlineData is not null ||
-        part.FileData is not null ||
-        part.FunctionCall is not null ||
-        part.FunctionResponse is not null ||
-        part.ExecutableCode is not null ||
-        part.CodeExecutionResult is not null;
-
-    private static bool IsPureEmptyTextPart(Part part) =>
-        string.IsNullOrEmpty(part.Text) &&
-        string.IsNullOrEmpty(part.ThoughtSignature) &&
-        part.InlineData is null &&
-        part.FileData is null &&
-        part.FunctionCall is null &&
-        part.FunctionResponse is null &&
-        part.ExecutableCode is null &&
-        part.CodeExecutionResult is null &&
-        part.VideoMetadata is null &&
-        (part.ExtensionData is null || part.ExtensionData.Count == 0);
 }

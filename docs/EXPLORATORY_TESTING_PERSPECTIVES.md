@@ -430,7 +430,7 @@ Gemini は、ヘイトスピーチ、ハラスメント、危険なコンテン�
 | 9 | MEAI | 構造化出力 (`ChatResponseFormat.ForJsonSchema`) | `IChatClient` | ✅ 網羅 | ❌ ネイティブのみで MEAI 未検証 | **Missing** | **GAP-MEAI-07** |
 | 10 | MEAI | マルチモーダル入力 (`DataContent`) | `IChatClient` | ✅ 網羅 | ❌ ネイティブのみで MEAI 未検証 | **Missing** | **GAP-MEAI-08** |
 | 11 | Native | テキスト生成 & 基本パラメータ | `IGeminiClient` | ✅ 網羅 | ✅ 検証済 (`BasicGenerationExploratoryTests`) | Covered | - |
-| 12 | Native | SSE / JsonArray ストリーミング | `IGeminiClient` | ✅ 網羅 | ✅ 両フォーマット検証済 | Covered | - |
+| 12 | Native | SSE ストリーミング | `IGeminiClient` | ✅ 網羅 | ✅ 検証済 | Covered | - |
 | 13 | Native | ThinkingConfig (推論制御) | `IGeminiClient` | ✅ 網羅 | ✅ トークン消費・トランケーション検証済 | Covered | - |
 | 14 | Native | インライン画像マルチモーダル (PNG) | `IGeminiClient` | ✅ 網羅 | ✅ 32x32 PNG 検証済 | Covered | - |
 | 15 | Native | **音声マルチモーダル (PCM WAV)** | `IGeminiClient` | ✅ 網羅 | ❌ 音声実 API 未検証 | **Missing** | **GAP-NAT-01** |

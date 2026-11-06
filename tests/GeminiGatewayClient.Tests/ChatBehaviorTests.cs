@@ -83,7 +83,7 @@ public class ChatBehaviorTests
     [Fact]
     public async Task ResultWhoseSynthesizedCallWasTrimmed_KeepsTheFunctionName()
     {
-        var callId = $"get_weather_call_0_{Guid.NewGuid():N}";
+        var callId = $"get_weather_call_{Guid.NewGuid():N}";
 
         var parts = await SentParts([new ChatMessage(ChatRole.Tool, [new FunctionResultContent(callId, "sunny")])], contentIndex: 0);
 

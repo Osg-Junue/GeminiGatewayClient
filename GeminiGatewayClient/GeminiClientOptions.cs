@@ -39,6 +39,8 @@ public sealed class GeminiClientOptions
     /// </summary>
     public static TimeSpan DefaultStreamIdleTimeout { get; } = TimeSpan.FromMinutes(2);
 
+    private static TimeSpan MaxStreamIdleTimeout { get; } = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     /// <summary>
     /// Base URI that model resources are resolved against. Requests are sent to
     /// <c>{Endpoint}/models/{model}:generateContent</c> (or <c>:streamGenerateContent</c>, <c>:embedContent</c>, <c>:batchEmbedContents</c>); query strings are preserved.
@@ -114,8 +116,9 @@ public sealed class GeminiClientOptions
     } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Time allowed until response headers arrive. Applied to the <see cref="HttpClient"/> created internally and to clients
-    /// created by <c>AddGeminiClient</c>; ignored when you pass your own <see cref="HttpClient"/>.
+    /// Time allowed for a complete response, or for the response headers of a streaming call. Applied to the
+    /// <see cref="HttpClient"/> created internally and to clients created by <c>AddGeminiClient</c>; ignored when you pass
+    /// your own <see cref="HttpClient"/>.
     /// Must be positive or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>. Defaults to <see cref="DefaultTimeout"/>.
     /// </summary>
     public TimeSpan Timeout
@@ -134,7 +137,7 @@ public sealed class GeminiClientOptions
     public TimeSpan? StreamIdleTimeout
     {
         get;
-        set => field = value is null || value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan
+        set => field = value is null || (value > TimeSpan.Zero && value <= MaxStreamIdleTimeout) || value == System.Threading.Timeout.InfiniteTimeSpan
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamIdleTimeout must be positive or Timeout.InfiniteTimeSpan.");
     } = DefaultStreamIdleTimeout;
@@ -144,18 +147,6 @@ public sealed class GeminiClientOptions
     /// to prevent accidentally transmitting credentials in cleartext. Set to <c>true</c> to allow plain HTTP to non-loopback hosts.
     /// </summary>
     public bool AllowInsecureHttp { get; set; }
-
-    /// <summary>
-    /// Wire format used by <c>:streamGenerateContent</c>.
-    /// Defaults to <see cref="GeminiStreamingFormat.ServerSentEvents"/> (<c>?alt=sse</c>), matching the official Gemini SDKs.
-    /// </summary>
-    public GeminiStreamingFormat StreamingFormat
-    {
-        get;
-        set => field = Enum.IsDefined(value)
-            ? value
-            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamingFormat is not a defined value.");
-    } = GeminiStreamingFormat.ServerSentEvents;
 
     /// <summary>
     /// Optional <see cref="JsonSerializerOptions"/> used by the <c>IChatClient</c> adapter when serializing custom
@@ -194,125 +185,20 @@ public sealed class GeminiClientOptions
         builder.Append(", Timeout = ").Append(Timeout);
         builder.Append(", StreamIdleTimeout = ").Append(StreamIdleTimeout?.ToString() ?? "<none>");
         builder.Append(", AllowInsecureHttp = ").Append(AllowInsecureHttp);
-        builder.Append(", StreamingFormat = ").Append(StreamingFormat);
         return builder.Append(" }").ToString();
     }
 
+    /// <summary>
+    /// Gateways often carry keys in the query string or user info, so only the scheme, host, and path are shown.
+    /// </summary>
     private static string FormatEndpoint(Uri endpoint)
     {
-        var raw = endpoint.ToString();
-        var hasUserInfo = endpoint.IsAbsoluteUri && !string.IsNullOrEmpty(endpoint.UserInfo);
-        var fragmentIndex = raw.IndexOf('#', StringComparison.Ordinal);
-        var searchEnd = fragmentIndex >= 0 ? fragmentIndex : raw.Length;
-        var queryIndex = raw.AsSpan(0, searchEnd).IndexOf('?');
-
-        if (!hasUserInfo && queryIndex < 0 && fragmentIndex < 0)
+        if (!endpoint.IsAbsoluteUri)
         {
-            return raw;
+            return "<relative>";
         }
 
-        var pathEnd = queryIndex >= 0 ? queryIndex : searchEnd;
-        var sb = new StringBuilder(raw.Length);
-
-        var prefixStart = 0;
-        if (hasUserInfo)
-        {
-            var schemeEnd = raw.IndexOf("://", StringComparison.Ordinal);
-            if (schemeEnd >= 0)
-            {
-                var atIndex = raw.IndexOf('@', schemeEnd + 3);
-                if (atIndex > schemeEnd + 3 && atIndex < pathEnd)
-                {
-                    sb.Append(raw.AsSpan(0, schemeEnd + 3)).Append("***@");
-                    prefixStart = atIndex + 1;
-                }
-            }
-        }
-
-        sb.Append(raw.AsSpan(prefixStart, pathEnd - prefixStart));
-
-        if (queryIndex >= 0)
-        {
-            sb.Append('?');
-            var querySpan = raw.AsSpan(queryIndex + 1, searchEnd - (queryIndex + 1));
-            var first = true;
-            var remaining = querySpan;
-            while (!remaining.IsEmpty)
-            {
-                var ampIndex = remaining.IndexOf('&');
-                ReadOnlySpan<char> pair;
-                if (ampIndex >= 0)
-                {
-                    pair = remaining[..ampIndex];
-                    remaining = remaining[(ampIndex + 1)..];
-                }
-                else
-                {
-                    pair = remaining;
-                    remaining = ReadOnlySpan<char>.Empty;
-                }
-
-                if (!first)
-                {
-                    sb.Append('&');
-                }
-
-                first = false;
-
-                var eqIndex = pair.IndexOf('=');
-                if (eqIndex > 0)
-                {
-                    var paramName = pair[..eqIndex];
-                    sb.Append(paramName).Append('=');
-                    if (IsSensitiveQueryParam(paramName))
-                    {
-                        sb.Append("***");
-                    }
-                    else
-                    {
-                        sb.Append(pair[(eqIndex + 1)..]);
-                    }
-                }
-                else
-                {
-                    sb.Append(pair);
-                }
-            }
-        }
-
-        if (fragmentIndex >= 0)
-        {
-            sb.Append("#***");
-        }
-
-        return sb.ToString();
+        var address = endpoint.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped);
+        return endpoint.Query.Length > 0 ? address + "?***" : address;
     }
-
-    private static bool IsSensitiveQueryParam(ReadOnlySpan<char> name) =>
-        name.Contains("key", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("token", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("sig", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("auth", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("pass", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("pwd", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("cred", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("code", StringComparison.OrdinalIgnoreCase);
-}
-
-/// <summary>
-/// Wire format requested from the Gemini <c>:streamGenerateContent</c> endpoint.
-/// </summary>
-public enum GeminiStreamingFormat
-{
-    /// <summary>
-    /// Server-Sent Events (<c>?alt=sse</c>) where each chunk is emitted as a <c>data: {json}</c> line.
-    /// Recommended for API gateways and reverse proxies because events flush immediately without array buffering.
-    /// </summary>
-    ServerSentEvents,
-
-    /// <summary>
-    /// Chunked JSON array (<c>[{...}, {...}]</c>) without <c>alt=sse</c>.
-    /// </summary>
-    JsonArray
 }

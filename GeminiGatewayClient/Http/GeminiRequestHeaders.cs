@@ -1,5 +1,3 @@
-using System.Buffers;
-
 namespace GeminiGatewayClient.Http;
 
 /// <summary>
@@ -17,12 +15,12 @@ internal sealed class GeminiRequestHeaders
         KeyValuePair<string, string>[] staticHeaders,
         string apiKeyHeader,
         string? apiKeyPrefix,
-        Func<CancellationToken, ValueTask<string>>? _apiKeyProvider)
+        Func<CancellationToken, ValueTask<string>>? apiKeyProvider)
     {
         _staticHeaders = staticHeaders;
         _apiKeyHeader = apiKeyHeader;
         _apiKeyPrefix = apiKeyPrefix;
-        this._apiKeyProvider = _apiKeyProvider;
+        _apiKeyProvider = apiKeyProvider;
     }
 
     /// <summary>
@@ -49,9 +47,8 @@ internal sealed class GeminiRequestHeaders
                 nameof(GeminiClientOptions.ApiKeyProvider));
         }
 
-        var additionalCount = options.AdditionalHeaders?.Count ?? 0;
-        var headers = new List<KeyValuePair<string, string>>((hasStaticKey ? 1 : 0) + additionalCount);
-        var seenNames = new HashSet<string>((hasStaticKey || hasDynamicKeyProvider ? 1 : 0) + additionalCount, StringComparer.OrdinalIgnoreCase);
+        var headers = new List<KeyValuePair<string, string>>();
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using var probe = new HttpRequestMessage();
 
         if (hasStaticKey)
@@ -94,22 +91,22 @@ internal sealed class GeminiRequestHeaders
     /// Adds all headers to <paramref name="message"/>, resolving the API key from the provider when one is configured.
     /// </summary>
     /// <exception cref="InvalidOperationException">The API key provider returned an empty or invalid value.</exception>
-    public ValueTask ApplyAsync(HttpRequestMessage message, CancellationToken cancellationToken)
+    public async ValueTask ApplyAsync(HttpRequestMessage message, CancellationToken cancellationToken)
     {
         foreach (var (name, value) in _staticHeaders)
         {
             message.Headers.TryAddWithoutValidation(name, value);
         }
 
-        return _apiKeyProvider is null ? ValueTask.CompletedTask : ApplyDynamicKeyAsync(message, cancellationToken);
-    }
-
-    private async ValueTask ApplyDynamicKeyAsync(HttpRequestMessage message, CancellationToken cancellationToken)
-    {
-        var key = await _apiKeyProvider!(cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(key) || ContainsInvalidControlChars(key, allowHorizontalTab: true))
+        if (_apiKeyProvider is null)
         {
-            throw new InvalidOperationException("GeminiClientOptions.ApiKeyProvider returned an empty, whitespace-only, or control/newline-containing value.");
+            return;
+        }
+
+        var key = await _apiKeyProvider(cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(key) || IsInvalidHeaderText(key, allowHorizontalTab: true))
+        {
+            throw new InvalidOperationException("GeminiClientOptions.ApiKeyProvider returned an empty, whitespace-only, or non-ASCII value.");
         }
 
         if (!message.Headers.TryAddWithoutValidation(_apiKeyHeader, $"{_apiKeyPrefix}{key}"))
@@ -120,9 +117,9 @@ internal sealed class GeminiRequestHeaders
 
     private static void Validate(HttpRequestMessage probe, string name, string value, string paramName)
     {
-        if (ContainsInvalidControlChars(name, allowHorizontalTab: false) || ContainsInvalidControlChars(value, allowHorizontalTab: true))
+        if (IsInvalidHeaderText(name, allowHorizontalTab: false) || IsInvalidHeaderText(value, allowHorizontalTab: true))
         {
-            throw new ArgumentException($"Header '{name}' contains invalid newline or control characters.", paramName);
+            throw new ArgumentException($"Header '{name}' must contain only printable ASCII characters.", paramName);
         }
 
         if (!probe.Headers.TryAddWithoutValidation(name, value))
@@ -133,12 +130,9 @@ internal sealed class GeminiRequestHeaders
         }
     }
 
-    private static readonly SearchValues<char> s_invalidControlCharsWithoutTab =
-        SearchValues.Create(Enumerable.Range(0, 32).Append(127).Select(c => (char)c).ToArray());
-
-    private static readonly SearchValues<char> s_invalidControlCharsWithTab =
-        SearchValues.Create(Enumerable.Range(0, 32).Where(c => c != '\t').Append(127).Select(c => (char)c).ToArray());
-
-    private static bool ContainsInvalidControlChars(string value, bool allowHorizontalTab) =>
-        value.AsSpan().ContainsAny(allowHorizontalTab ? s_invalidControlCharsWithTab : s_invalidControlCharsWithoutTab);
+    /// <summary>
+    /// HTTP header text must be printable ASCII; anything else would only fail later, on the first request.
+    /// </summary>
+    private static bool IsInvalidHeaderText(string value, bool allowHorizontalTab) =>
+        value.Any(c => c is < ' ' or > '~' && !(allowHorizontalTab && c == '\t'));
 }

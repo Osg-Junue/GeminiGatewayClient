@@ -78,15 +78,12 @@ public sealed class EmbedContentRequest
         };
     }
 
-    internal EmbedContentRequest Clone(string? modelOverride = null, bool clearModel = false) => new()
+    internal EmbedContentRequest WithModel(string model)
     {
-        Model = clearModel ? null : modelOverride ?? Model,
-        Content = Content.Clone(),
-        TaskType = TaskType,
-        Title = Title,
-        OutputDimensionality = OutputDimensionality,
-        ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
-    };
+        var copy = (EmbedContentRequest)MemberwiseClone();
+        copy.Model = model;
+        return copy;
+    }
 
     internal void Validate(string paramName = "request", int? batchIndex = null)
     {

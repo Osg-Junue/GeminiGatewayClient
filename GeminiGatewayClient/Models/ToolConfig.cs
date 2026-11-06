@@ -22,18 +22,6 @@ public sealed class ToolConfig
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
-    internal ToolConfig Clone()
-    {
-        var clone = (ToolConfig)MemberwiseClone();
-        clone.FunctionCallingConfig = FunctionCallingConfig?.Clone();
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
-
     internal void Validate(string paramName = "request")
     {
         if (FunctionCallingConfig is { } fcc && (fcc.Mode == FunctionCallingMode.Unknown || !Enum.IsDefined(fcc.Mode)))

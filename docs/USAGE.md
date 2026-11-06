@@ -142,9 +142,9 @@ Console.WriteLine(response.Text);
 Console.WriteLine($"Tokens: prompt={response.UsageMetadata?.PromptTokenCount}, total={response.UsageMetadata?.TotalTokenCount}");
 ```
 
-### Real-Time Streaming (`ServerSentEvents` & `JsonArray`)
+### Real-Time Streaming
 
-By default, `StreamGenerateContentAsync` uses Server-Sent Events (`?alt=sse`), which flushes chunks immediately through proxies. If your gateway requires the legacy JSON array stream format, set `options.StreamingFormat = GeminiStreamingFormat.JsonArray`.
+`StreamGenerateContentAsync` uses Server-Sent Events (`?alt=sse`), which flushes chunks immediately through proxies.
 
 ```csharp
 var chunks = new List<GenerateContentResponse>();
@@ -157,8 +157,8 @@ await foreach (var chunk in client.StreamGenerateContentAsync(
     Console.Write(chunk.Text);
 }
 
-// Aggregate streamed chunks (coalescing thought parts, text parts, and trailing thoughtSignature)
-// into a single Content item for multi-turn conversation history:
+// Collect the streamed parts into a single Content item for multi-turn conversation history.
+// Parts keep their boundaries because Gemini forbids merging a part that carries a thoughtSignature.
 if (chunks.ToModelContent() is { } assistantContent)
 {
     history.Add(assistantContent);
@@ -456,7 +456,9 @@ while (true)
 
 ### Google Search Grounding & Citation Spans via `IChatClient`
 
-Pass `new HostedWebSearchTool()` in `ChatOptions.Tools` to enable Google Search grounding. `GeminiChatClient` maps `Candidate.GroundingMetadata` and `CitationMetadata` onto `TextContent.Annotations` (`CitationAnnotation` with UTF-16 `TextSpanAnnotatedRegion` offsets) and exposes executed search queries under `response.AdditionalProperties[GeminiChatPropertyNames.WebSearchQueries]`:
+Citations sit on the `TextContent` when a response has a single text. Otherwise, and always when streaming, they arrive on an annotation-only `AIContent` in the update of the chunk that carried them. Regions then count from the start of the full response text.
+
+Pass `new HostedWebSearchTool()` in `ChatOptions.Tools` to enable Google Search grounding. `GeminiChatClient` maps `Candidate.GroundingMetadata` and `CitationMetadata` onto `AIContent.Annotations` (`CitationAnnotation` with UTF-16 `TextSpanAnnotatedRegion` offsets) and exposes executed search queries under `response.AdditionalProperties[GeminiChatPropertyNames.WebSearchQueries]`:
 
 ```csharp
 using GeminiGatewayClient;
@@ -480,16 +482,13 @@ if (response.AdditionalProperties?.TryGetValue(GeminiChatPropertyNames.WebSearch
     Console.WriteLine($"Search queries: {string.Join(", ", queries)}");
 }
 
-foreach (var textContent in response.Messages.SelectMany(m => m.Contents).OfType<TextContent>())
+var text = response.Text;
+foreach (var citation in response.Messages.SelectMany(m => m.Contents).SelectMany(c => c.Annotations ?? []).OfType<CitationAnnotation>())
 {
-    foreach (var citation in (textContent.Annotations ?? []).OfType<CitationAnnotation>())
+    Console.WriteLine($"Source: {citation.Title} ({citation.Url})");
+    foreach (var region in (citation.AnnotatedRegions ?? []).OfType<TextSpanAnnotatedRegion>())
     {
-        Console.WriteLine($"Source: {citation.Title} ({citation.Url})");
-        foreach (var region in (citation.AnnotatedRegions ?? []).OfType<TextSpanAnnotatedRegion>())
-        {
-            var spanText = textContent.Text[region.StartIndex!.Value..region.EndIndex!.Value];
-            Console.WriteLine($"  [{region.StartIndex}..{region.EndIndex}] \"{spanText}\"");
-        }
+        Console.WriteLine($"  [{region.StartIndex}..{region.EndIndex}] \"{text[region.StartIndex!.Value..region.EndIndex!.Value]}\"");
     }
 }
 ```
@@ -519,7 +518,7 @@ if (candidate.UrlContextMetadata is { } urlContext)
 
 ### Embeddings (`IEmbeddingGenerator<string, Embedding<float>>` & `GeminiClient`)
 
-Use `client.AsIEmbeddingGenerator()` (or inject `IEmbeddingGenerator<string, Embedding<float>>` from DI). Single-item calls use `:embedContent`; multi-item calls use `:batchEmbedContents`:
+Use `client.AsIEmbeddingGenerator()` (or inject `IEmbeddingGenerator<string, Embedding<float>>` from DI). Every call uses `:batchEmbedContents`, and an `EmbedContentRequest` from `RawRepresentationFactory` supplies the settings shared by all inputs:
 
 ```csharp
 using GeminiGatewayClient;
@@ -529,7 +528,7 @@ using Microsoft.Extensions.AI;
 IEmbeddingGenerator<string, Embedding<float>> generator =
     client.AsIEmbeddingGenerator(defaultModelId: "gemini-embedding-001", defaultModelDimensions: 256);
 
-// Single input -> :embedContent (with optional TaskType/Title via RawRepresentationFactory)
+// Optional TaskType/Title via RawRepresentationFactory
 var queryEmbeddings = await generator.GenerateAsync(
     ["How to stream SSE responses in C#"],
     new EmbeddingGenerationOptions
@@ -541,7 +540,7 @@ var queryEmbeddings = await generator.GenerateAsync(
     });
 ReadOnlyMemory<float> queryVector = queryEmbeddings[0].Vector;
 
-// Multiple inputs -> :batchEmbedContents
+// Several inputs in one request
 var docEmbeddings = await generator.GenerateAsync(
     [
         "Use IAsyncEnumerable<T> and yield return for streaming.",
@@ -566,6 +565,8 @@ Simply serialize and deserialize `ChatMessage.Contents` (including `AdditionalPr
 
 ## 11. Safety Blocks, Timeouts & Error Handling
 
+Settings without a `ChatOptions` counterpart go through `ChatOptions.RawRepresentationFactory`, which must return a new `GenerateContentRequest` on each call because the client modifies it. `ChatOptions.AdditionalProperties` are not read.
+
 ### Exception & Failure Modes Matrix
 
 `GeminiClient` and `GeminiChatClient` distinguish between validation errors, upstream API errors, idle stream stalls, and request cancellation:
@@ -573,10 +574,10 @@ Simply serialize and deserialize `ChatMessage.Contents` (including `AdditionalPr
 | Exception | When It Is Thrown | Key Properties & Recovery Guidance |
 |---|---|---|
 | `GeminiApiException` | • Non-2xx HTTP status from Gemini or the gateway<br>• In-stream `{"error": ...}` payload arriving after an HTTP 200 header<br>• Empty or malformed JSON response body | Inspect `StatusCode`, `ErrorStatus` (e.g., `RESOURCE_EXHAUSTED`, `UNAVAILABLE`), `ErrorCode`, `ErrorMessage`, and `ErrorContent` (up to 64 KB). Retry when `IsTransient == true`, honoring `RetryAfter` when present. |
-| `TimeoutException` | No response body or streaming chunk bytes arrive within `GeminiClientOptions.StreamIdleTimeout` (default: **2 minutes**). | Indicates a stalled stream or hung upstream connection after headers were received. Safe to retry if the operation is idempotent. |
-| `OperationCanceledException` / `TaskCanceledException` | • The caller's `CancellationToken` was canceled (`ex.CancellationToken == ct`)<br>• `HttpClient.Timeout` (`GeminiClientOptions.Timeout`, default: **5 minutes**) elapsed before response headers arrived | Distinguish caller cancellation (`ct.IsCancellationRequested`) from initial header timeout (`!ct.IsCancellationRequested`). Increase `GeminiClientOptions.Timeout` for deep thinking requests. |
-| `HttpRequestException` | Transport-level DNS, socket, or TLS failure, including the connection being lost while reading a successful response body or stream. | Check gateway reachability, TLS certificates, or proxy settings. `HttpRequestError` gives the failure category when known, and `StatusCode` is set when the failure came after the response headers. |
-| `InvalidOperationException` | • Neither per-call `model` nor `GeminiClientOptions.Model` was set<br>• `ApiKeyProvider` returned an empty, whitespace-only, or newline-containing token | Fix client configuration or token provider implementation. |
+| `TimeoutException` | No streaming chunk bytes arrive within `GeminiClientOptions.StreamIdleTimeout` (default: **2 minutes**). | Indicates a stalled stream or hung upstream connection after headers were received. Safe to retry if the operation is idempotent. |
+| `OperationCanceledException` / `TaskCanceledException` | • The caller's `CancellationToken` was canceled (`ex.CancellationToken == ct`)<br>• `HttpClient.Timeout` (`GeminiClientOptions.Timeout`, default: **5 minutes**, covering a complete response or the headers of a stream) elapsed | Distinguish caller cancellation (`ct.IsCancellationRequested`) from initial header timeout (`!ct.IsCancellationRequested`). Increase `GeminiClientOptions.Timeout` for deep thinking requests. |
+| `HttpRequestException` | Transport-level DNS, socket, or TLS failure, including the connection being lost while reading a response body or stream. `StatusCode` is set only for a stream. | Check gateway reachability, TLS certificates, or proxy settings. `HttpRequestError` gives the failure category when known. |
+| `InvalidOperationException` | • Neither per-call `model` nor `GeminiClientOptions.Model` was set<br>• `ApiKeyProvider` returned an empty, whitespace-only, or non-ASCII token | Fix client configuration or token provider implementation. |
 | `ArgumentException` / `ArgumentNullException` | Invalid `GenerateContentRequest` or `GeminiClientOptions` (thrown **eagerly** before network I/O, including when calling `StreamGenerateContentAsync` before enumeration starts). | Fix request parameters (e.g., empty `Contents`, conflicting `ThinkingLevel` and `ThinkingBudget`, or `Unknown` wire enum values). |
 
 ### Handling `GeminiApiException`, `TimeoutException`, and Safety Blocks
@@ -609,13 +610,13 @@ catch (GeminiApiException ex)
 }
 catch (TimeoutException ex)
 {
-    // StreamIdleTimeout elapsed while reading the response or streaming chunks
+    // StreamIdleTimeout elapsed while reading streaming chunks
     Console.Error.WriteLine($"Response stream stalled: {ex.Message}");
 }
 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
 {
-    // HttpClient.Timeout (GeminiClientOptions.Timeout) elapsed before headers arrived
-    Console.Error.WriteLine("Request timed out waiting for response headers.");
+    // HttpClient.Timeout (GeminiClientOptions.Timeout) elapsed
+    Console.Error.WriteLine("Request timed out.");
 }
 ```
 
@@ -644,5 +645,4 @@ When you pass your own `HttpClient` to `new GeminiClient(options, httpClient)`, 
 | `Timeout` | `TimeSpan` | 5 minutes | Request timeout applied to internally created and DI-managed `HttpClient` instances. |
 | `StreamIdleTimeout` | `TimeSpan?` | 2 minutes | Maximum idle time between streaming chunks before throwing `TimeoutException` (`null` or `Timeout.InfiniteTimeSpan` disables). |
 | `AllowInsecureHttp` | `bool` | `false` | Allows plain `http://` for non-loopback hosts when `true` (`http://localhost` is always allowed). |
-| `StreamingFormat` | `GeminiStreamingFormat` | `ServerSentEvents` | Streaming wire format: `ServerSentEvents` (`?alt=sse`) or `JsonArray`. |
 | `ToolSerializerOptions` | `JsonSerializerOptions?` | `null` | Optional `JsonSerializerOptions` (e.g., custom `JsonSerializerContext`) for serializing custom POCO tool results in `IChatClient`. |

@@ -84,16 +84,12 @@ internal sealed class GeminiEndpoint
     /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultModel"/> is set.</exception>
     public Uri GetOperationUri(string? model, string operation, bool serverSentEvents)
     {
-        var resourcePath = ResolveResourcePath(model);
+        var resourcePath = ToResourcePath(string.IsNullOrWhiteSpace(model) ? DefaultModel : model)
+            ?? throw new InvalidOperationException(
+                "No model was specified. Set GeminiClientOptions.Model or pass a model to the call (ChatOptions.ModelId for IChatClient).");
+
         return BuildOperationUri(_baseUri, resourcePath, operation, serverSentEvents);
     }
-
-    /// <summary>
-    /// Builds the URI for an embedding <paramref name="operation"/> on <paramref name="model"/> (or <see cref="DefaultEmbeddingModel"/>).
-    /// </summary>
-    /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultEmbeddingModel"/> is set.</exception>
-    public Uri GetEmbeddingOperationUri(string? model, string operation) =>
-        GetEmbeddingOperationUri(model, operation, out _);
 
     /// <summary>
     /// Builds the URI for an embedding <paramref name="operation"/> on <paramref name="model"/> (or <see cref="DefaultEmbeddingModel"/>)
@@ -102,85 +98,32 @@ internal sealed class GeminiEndpoint
     /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultEmbeddingModel"/> is set.</exception>
     public Uri GetEmbeddingOperationUri(string? model, string operation, out string resourcePath)
     {
-        resourcePath = ResolveEmbeddingResourcePath(model);
+        resourcePath = ToResourcePath(string.IsNullOrWhiteSpace(model) ? DefaultEmbeddingModel : model)
+            ?? throw new InvalidOperationException(
+                "No embedding model was specified. Set GeminiClientOptions.EmbeddingModel (or GeminiClientOptions.Model) or pass a model to the call (EmbeddingGenerationOptions.ModelId for IEmbeddingGenerator).");
+
         return BuildOperationUri(_baseUri, resourcePath, operation, serverSentEvents: false);
     }
 
-    /// <summary>
-    /// Resolves <paramref name="model"/> (or <see cref="DefaultModel"/>) to its canonical resource path (<c>models/{id}</c>).
-    /// </summary>
-    /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultModel"/> is set.</exception>
-    public string ResolveResourcePath(string? model)
-    {
-        return ToResourcePath(string.IsNullOrWhiteSpace(model) ? DefaultModel : model)
-            ?? throw new InvalidOperationException(
-                "No model was specified. Set GeminiClientOptions.Model or pass a model to the call (ChatOptions.ModelId for IChatClient, EmbeddingGenerationOptions.ModelId for IEmbeddingGenerator).");
-    }
-
-    /// <summary>
-    /// Resolves an embedding <paramref name="model"/> (or <see cref="DefaultEmbeddingModel"/>) to its canonical resource path (<c>models/{id}</c>).
-    /// </summary>
-    /// <exception cref="InvalidOperationException">Neither <paramref name="model"/> nor <see cref="DefaultEmbeddingModel"/> is set.</exception>
-    public string ResolveEmbeddingResourcePath(string? model)
-    {
-        return ToResourcePath(string.IsNullOrWhiteSpace(model) ? DefaultEmbeddingModel : model)
-            ?? throw new InvalidOperationException(
-                "No embedding model was specified. Set GeminiClientOptions.EmbeddingModel (or GeminiClientOptions.Model) or pass a model to the call (EmbeddingGenerationOptions.ModelId for IEmbeddingGenerator).");
-    }
-
-    private static bool HasOperationSuffix(string absolutePath)
-    {
-        var span = absolutePath.AsSpan().TrimEnd('/');
-        var lastSlash = span.LastIndexOf('/');
-        var lastSegment = lastSlash >= 0 ? span[(lastSlash + 1)..] : span;
-        return lastSegment.Contains(':');
-    }
+    private static bool HasOperationSuffix(string absolutePath) =>
+        absolutePath.TrimEnd('/').Split('/')[^1].Contains(':');
 
     private static Uri BuildOperationUri(Uri baseUri, string resourcePath, string operation, bool serverSentEvents)
     {
-        var basePath = baseUri.AbsolutePath.TrimEnd('/');
-        var query = baseUri.Query.AsSpan().TrimStart('?');
-        string fullQuery;
-        if (serverSentEvents)
+        var query = baseUri.Query.TrimStart('?');
+        if (serverSentEvents && !query.Split('&').Contains("alt=sse", StringComparer.OrdinalIgnoreCase))
         {
-            if (query.IsEmpty)
-            {
-                fullQuery = "?alt=sse";
-            }
-            else if (ContainsAltSseParameter(query))
-            {
-                fullQuery = string.Concat("?", query);
-            }
-            else
-            {
-                fullQuery = string.Concat("?", query, "&alt=sse");
-            }
-        }
-        else
-        {
-            fullQuery = query.IsEmpty ? string.Empty : string.Concat("?", query);
+            query = query.Length == 0 ? "alt=sse" : $"{query}&alt=sse";
         }
 
-        return new Uri($"{baseUri.GetLeftPart(UriPartial.Authority)}{basePath}/{resourcePath}:{operation}{fullQuery}", UriKind.Absolute);
-    }
-
-    private static bool ContainsAltSseParameter(ReadOnlySpan<char> query)
-    {
-        foreach (var range in query.Split('&'))
-        {
-            if (query[range].Equals("alt=sse", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        var address = $"{baseUri.GetLeftPart(UriPartial.Authority)}{baseUri.AbsolutePath.TrimEnd('/')}/{resourcePath}:{operation}";
+        return new Uri(query.Length == 0 ? address : $"{address}?{query}", UriKind.Absolute);
     }
 
     /// <summary>
     /// Converts a model identifier to a URL path relative to the endpoint. Bare IDs (<c>gemini-2.5-flash</c>) become
     /// <c>models/gemini-2.5-flash</c>; resource names containing <c>/</c> (<c>models/x</c>, <c>tunedModels/x</c>) are used as-is.
-    /// Each segment is percent-encoded without intermediate array allocations.
+    /// Each segment is percent-encoded.
     /// </summary>
     internal static string? ToResourcePath(string? model)
     {
@@ -189,48 +132,20 @@ internal sealed class GeminiEndpoint
             return null;
         }
 
-        var span = model.AsSpan().Trim().Trim('/');
-        if (span.IsEmpty)
+        var segments = model.Trim().Trim('/').Split('/');
+        if (segments.Any(segment => string.IsNullOrWhiteSpace(segment) || segment is "." or ".."))
         {
             throw new ArgumentException($"Model resource name '{model}' contains an empty or relative path segment.", nameof(model));
         }
 
-        if (span.Contains(':'))
+        if (model.Contains(':'))
         {
             throw new ArgumentException(
                 $"Model name '{model}' must not contain an operation such as ':generateContent'; the client appends it automatically.",
                 nameof(model));
         }
 
-        if (!span.Contains('/'))
-        {
-            if (span is "." or "..")
-            {
-                throw new ArgumentException($"Model resource name '{model}' contains a relative path segment.", nameof(model));
-            }
-
-            return string.Concat(ModelsSegment, Uri.EscapeDataString(span));
-        }
-
-        var sb = new StringBuilder(span.Length + 8);
-        var first = true;
-        foreach (var range in span.Split('/'))
-        {
-            var segment = span[range];
-            if (segment.IsEmpty || segment.IsWhiteSpace() || segment is "." or "..")
-            {
-                throw new ArgumentException($"Model resource name '{model}' contains an empty or relative path segment.", nameof(model));
-            }
-
-            if (!first)
-            {
-                sb.Append('/');
-            }
-
-            first = false;
-            sb.Append(Uri.EscapeDataString(segment));
-        }
-
-        return sb.ToString();
+        var path = string.Join('/', segments.Select(Uri.EscapeDataString));
+        return segments.Length == 1 ? ModelsSegment + path : path;
     }
 }

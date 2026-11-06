@@ -6,7 +6,8 @@ namespace GeminiGatewayClient;
 
 /// <summary>
 /// <c>Microsoft.Extensions.AI</c> <see cref="IEmbeddingGenerator{TInput, TEmbedding}"/> implementation backed by an <see cref="IGeminiClient"/>.
-/// Uses <c>:embedContent</c> for single-input calls and <c>:batchEmbedContents</c> when multiple inputs are supplied.
+/// Every call uses <c>:batchEmbedContents</c>. An <see cref="EmbedContentRequest"/> returned by
+/// <see cref="EmbeddingGenerationOptions.RawRepresentationFactory"/> supplies the settings shared by all inputs.
 /// <para>
 /// Create instances with <see cref="GeminiClientExtensions.AsIEmbeddingGenerator(IGeminiClient, string?, int?)"/>.
 /// This type does not own the underlying <see cref="IGeminiClient"/>; disposing it is a no-op.
@@ -56,50 +57,49 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
     {
         ArgumentNullException.ThrowIfNull(values);
 
-        var inputList = MaterializeInputs(values);
-        var explicitDimensions = options?.Dimensions;
-        var defaultDimensions = _metadata.DefaultModelDimensions;
-        var rawTemplate = options?.RawRepresentationFactory?.Invoke(this);
-        var model = ResolveModel(options, rawTemplate);
-
-        if (inputList.Count == 1 && rawTemplate is not BatchEmbedContentsRequest)
+        var inputs = values.ToList();
+        if (inputs.Count == 0)
         {
-            var singleRequest = BuildSingleRequest(inputList[0], explicitDimensions, defaultDimensions, rawTemplate as EmbedContentRequest);
-            var response = await _client.EmbedContentAsync(singleRequest, model, cancellationToken).ConfigureAwait(false);
-            if (response.Embedding is not { Values: { Count: > 0 } } embedding)
-            {
-                throw new GeminiApiException(
-                    "The Gemini embedding endpoint returned an empty or missing embedding vector.",
-                    HttpStatusCode.OK);
-            }
-
-            return new GeneratedEmbeddings<Embedding<float>>(1)
-            {
-                ToEmbedding(embedding, model)
-            };
+            throw new ArgumentException("values must contain at least one element.", nameof(values));
         }
 
-        var batchRequest = BuildBatchRequest(inputList, explicitDimensions, defaultDimensions, rawTemplate);
-        var batchResponse = await _client.BatchEmbedContentsAsync(batchRequest, model, cancellationToken).ConfigureAwait(false);
-        var embeddings = batchResponse.Embeddings;
-        if (embeddings is null || embeddings.Count != inputList.Count)
+        if (inputs.IndexOf(null!) is >= 0 and var nullIndex)
+        {
+            throw new ArgumentException($"values[{nullIndex}] cannot be null.", nameof(values));
+        }
+
+        var template = options?.RawRepresentationFactory?.Invoke(this) as EmbedContentRequest;
+        var dimensions = options?.Dimensions ?? template?.OutputDimensionality ?? _metadata.DefaultModelDimensions;
+        var model = new[] { options?.ModelId, template?.Model, _metadata.DefaultModelId }.FirstOrDefault(id => !string.IsNullOrWhiteSpace(id))?.Trim();
+        var request = new BatchEmbedContentsRequest
+        {
+            Requests = [.. inputs.Select(text => new EmbedContentRequest
+            {
+                Content = new Content { Parts = [Part.FromText(text)] },
+                TaskType = template?.TaskType,
+                Title = template?.Title,
+                OutputDimensionality = dimensions,
+                ExtensionData = template?.ExtensionData
+            })]
+        };
+
+        var response = await _client.BatchEmbedContentsAsync(request, model, cancellationToken).ConfigureAwait(false);
+        if (response.Embeddings.Count != inputs.Count)
         {
             throw new GeminiApiException(
-                $"The Gemini batch embedding endpoint returned {embeddings?.Count ?? 0} embeddings for {inputList.Count} input values.",
+                $"The Gemini batch embedding endpoint returned {response.Embeddings.Count} embeddings for {inputs.Count} input values.",
                 HttpStatusCode.OK);
-            }
+        }
 
-        var generated = new GeneratedEmbeddings<Embedding<float>>(embeddings.Count);
-        for (var i = 0; i < embeddings.Count; i++)
+        var generated = new GeneratedEmbeddings<Embedding<float>>(inputs.Count);
+        foreach (var embedding in response.Embeddings)
         {
-            if (embeddings[i] is not { Values: { Count: > 0 } } item)
+            if (embedding is not { Values.Count: > 0 })
             {
-                throw new GeminiApiException(
-                    $"The Gemini batch embedding endpoint returned an empty or null embedding at index {i}.",
-                    HttpStatusCode.OK);
+                throw new GeminiApiException($"The Gemini batch embedding endpoint returned an empty embedding at index {generated.Count}.", HttpStatusCode.OK);
             }
 
-            generated.Add(ToEmbedding(item, model));
+            generated.Add(new Embedding<float>(embedding.Values.ToArray()) { ModelId = model });
         }
 
         return generated;
@@ -133,133 +133,5 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
     /// </summary>
     public void Dispose()
     {
-    }
-
-    private static IReadOnlyList<string> MaterializeInputs(IEnumerable<string> values)
-    {
-        if (values is IReadOnlyList<string> readOnlyList)
-        {
-            if (readOnlyList.Count == 0)
-            {
-                throw new ArgumentException("values must contain at least one element.", nameof(values));
-            }
-
-            for (var i = 0; i < readOnlyList.Count; i++)
-            {
-                if (readOnlyList[i] is null)
-                {
-                    throw new ArgumentException($"values[{i}] cannot be null.", nameof(values));
-                }
-            }
-
-            return readOnlyList;
-        }
-
-        var list = values.TryGetNonEnumeratedCount(out var count)
-            ? new List<string>(count)
-            : new List<string>();
-        var index = 0;
-        foreach (var value in values)
-        {
-            if (value is null)
-            {
-                throw new ArgumentException($"values[{index}] cannot be null.", nameof(values));
-            }
-
-            list.Add(value);
-            index++;
-        }
-
-        if (list.Count == 0)
-        {
-            throw new ArgumentException("values must contain at least one element.", nameof(values));
-        }
-
-        return list;
-    }
-
-    private static EmbedContentRequest BuildSingleRequest(
-        string text,
-        int? explicitDimensions,
-        int? defaultDimensions,
-        EmbedContentRequest? template) => new()
-        {
-            Model = template?.Model,
-            Content = new Content { Parts = [Part.FromText(text)] },
-            TaskType = template?.TaskType,
-            Title = template?.Title,
-            OutputDimensionality = explicitDimensions ?? template?.OutputDimensionality ?? defaultDimensions,
-            ExtensionData = template?.ExtensionData is not null
-                ? new Dictionary<string, System.Text.Json.JsonElement>(template.ExtensionData, StringComparer.Ordinal)
-                : null
-        };
-
-    private static BatchEmbedContentsRequest BuildBatchRequest(
-        IReadOnlyList<string> inputs,
-        int? explicitDimensions,
-        int? defaultDimensions,
-        object? rawTemplate)
-    {
-        var singleTemplate = rawTemplate as EmbedContentRequest;
-        var batchTemplate = rawTemplate as BatchEmbedContentsRequest;
-        var requests = new List<EmbedContentRequest>(inputs.Count);
-
-        for (var i = 0; i < inputs.Count; i++)
-        {
-            var itemTemplate = batchTemplate?.Requests is { } batchItems && i < batchItems.Count
-                ? batchItems[i]
-                : singleTemplate;
-            requests.Add(BuildSingleRequest(inputs[i], explicitDimensions, defaultDimensions, itemTemplate));
-        }
-
-        return new BatchEmbedContentsRequest
-        {
-            Requests = requests,
-            ExtensionData = batchTemplate?.ExtensionData is not null
-                ? new Dictionary<string, System.Text.Json.JsonElement>(batchTemplate.ExtensionData, StringComparer.Ordinal)
-                : null
-        };
-    }
-
-    private static Embedding<float> ToEmbedding(ContentEmbedding embedding, string? modelId)
-    {
-        ReadOnlyMemory<float> vector = embedding.Values switch
-        {
-            float[] array => array,
-            List<float> list => list.ToArray(),
-            { Count: > 0 } values => values.ToArray(),
-            _ => ReadOnlyMemory<float>.Empty
-        };
-
-        return new Embedding<float>(vector)
-        {
-            ModelId = modelId
-        };
-    }
-
-    private string? ResolveModel(EmbeddingGenerationOptions? options, object? rawTemplate)
-    {
-        if (!string.IsNullOrWhiteSpace(options?.ModelId))
-        {
-            return options.ModelId.Trim();
-        }
-
-        if (rawTemplate is EmbedContentRequest { Model: { } singleModel } && !string.IsNullOrWhiteSpace(singleModel))
-        {
-            return singleModel.Trim();
-        }
-
-        if (rawTemplate is BatchEmbedContentsRequest { Requests: { Count: > 0 } batchItems })
-        {
-            for (var i = 0; i < batchItems.Count; i++)
-            {
-                if (batchItems[i] is { Model: { } itemModel } && !string.IsNullOrWhiteSpace(itemModel))
-                {
-                    return itemModel.Trim();
-                }
-            }
-        }
-
-        return _metadata.DefaultModelId;
     }
 }

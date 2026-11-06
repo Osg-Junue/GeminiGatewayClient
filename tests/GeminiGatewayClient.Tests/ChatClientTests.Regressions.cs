@@ -398,7 +398,7 @@ public partial class ChatClientTests
 
         Assert.NotNull(handler.LastRequestBody);
         using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
-        Assert.False(sentDoc.RootElement.TryGetProperty("generationConfig", out _));
+        Assert.False(sentDoc.RootElement.GetProperty("generationConfig").TryGetProperty("thinkingConfig", out _));
     }
 
     private sealed class CustomUnsupportedTool : AITool;
@@ -449,45 +449,6 @@ public partial class ChatClientTests
 
         var response = await geminiClient.GenerateContentAsync("Direct after adapter dispose");
         Assert.Equal("Hello from Gemini!", response.Text);
-    }
-
-    [Fact]
-    public async Task IChatClient_RawRepresentationFactory_DoesNotMutateTemplateContentParts()
-    {
-        using var handler = new RecordingHandler(OkResponseJson);
-        using var httpClient = new HttpClient(handler);
-        using var geminiClient = CreateClient(httpClient);
-        IChatClient chatClient = geminiClient.AsIChatClient();
-
-        var templateTurn = Content.FromText("Template prefix", Role.User);
-        var sharedTemplate = new GenerateContentRequest
-        {
-            Contents = [templateTurn],
-            ToolConfig = new ToolConfig
-            {
-                FunctionCallingConfig = new FunctionCallingConfig
-                {
-                    Mode = FunctionCallingMode.Any,
-                    AllowedFunctionNames = ["func_a"]
-                }
-            }
-        };
-
-        var cloned = sharedTemplate.CloneWithContents([Content.FromText("New turn")]);
-        cloned.ToolConfig!.FunctionCallingConfig!.AllowedFunctionNames!.Add("func_b");
-        Assert.Single(sharedTemplate.ToolConfig.FunctionCallingConfig.AllowedFunctionNames);
-
-        var options = new ChatOptions
-        {
-            RawRepresentationFactory = _ => sharedTemplate
-        };
-
-        await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Call 1")], options);
-        await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "Call 2")], options);
-
-        // Template turn Parts must remain untouched across calls
-        Assert.Single(templateTurn.Parts);
-        Assert.Equal("Template prefix", templateTurn.Parts[0].Text);
     }
 
     [Fact]

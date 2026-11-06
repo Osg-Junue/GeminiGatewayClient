@@ -12,8 +12,19 @@ public sealed class CitationMetadata
     /// <summary>
     /// Citations to sources for a specific response.
     /// </summary>
-    [JsonPropertyName("citations")]
+    [JsonPropertyName("citationSources")]
     public IList<Citation> Citations { get => field ??= []; set; }
+
+    /// <summary>
+    /// Vertex AI's name for <see cref="Citations"/>, for gateways that front it.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("citations")]
+    internal IList<Citation>? VertexCitations
+    {
+        get => null;
+        set => Citations = value ?? Citations;
+    }
 
     /// <summary>
     /// Gets or sets additional JSON properties not explicitly modeled by this type.

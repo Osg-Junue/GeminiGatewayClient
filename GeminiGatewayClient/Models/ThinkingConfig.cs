@@ -45,20 +45,6 @@ public sealed class ThinkingConfig
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
     /// <summary>
-    /// Creates a copy of this configuration.
-    /// </summary>
-    internal ThinkingConfig Clone()
-    {
-        var clone = (ThinkingConfig)MemberwiseClone();
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
-
-    /// <summary>
     /// Validates that <see cref="ThinkingBudget"/> and <see cref="ThinkingLevel"/> are not both set.
     /// </summary>
     /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>

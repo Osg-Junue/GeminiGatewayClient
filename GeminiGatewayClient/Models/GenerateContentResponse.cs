@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -47,88 +46,23 @@ public sealed class GenerateContentResponse
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
+    private IEnumerable<Part> FirstCandidateParts => Candidates.FirstOrDefault()?.Content?.Parts ?? [];
+
     /// <summary>
     /// Concatenation of all non-thought text parts in the first candidate,
     /// or <c>null</c> when there are no candidates, no parts, or no non-thought text.
     /// </summary>
     [JsonIgnore]
-    public string? Text
-    {
-        get
-        {
-            var candidates = Candidates;
-            if (candidates is null || candidates.Count == 0)
-            {
-                return null;
-            }
-
-            var parts = candidates[0]?.Content?.Parts;
-            if (parts is null || parts.Count == 0)
-            {
-                return null;
-            }
-
-            string? single = null;
-            StringBuilder? sb = null;
-
-            for (var i = 0; i < parts.Count; i++)
-            {
-                var part = parts[i];
-                if (part is null || part.Thought == true || string.IsNullOrEmpty(part.Text))
-                {
-                    continue;
-                }
-
-                if (single is null)
-                {
-                    single = part.Text;
-                }
-                else
-                {
-                    sb ??= new StringBuilder(single);
-                    sb.Append(part.Text);
-                }
-            }
-
-            return sb is not null ? sb.ToString() : single;
-        }
-    }
+    public string? Text =>
+        string.Concat(FirstCandidateParts.Where(part => part is { Thought: not true }).Select(part => part.Text)) is { Length: > 0 } text ? text : null;
 
     /// <summary>
     /// All function calls requested by the model in the first candidate (empty when there are none).
     /// The model may request several calls in parallel.
     /// </summary>
     [JsonIgnore]
-    public IReadOnlyList<FunctionCall> FunctionCalls
-    {
-        get
-        {
-            var candidates = Candidates;
-            if (candidates is null || candidates.Count == 0)
-            {
-                return [];
-            }
-
-            var parts = candidates[0]?.Content?.Parts;
-            if (parts is null || parts.Count == 0)
-            {
-                return [];
-            }
-
-            List<FunctionCall>? calls = null;
-            for (var i = 0; i < parts.Count; i++)
-            {
-                var call = parts[i]?.FunctionCall;
-                if (call is not null)
-                {
-                    calls ??= [];
-                    calls.Add(call);
-                }
-            }
-
-            return calls is not null ? calls : [];
-        }
-    }
+    public IReadOnlyList<FunctionCall> FunctionCalls =>
+        [.. FirstCandidateParts.Select(part => part?.FunctionCall).OfType<FunctionCall>()];
 
     /// <summary>
     /// The <see cref="Models.FinishReason"/> of the first candidate, or <c>null</c> when there are no candidates.

@@ -7,13 +7,17 @@ namespace GeminiGatewayClient.Chat;
 
 /// <summary>
 /// Converts <c>Microsoft.Extensions.AI</c> chat messages and options into a <see cref="GenerateContentRequest"/>.
+/// One instance builds one request, because a function result needs the name of the call made earlier in the history.
 /// </summary>
-internal static partial class ChatRequestMapper
+internal sealed partial class ChatRequestMapper(JsonSerializerOptions toolSerializerOptions)
 {
+    private readonly Dictionary<string, (string Name, string? ApiId)> _functionCalls = new(StringComparer.Ordinal);
+
     /// <summary>
     /// Builds a request from <paramref name="messages"/> and <paramref name="options"/>.
-    /// A <see cref="GenerateContentRequest"/> returned by <see cref="ChatOptions.RawRepresentationFactory"/> is used as the
-    /// starting point; its explicitly set values take precedence over <see cref="ChatOptions"/>.
+    /// A <see cref="GenerateContentRequest"/> returned by <see cref="ChatOptions.RawRepresentationFactory"/> is the starting
+    /// point, and its explicitly set values take precedence over <see cref="ChatOptions"/>. As that callback's contract
+    /// allows, the returned instance is modified, so it must not be shared between calls.
     /// </summary>
     public static GenerateContentRequest ToRequest(
         IEnumerable<ChatMessage> messages,
@@ -22,199 +26,182 @@ internal static partial class ChatRequestMapper
         string? modelId,
         JsonSerializerOptions toolSerializerOptions)
     {
-        var template = options?.RawRepresentationFactory?.Invoke(client) as GenerateContentRequest;
-        var templateContents = template?.Contents;
-        var initialCapacity = (templateContents?.Count ?? 0) + (messages.TryGetNonEnumeratedCount(out var count) && count > 0 ? count : 4);
-        var contents = new List<Content>(initialCapacity);
-        if (templateContents is { Count: > 0 } existing)
-        {
-            // Null elements are kept so request validation reports them at their template index.
-            for (var i = 0; i < existing.Count; i++)
-            {
-                contents.Add(existing[i]?.Clone()!);
-            }
-        }
-
-        var hasTemplateSystemInstruction = template?.SystemInstruction is not null;
-        List<Part>? systemParts = null;
-
-        if (!hasTemplateSystemInstruction && !string.IsNullOrWhiteSpace(options?.Instructions))
-        {
-            systemParts = new List<Part>(2) { Part.FromText(options.Instructions) };
-        }
-
-        Dictionary<string, (string Name, string? ApiId)>? functionCalls = null;
-        ChatRole? lastMergedChatRole = contents.Count > 0
-            ? (contents[^1]?.Role == Role.Model ? ChatRole.Assistant : ChatRole.User)
-            : null;
-
-        foreach (var message in messages)
-        {
-            if (message.Role == ChatRole.System)
-            {
-                if (!hasTemplateSystemInstruction)
-                {
-                    foreach (var contentItem in message.Contents)
-                    {
-                        if (contentItem is TextContent { Text.Length: > 0 } sysText)
-                        {
-                            (systemParts ??= new List<Part>(message.Contents.Count)).Add(Part.FromText(sysText.Text));
-                        }
-                    }
-                }
-
-                continue;
-            }
-
-            if (message.Contents.Count == 0)
-            {
-                continue;
-            }
-
-            var targetRole = message.Role == ChatRole.Assistant ? Role.Model : Role.User;
-            var isMerging = contents.Count > 0 &&
-                            contents[^1]?.Role == targetRole &&
-                            lastMergedChatRole == message.Role;
-
-            // Every entry in contents was created above or by Content.Clone, so its Parts are always a mutable list.
-            var targetParts = isMerging ? contents[^1].Parts : new List<Part>(message.Contents.Count);
-
-            foreach (var item in message.Contents)
-            {
-                AppendPart(targetParts, item, ref functionCalls, toolSerializerOptions);
-            }
-
-            if (!isMerging)
-            {
-                if (targetParts.Count == 0)
-                {
-                    continue;
-                }
-
-                contents.Add(new Content
-                {
-                    Role = targetRole,
-                    Parts = targetParts
-                });
-                lastMergedChatRole = message.Role;
-            }
-        }
-
-        var request = template is null
-            ? new GenerateContentRequest { Contents = contents }
-            : template.CloneWithContents(contents);
-
-        if (request.SystemInstruction is null && systemParts is { Count: > 0 })
-        {
-            request.SystemInstruction = new Content { Parts = systemParts };
-        }
+        var request = options?.RawRepresentationFactory?.Invoke(client) as GenerateContentRequest ?? new GenerateContentRequest();
+        new ChatRequestMapper(toolSerializerOptions).AppendMessages(request, messages, options?.Instructions);
 
         if (options is not null)
         {
-            ChatOptionsMapper.Apply(request, options, modelId, toolSerializerOptions);
+            ChatOptionsMapper.Apply(request, options, modelId);
         }
 
         return request;
     }
 
-    private static void AppendPart(IList<Part> parts, AIContent item, ref Dictionary<string, (string Name, string? ApiId)>? functionCalls, JsonSerializerOptions toolSerializerOptions)
-    {
-        var rawPart = item.RawRepresentation as Part;
-        var signature = GetStringProperty(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature)
-            ?? rawPart?.ThoughtSignature;
+    /// <summary>
+    /// Creates the id of a function call the model sent without one.
+    /// </summary>
+    public static string CreateCallId(string name) => $"{name}_call_{Guid.NewGuid():N}";
 
-        // Content produced by GeminiChatClient carries the exact wire part; replay a clone of it (keeps ids, extension data, and signatures)
-        // unless the caller mutated the high-level AIContent payload after creation.
-        if (rawPart is not null && IsUnmodifiedRawPart(item, rawPart, signature))
-        {
-            var clonedPart = rawPart.Clone();
-            if (string.IsNullOrEmpty(clonedPart.Text) && HasNonTextPrimaryDataField(clonedPart))
+    [GeneratedRegex("^(.+)_call_[0-9a-f]{32}$")]
+    private static partial Regex CreatedCallId();
+
+    private static string? GetString(AdditionalPropertiesDictionary? properties, string key) =>
+        properties is not null && properties.TryGetValue(key, out var value)
+            ? value switch
             {
-                clonedPart.Text = null;
+                string { Length: > 0 } text => text,
+                JsonElement { ValueKind: JsonValueKind.String } element when element.GetString() is { Length: > 0 } text => text,
+                _ => null
+            }
+            : null;
+
+    private static bool GetFlag(AdditionalPropertiesDictionary? properties, string key) =>
+        properties is not null && properties.TryGetValue(key, out var value) && value is true or JsonElement { ValueKind: JsonValueKind.True };
+
+    private static Part WithMetadata(Part part, Part? raw, string? signature)
+    {
+        part.ThoughtSignature = signature;
+        part.VideoMetadata = raw?.VideoMetadata;
+        part.ExtensionData = raw?.ExtensionData;
+
+        // Fields this client does not model, such as the id pairing code with its result, must reach the next turn.
+        part.InlineData?.ExtensionData = raw?.InlineData?.ExtensionData;
+        part.FileData?.ExtensionData = raw?.FileData?.ExtensionData;
+        part.FunctionCall?.ExtensionData = raw?.FunctionCall?.ExtensionData;
+        part.ExecutableCode?.ExtensionData = raw?.ExecutableCode?.ExtensionData;
+        part.CodeExecutionResult?.ExtensionData = raw?.CodeExecutionResult?.ExtensionData;
+        return part;
+    }
+
+    private static void AppendReasoning(List<Part> parts, TextReasoningContent reasoning, Part? raw)
+    {
+        var signature = string.IsNullOrEmpty(reasoning.ProtectedData) ? raw?.ThoughtSignature : reasoning.ProtectedData;
+        if (!string.IsNullOrEmpty(reasoning.Text))
+        {
+            parts.Add(WithMetadata(new Part { Text = reasoning.Text, Thought = true }, raw, signature));
+        }
+        else if (GetFlag(reasoning.AdditionalProperties, GeminiChatPropertyNames.SignatureCompanion))
+        {
+            // Streaming aggregation may have dropped the signature from the text it belongs to.
+            if (parts.Count > 0 && parts[^1] is { Text.Length: > 0 } text)
+            {
+                text.ThoughtSignature = signature;
+            }
+        }
+        else if (!string.IsNullOrEmpty(signature))
+        {
+            // A signature on its own part stays there: Gemini forbids merging a signed part with an unsigned one.
+            parts.Add(WithMetadata(new Part { Text = string.Empty, Thought = raw?.Thought }, raw, signature));
+        }
+    }
+
+    private static void AppendCodeExecution(List<Part> parts, AIContent item, Part? raw, string? signature)
+    {
+        var properties = item.AdditionalProperties;
+        var code = GetString(properties, GeminiChatPropertyNames.ExecutableCode);
+        var language = GetString(properties, GeminiChatPropertyNames.ExecutableCodeLanguage);
+        var output = GetString(properties, GeminiChatPropertyNames.CodeExecutionOutput);
+        var outcome = GetString(properties, GeminiChatPropertyNames.CodeExecutionOutcome);
+
+        if (code is not null || language is not null)
+        {
+            var executable = new ExecutableCode { Code = code, Language = Enum.TryParse<CodeExecutionLanguage>(language, ignoreCase: true, out var parsed) ? parsed : null };
+            parts.Add(WithMetadata(new Part { ExecutableCode = executable }, raw, signature));
+        }
+        else if (output is not null || outcome is not null)
+        {
+            var result = new CodeExecutionResult { Output = output, Outcome = Enum.TryParse<CodeExecutionOutcome>(outcome, ignoreCase: true, out var parsed) ? parsed : null };
+            parts.Add(WithMetadata(new Part { CodeExecutionResult = result }, raw, signature));
+        }
+        else if (raw is not null)
+        {
+            parts.Add(raw);
+        }
+    }
+
+    private void AppendMessages(GenerateContentRequest request, IEnumerable<ChatMessage> messages, string? instructions)
+    {
+        var contents = request.Contents.ToList();
+        var systemParts = new List<Part>();
+        ChatRole? previousRole = null;
+
+        if (!string.IsNullOrWhiteSpace(instructions))
+        {
+            systemParts.Add(Part.FromText(instructions));
+        }
+
+        foreach (var message in messages)
+        {
+            if (message.Role == ChatRole.System)
+            {
+                systemParts.AddRange(message.Contents.OfType<TextContent>().Where(t => t.Text.Length > 0).Select(t => Part.FromText(t.Text)));
+                continue;
             }
 
-            parts.Add(clonedPart);
-            return;
+            var parts = new List<Part>(message.Contents.Count);
+            foreach (var item in message.Contents)
+            {
+                AppendContent(parts, item);
+            }
+
+            if (parts.Count == 0)
+            {
+                continue;
+            }
+
+            // Gemini expects consecutive turns of one speaker, such as parallel tool results, in a single content.
+            if (message.Role == previousRole)
+            {
+                ((List<Part>)contents[^1].Parts).AddRange(parts);
+            }
+            else
+            {
+                contents.Add(new Content { Role = message.Role == ChatRole.Assistant ? Role.Model : Role.User, Parts = parts });
+                previousRole = message.Role;
+            }
         }
+
+        request.Contents = contents;
+        if (request.SystemInstruction is null && systemParts.Count > 0)
+        {
+            request.SystemInstruction = new Content { Parts = systemParts };
+        }
+    }
+
+    private void AppendContent(List<Part> parts, AIContent item)
+    {
+        var raw = item.RawRepresentation as Part;
+        var signature = GetString(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature) ?? raw?.ThoughtSignature;
 
         switch (item)
         {
-            case TextContent text when !string.IsNullOrEmpty(text.Text):
-                var textPart = Part.FromText(text.Text);
-                textPart.ThoughtSignature = signature;
-                textPart.VideoMetadata = rawPart?.VideoMetadata?.Clone();
-                parts.Add(textPart);
+            case TextContent { Text.Length: > 0 } text:
+                parts.Add(WithMetadata(Part.FromText(text.Text), raw, signature));
                 break;
 
-            case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text) || !string.IsNullOrEmpty(reasoning.ProtectedData) || !string.IsNullOrEmpty(rawPart?.ThoughtSignature):
-                AppendReasoningPart(parts, reasoning, rawPart);
+            case TextContent:
+                break;
+
+            case TextReasoningContent reasoning:
+                AppendReasoning(parts, reasoning, raw);
                 break;
 
             case DataContent data:
-                var dataPart = Part.FromBytes(data.Data.Span, data.MediaType);
-                dataPart.ThoughtSignature = signature;
-                dataPart.VideoMetadata = rawPart?.VideoMetadata?.Clone();
-                parts.Add(dataPart);
+                parts.Add(WithMetadata(Part.FromBytes(data.Data.Span, data.MediaType), raw, signature));
                 break;
 
             case UriContent uri:
-                var uriPart = Part.FromUri(uri.Uri.OriginalString, string.IsNullOrWhiteSpace(uri.MediaType) ? null : uri.MediaType);
-                uriPart.ThoughtSignature = signature;
-                uriPart.VideoMetadata = rawPart?.VideoMetadata?.Clone();
-                parts.Add(uriPart);
+                // A media type absent from the response was only filled in because UriContent requires one.
+                var mediaType = raw is { FileData.MimeType: null } || string.IsNullOrWhiteSpace(uri.MediaType) ? null : uri.MediaType;
+                parts.Add(WithMetadata(Part.FromUri(uri.Uri.OriginalString, mediaType), raw, signature));
                 break;
 
             case FunctionCallContent call:
-                var apiId = RegisterFunctionCall(ref functionCalls, call);
-                var rawCall = rawPart?.FunctionCall;
-                var args = call.Arguments is null
-                    ? null
-                    : rawCall is not null && AreUnmodifiedArguments(call.Arguments, rawCall.Args)
-                        ? rawCall.Args
-                        : ToolJsonConverter.ToArguments(call.Arguments, toolSerializerOptions);
-                parts.Add(new Part
-                {
-                    ThoughtSignature = signature,
-                    VideoMetadata = rawPart?.VideoMetadata?.Clone(),
-                    ExtensionData = rawPart?.ExtensionData is not null
-                        ? new Dictionary<string, JsonElement>(rawPart.ExtensionData, StringComparer.Ordinal)
-                        : null,
-                    FunctionCall = new FunctionCall
-                    {
-                        Id = apiId,
-                        Name = call.Name,
-                        Args = args,
-                        ExtensionData = rawCall?.ExtensionData is not null
-                            ? new Dictionary<string, JsonElement>(rawCall.ExtensionData, StringComparer.Ordinal)
-                            : null
-                    }
-                });
-                break;
-
-            case FunctionResultContent result when rawPart?.FunctionResponse is not null:
-                // A caller-attached wire part keeps its identity and metadata; only a supplied result replaces its payload.
-                var refreshedPart = rawPart.Clone();
-                if (result.Result is not null)
-                {
-                    refreshedPart.FunctionResponse!.Response = ToolJsonConverter.ToResponseObject(result.Result, toolSerializerOptions);
-                }
-
-                refreshedPart.Text = null;
-                refreshedPart.ThoughtSignature = signature;
-                parts.Add(refreshedPart);
+                parts.Add(WithMetadata(ToFunctionCallPart(call), raw, signature));
                 break;
 
             case FunctionResultContent result:
-                var (name, id) = ResolveFunctionCall(functionCalls, result.CallId);
-                parts.Add(new Part
-                {
-                    FunctionResponse = new FunctionResponse
-                    {
-                        Id = id,
-                        Name = name,
-                        Response = ToolJsonConverter.ToResponseObject(result.Result, toolSerializerOptions)
-                    }
-                });
+                parts.Add(ToFunctionResponsePart(result));
                 break;
 
             case HostedFileContent file:
@@ -222,273 +209,45 @@ internal static partial class ChatRequestMapper
                     $"HostedFileContent ('{file.FileId}') cannot be sent to Gemini. Use UriContent with the uploaded file's URI and media type.");
 
             default:
-                AppendCodeExecutionParts(parts, item.AdditionalProperties, signature, rawPart);
+                AppendCodeExecution(parts, item, raw, signature);
                 break;
         }
     }
 
-    private static bool AreUnmodifiedArguments(IDictionary<string, object?> arguments, JsonElement? rawArgs)
+    private Part ToFunctionCallPart(FunctionCallContent call)
     {
-        if (rawArgs is not { ValueKind: JsonValueKind.Object } rawObj || rawObj.GetPropertyCount() != arguments.Count)
+        var apiId = GetFlag(call.AdditionalProperties, GeminiChatPropertyNames.SynthesizedCallId) || string.IsNullOrEmpty(call.CallId) ? null : call.CallId;
+        if (!string.IsNullOrEmpty(call.CallId))
         {
-            return false;
+            _functionCalls[call.CallId] = (call.Name, apiId);
         }
 
-        foreach (var (key, value) in arguments)
+        return new Part
         {
-            if (value is not JsonElement element ||
-                !rawObj.TryGetProperty(key, out var rawProp) ||
-                !JsonElement.DeepEquals(element, rawProp))
+            FunctionCall = new FunctionCall
             {
-                return false;
+                Id = apiId,
+                Name = call.Name,
+                Args = ToolJsonConverter.ToArguments(call.Arguments, toolSerializerOptions)
             }
-        }
-
-        return true;
-    }
-
-    private static bool IsUnmodifiedRawPart(AIContent item, Part rawPart, string? signature)
-    {
-        if (item is not TextReasoningContent &&
-            !string.Equals(rawPart.ThoughtSignature, signature, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return item switch
-        {
-            TextContent text =>
-                !string.IsNullOrEmpty(text.Text) &&
-                rawPart.Thought != true &&
-                !HasNonTextPrimaryDataField(rawPart) &&
-                string.Equals(rawPart.Text, text.Text, StringComparison.Ordinal),
-            TextReasoningContent reasoning =>
-                !string.IsNullOrEmpty(reasoning.Text) &&
-                rawPart.Thought == true &&
-                !HasNonTextPrimaryDataField(rawPart) &&
-                string.Equals(rawPart.Text, reasoning.Text, StringComparison.Ordinal) &&
-                string.Equals(rawPart.ThoughtSignature, reasoning.ProtectedData, StringComparison.Ordinal),
-            DataContent data =>
-                string.IsNullOrEmpty(rawPart.Text) &&
-                rawPart.InlineData?.Data is { } rawBytes &&
-                // A response may omit the MIME type, but a request must carry one, so that part is rebuilt rather than replayed.
-                !string.IsNullOrWhiteSpace(rawPart.InlineData.MimeType) &&
-                string.Equals(rawPart.InlineData.MimeType, data.MediaType, StringComparison.Ordinal) &&
-                data.Data.Span.SequenceEqual(rawBytes),
-            UriContent uri =>
-                string.IsNullOrEmpty(rawPart.Text) &&
-                rawPart.FileData is not null &&
-                string.Equals(rawPart.FileData.FileUri, uri.Uri.OriginalString, StringComparison.Ordinal) &&
-                string.Equals(
-                    string.IsNullOrWhiteSpace(rawPart.FileData.MimeType) ? MimeTypes.ApplicationOctetStream : rawPart.FileData.MimeType,
-                    string.IsNullOrWhiteSpace(uri.MediaType) ? MimeTypes.ApplicationOctetStream : uri.MediaType,
-                    StringComparison.Ordinal),
-            FunctionCallContent or FunctionResultContent => false,
-            _ => string.IsNullOrEmpty(rawPart.Text) && IsUnmodifiedCodeExecutionPart(item.AdditionalProperties, rawPart)
         };
     }
 
-    private static bool HasNonTextPrimaryDataField(Part part) =>
-        part.InlineData is not null ||
-        part.FileData is not null ||
-        part.FunctionCall is not null ||
-        part.FunctionResponse is not null ||
-        part.ExecutableCode is not null ||
-        part.CodeExecutionResult is not null;
-
-    private static bool IsUnmodifiedCodeExecutionPart(AdditionalPropertiesDictionary? properties, Part rawPart)
+    private Part ToFunctionResponsePart(FunctionResultContent result)
     {
-        var hasCode = TryGetRawStringProperty(properties, GeminiChatPropertyNames.ExecutableCode, out var code);
-        var hasLang = TryGetRawStringProperty(properties, GeminiChatPropertyNames.ExecutableCodeLanguage, out var langStr);
-        var hasOutput = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutput, out var output);
-        var hasOutcome = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutcome, out var outcomeStr);
-
-        if (rawPart.ExecutableCode is { } rawExec)
-        {
-            if (rawPart.CodeExecutionResult is not null || hasOutput || hasOutcome)
-            {
-                return false;
-            }
-
-            var expectedLang = rawExec.Language?.ToString();
-            return string.Equals(rawExec.Code, hasCode ? code : null, StringComparison.Ordinal) &&
-                   string.Equals(expectedLang, hasLang ? langStr : null, StringComparison.Ordinal);
-        }
-
-        if (rawPart.CodeExecutionResult is { } rawResult)
-        {
-            if (hasCode || hasLang)
-            {
-                return false;
-            }
-
-            var expectedOutcome = rawResult.Outcome?.ToString();
-            return string.Equals(rawResult.Output, hasOutput ? output : null, StringComparison.Ordinal) &&
-                   string.Equals(expectedOutcome, hasOutcome ? outcomeStr : null, StringComparison.Ordinal);
-        }
-
-        return !hasCode && !hasLang && !hasOutput && !hasOutcome;
-    }
-
-    private static void AppendCodeExecutionParts(
-        IList<Part> parts,
-        AdditionalPropertiesDictionary? properties,
-        string? signature,
-        Part? rawPart)
-    {
-        if (properties is null || properties.Count == 0)
-        {
-            return;
-        }
-
-        var hasCode = TryGetRawStringProperty(properties, GeminiChatPropertyNames.ExecutableCode, out var code);
-        var hasLang = TryGetRawStringProperty(properties, GeminiChatPropertyNames.ExecutableCodeLanguage, out var langStr);
-        var hasOutput = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutput, out var output);
-        var hasOutcome = TryGetRawStringProperty(properties, GeminiChatPropertyNames.CodeExecutionOutcome, out var outcomeStr);
-
-        if (hasCode || hasLang)
-        {
-            parts.Add(new Part
-            {
-                ThoughtSignature = (hasOutput || hasOutcome) ? null : signature,
-                VideoMetadata = rawPart?.VideoMetadata?.Clone(),
-                ExecutableCode = new ExecutableCode
-                {
-                    Code = code,
-                    Language = hasLang && Enum.TryParse<CodeExecutionLanguage>(langStr, ignoreCase: true, out var lang) ? lang : null
-                }
-            });
-        }
-
-        if (hasOutput || hasOutcome)
-        {
-            parts.Add(new Part
-            {
-                ThoughtSignature = signature,
-                VideoMetadata = (hasCode || hasLang) ? null : rawPart?.VideoMetadata?.Clone(),
-                CodeExecutionResult = new CodeExecutionResult
-                {
-                    Output = output,
-                    Outcome = hasOutcome && Enum.TryParse<CodeExecutionOutcome>(outcomeStr, ignoreCase: true, out var outcome) ? outcome : null
-                }
-            });
-        }
-    }
-
-    private static bool TryGetRawStringProperty(AdditionalPropertiesDictionary? properties, string key, out string? value)
-    {
-        if (properties is not null && properties.TryGetValue(key, out var raw))
-        {
-            switch (raw)
-            {
-                case string s:
-                    value = s;
-                    return true;
-                case JsonElement { ValueKind: JsonValueKind.String } element:
-                    value = element.GetString();
-                    return true;
-            }
-        }
-
-        value = null;
-        return false;
-    }
-
-    private static void AppendReasoningPart(IList<Part> parts, TextReasoningContent reasoning, Part? rawPart)
-    {
-        var hasText = !string.IsNullOrEmpty(reasoning.Text);
-        var signature = !string.IsNullOrEmpty(reasoning.ProtectedData)
-            ? reasoning.ProtectedData
-            : rawPart?.ThoughtSignature;
-
-        // A signature-only companion of the preceding part (text + signature split on receive) must not be sent twice,
-        // and when multi-chunk TextContent coalescing dropped the signature from the preceding text part, re-attach it.
-        // A standalone signature part stays separate: Gemini forbids merging a signed part with an unsigned one.
-        if (!hasText && !string.IsNullOrEmpty(signature) && parts.Count > 0 &&
-            GetBooleanProperty(reasoning.AdditionalProperties, GeminiChatPropertyNames.SignatureCompanion))
-        {
-            if (string.Equals(parts[^1]?.ThoughtSignature, signature, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            if (parts[^1] is { Text.Length: > 0, Thought: not true, ThoughtSignature: null or "" } prevPart)
-            {
-                prevPart.ThoughtSignature = signature;
-                if (prevPart.ExtensionData is null && rawPart?.ExtensionData is { Count: > 0 } rawExt)
-                {
-                    prevPart.ExtensionData = new Dictionary<string, JsonElement>(rawExt, StringComparer.Ordinal);
-                }
-
-                return;
-            }
-        }
-
-        parts.Add(new Part
-        {
-            Text = hasText ? reasoning.Text : rawPart?.Text,
-            Thought = hasText ? true : null,
-            ThoughtSignature = string.IsNullOrEmpty(signature) ? null : signature,
-            VideoMetadata = rawPart?.VideoMetadata?.Clone(),
-            ExtensionData = rawPart?.ExtensionData is not null
-                ? new Dictionary<string, JsonElement>(rawPart.ExtensionData, StringComparer.Ordinal)
-                : null
-        });
-    }
-
-    internal static string? GetStringProperty(AdditionalPropertiesDictionary? properties, string key) =>
-        properties is not null && properties.TryGetValue(key, out var value)
-            ? value switch
-            {
-                string { Length: > 0 } s => s,
-                JsonElement { ValueKind: JsonValueKind.String } element when element.GetString() is { Length: > 0 } s => s,
-                _ => null
-            }
-            : null;
-
-    internal static bool GetBooleanProperty(AdditionalPropertiesDictionary? properties, string key) =>
-        properties is not null && properties.TryGetValue(key, out var value) && value switch
-        {
-            bool flag => flag,
-            JsonElement { ValueKind: JsonValueKind.True } => true,
-            _ => false
-        };
-
-    private static string? RegisterFunctionCall(ref Dictionary<string, (string Name, string? ApiId)>? calls, FunctionCallContent call)
-    {
-        var apiId = GetFunctionCallApiId(call);
-        if (!string.IsNullOrEmpty(call.CallId) && !string.IsNullOrEmpty(call.Name))
-        {
-            (calls ??= new Dictionary<string, (string Name, string? ApiId)>(StringComparer.Ordinal))[call.CallId] =
-                (call.Name, apiId);
-        }
-
-        return apiId;
-    }
-
-    private static (string Name, string? ApiId) ResolveFunctionCall(Dictionary<string, (string Name, string? ApiId)>? calls, string callId) =>
-        !string.IsNullOrEmpty(callId) && calls is not null && calls.TryGetValue(callId, out var call)
+        // A call trimmed from the history no longer names the function, but an id created here still does.
+        var (name, id) = _functionCalls.TryGetValue(result.CallId, out var call)
             ? call
-            : (SynthesizedCallIdPattern().Match(callId) is { Success: true } match ? match.Groups[1].Value : callId, null);
+            : (CreatedCallId().Match(result.CallId) is { Success: true } match ? match.Groups[1].Value : result.CallId, null);
 
-    /// <summary>
-    /// Matches the ids <see cref="ChatResponseMapper"/> creates, so a result whose call was trimmed from the history keeps its function name.
-    /// </summary>
-    [GeneratedRegex("^(.+)_call_[0-9]+_[0-9a-f]{32}$")]
-    private static partial Regex SynthesizedCallIdPattern();
-
-    private static string? GetFunctionCallApiId(FunctionCallContent call)
-    {
-        if (GetBooleanProperty(call.AdditionalProperties, GeminiChatPropertyNames.SynthesizedCallId))
+        return new Part
         {
-            return null;
-        }
-
-        if (call.RawRepresentation is Part { FunctionCall: { } rawCall } && string.IsNullOrEmpty(rawCall.Id))
-        {
-            return null;
-        }
-
-        return string.IsNullOrEmpty(call.CallId) ? null : call.CallId;
+            FunctionResponse = new FunctionResponse
+            {
+                Id = id,
+                Name = name,
+                Response = ToolJsonConverter.ToResponseObject(result.Result, toolSerializerOptions)
+            }
+        };
     }
 }

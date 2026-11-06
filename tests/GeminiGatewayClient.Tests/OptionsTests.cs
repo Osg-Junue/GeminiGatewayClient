@@ -119,10 +119,16 @@ public class OptionsTests
     }
 
     [Fact]
+    public void StreamIdleTimeout_RejectsAValueTimersCannotHandle()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GeminiClientOptions { StreamIdleTimeout = TimeSpan.FromDays(60) });
+    }
+
+    [Fact]
     public async Task Endpoint_WithQueryParameters_PreservesQueryAfterAppendingModelAndOperation()
     {
         const string okJson = """{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"ok"}]}}]}""";
-        using var handler = new RecordingHandler(okJson, contentType: "text/event-stream");
+        using var handler = new RecordingHandler(okJson);
         using var httpClient = new HttpClient(handler);
         using var client = new GeminiClient(new GeminiClientOptions
         {
@@ -206,20 +212,6 @@ public class OptionsTests
 
         using var provider = services.BuildServiceProvider();
         Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IGeminiClient>());
-    }
-
-    [Fact]
-    public void GeminiClientOptions_DefaultStreamIdleTimeout_IsTwoMinutes_AndSettersValidateEagerly()
-    {
-        var options = new GeminiClientOptions();
-        Assert.Equal(TimeSpan.FromMinutes(2), options.StreamIdleTimeout);
-
-        Assert.Throws<ArgumentNullException>(() => options.Endpoint = null!);
-        Assert.Throws<ArgumentException>(() => options.ApiKeyHeader = "   ");
-        Assert.Throws<ArgumentNullException>(() => options.AdditionalHeaders = null!);
-        Assert.Throws<ArgumentOutOfRangeException>(() => options.Timeout = TimeSpan.Zero);
-        Assert.Throws<ArgumentOutOfRangeException>(() => options.StreamIdleTimeout = TimeSpan.FromSeconds(-2));
-        Assert.Throws<ArgumentOutOfRangeException>(() => options.StreamingFormat = (GeminiStreamingFormat)999);
     }
 
     [Fact]
@@ -308,40 +300,6 @@ public class OptionsTests
     }
 
     [Fact]
-    public void GeminiClientOptions_ToString_And_RedactedEndpoint_MaskSensitiveQueryParameters()
-    {
-        var options = new GeminiClientOptions
-        {
-            Endpoint = new Uri("https://generativelanguage.googleapis.com/v1beta?api-version=2026-01-01&key=AIzaSySuperSecretKey999&access_token=BearerTok123&sig=MySig456#secretFragment"),
-            Model = DefaultModel
-        };
-
-        var text = options.ToString();
-        var redacted = options.RedactedEndpoint;
-
-        Assert.DoesNotContain("AIzaSySuperSecretKey999", text);
-        Assert.DoesNotContain("BearerTok123", text);
-        Assert.DoesNotContain("MySig456", text);
-        Assert.DoesNotContain("secretFragment", text);
-        Assert.Contains("api-version=2026-01-01", text);
-        Assert.Contains("key=***", text);
-        Assert.Contains("access_token=***", text);
-        Assert.Contains("sig=***", text);
-        Assert.Contains("#***", redacted);
-
-        var userInfoAndFragmentOnly = new GeminiClientOptions
-        {
-            Endpoint = new Uri("https://svcUser:TopSecretPass@gateway.example.com/v1beta#fragmentToken789"),
-            Model = DefaultModel
-        };
-        var userInfoText = userInfoAndFragmentOnly.ToString();
-        Assert.DoesNotContain("svcUser", userInfoText);
-        Assert.DoesNotContain("TopSecretPass", userInfoText);
-        Assert.DoesNotContain("fragmentToken789", userInfoText);
-        Assert.Equal("https://***@gateway.example.com/v1beta#***", userInfoAndFragmentOnly.RedactedEndpoint);
-    }
-
-    [Fact]
     public void AddGeminiClient_RegistersValidateOnStart_AndFailsFastViaStartupValidator()
     {
         var invalidServices = new ServiceCollection();
@@ -382,8 +340,7 @@ public class OptionsTests
                 ["Gemini:AdditionalHeaders:X-Environment"] = "production",
                 ["Gemini:Timeout"] = "00:03:30",
                 ["Gemini:StreamIdleTimeout"] = "00:01:15",
-                ["Gemini:AllowInsecureHttp"] = "true",
-                ["Gemini:StreamingFormat"] = "JsonArray"
+                ["Gemini:AllowInsecureHttp"] = "true"
             })
             .Build();
 
@@ -407,6 +364,18 @@ public class OptionsTests
         Assert.Equal(TimeSpan.FromMinutes(3.5), bound.Timeout);
         Assert.Equal(TimeSpan.FromSeconds(75), bound.StreamIdleTimeout);
         Assert.True(bound.AllowInsecureHttp);
-        Assert.Equal(GeminiStreamingFormat.JsonArray, bound.StreamingFormat);
+    }
+
+    [Fact]
+    public void GeminiClientOptions_DefaultStreamIdleTimeout_IsTwoMinutes_AndSettersValidateEagerly()
+    {
+        var options = new GeminiClientOptions();
+        Assert.Equal(TimeSpan.FromMinutes(2), options.StreamIdleTimeout);
+
+        Assert.Throws<ArgumentNullException>(() => options.Endpoint = null!);
+        Assert.Throws<ArgumentException>(() => options.ApiKeyHeader = "   ");
+        Assert.Throws<ArgumentNullException>(() => options.AdditionalHeaders = null!);
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Timeout = TimeSpan.Zero);
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.StreamIdleTimeout = TimeSpan.FromSeconds(-2));
     }
 }

@@ -1,6 +1,5 @@
 using System.Collections;
 using System.Collections.ObjectModel;
-using System.Reflection;
 using System.Text.Json;
 using GeminiGatewayClient.Chat;
 using GeminiGatewayClient.Models;
@@ -10,164 +9,16 @@ using Xunit;
 namespace GeminiGatewayClient.Tests;
 
 /// <summary>
-/// Adversarial empirical tests targeting Bug Patterns 1, 2, and 5:
-/// - Pattern 1 (0-based Index Off-by-one): non-streaming ChatResponseMapper.ToChatResponse with PartIndex = 0,
-///   multi-part candidates, multi-candidate responses (Candidate.Index = 0), and zero-length text segments.
-/// - Pattern 2 (Abstract Collection Types): ChatOptionsMapper.Apply when request.Tools is ReadOnlyCollection or array;
-///   ChatMessage.Contents when passed as custom non-list IEnumerable&lt;AIContent&gt;.
-/// - Pattern 5 (Mutation Safety on Cache Reuse): ChatRequestMapper.AreUnmodifiedArguments with case-insensitive
-///   keys ("CITY" vs wire "city"), dynamically added arguments, and mutated arguments.
+/// Chat mapping edge cases: collections of unusual types and arguments changed between turns.
 /// </summary>
-public sealed class AdversarialBugHuntPatterns125Tests
+public sealed class ChatEdgeCaseTests
 {
     private const string DefaultModel = "gemini-2.5-flash";
-
-    private static readonly MethodInfo AreUnmodifiedArgumentsMethod = typeof(ChatRequestMapper)
-        .GetMethod("AreUnmodifiedArguments", BindingFlags.NonPublic | BindingFlags.Static)!;
-
-    private static bool InvokeAreUnmodifiedArguments(IDictionary<string, object?> arguments, JsonElement? rawArgs) =>
-        (bool)AreUnmodifiedArgumentsMethod.Invoke(null, [arguments, rawArgs])!;
 
     #region 1. Pattern 1: 0-based Index Off-by-One Verification
 
     [Fact]
-    public void Pattern1_NonStreaming_MultiPartCandidate_PartIndexZero_AttachesGroundingToPartZeroOnly()
-    {
-        var response = new GenerateContentResponse
-        {
-            Candidates =
-            [
-                new Candidate
-                {
-                    Index = 0,
-                    Content = new Content
-                    {
-                        Role = Role.Model,
-                        Parts =
-                        [
-                            Part.FromText("First paragraph content."),
-                            Part.FromText("Second paragraph content."),
-                            Part.FromText("Third paragraph content.")
-                        ]
-                    },
-                    GroundingMetadata = new GroundingMetadata
-                    {
-                        GroundingChunks =
-                        [
-                            new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/p0", Title = "Source P0" } }
-                        ],
-                        GroundingSupports =
-                        [
-                            new GroundingSupport
-                            {
-                                Segment = new GroundingSegment { PartIndex = 0, StartIndex = 0, EndIndex = 5, Text = "First" },
-                                GroundingChunkIndices = [0]
-                            }
-                        ]
-                    }
-                }
-            ]
-        };
-
-        var chatResponse = ChatResponseMapper.ToChatResponse(response, DefaultModel);
-        var textContents = chatResponse.Messages[0].Contents.OfType<TextContent>().ToList();
-
-        Assert.Equal(3, textContents.Count);
-
-        // Part 0 (Index 0) MUST have the grounding citation
-        var p0Annotations = textContents[0].Annotations?.OfType<CitationAnnotation>().ToList();
-        Assert.NotNull(p0Annotations);
-        var p0Cite = Assert.Single(p0Annotations);
-        Assert.Equal("Source P0", p0Cite.Title);
-        Assert.Equal(new Uri("https://example.com/p0"), p0Cite.Url);
-        var p0Region = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(p0Cite.AnnotatedRegions!));
-        Assert.Equal(0, p0Region.StartIndex);
-        Assert.Equal(5, p0Region.EndIndex);
-
-        // Part 1 and Part 2 must NOT have annotations from Part 0
-        Assert.Null(textContents[1].Annotations);
-        Assert.Null(textContents[2].Annotations);
-    }
-
-    [Fact]
-    public void Pattern1_NonStreaming_MultiPartCandidate_PartIndexZeroAndNonZero_ResolveIndependently()
-    {
-        var response = new GenerateContentResponse
-        {
-            Candidates =
-            [
-                new Candidate
-                {
-                    Index = 0,
-                    Content = new Content
-                    {
-                        Role = Role.Model,
-                        Parts =
-                        [
-                            Part.FromText("Part0 text"),
-                            Part.FromText("Part1 text"),
-                            Part.FromText("Part2 text")
-                        ]
-                    },
-                    GroundingMetadata = new GroundingMetadata
-                    {
-                        GroundingChunks =
-                        [
-                            new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/0", Title = "Chunk 0" } },
-                            new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/1", Title = "Chunk 1" } },
-                            new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/2", Title = "Chunk 2" } }
-                        ],
-                        GroundingSupports =
-                        [
-                            new GroundingSupport
-                            {
-                                Segment = new GroundingSegment { PartIndex = 0, StartIndex = 0, EndIndex = 5, Text = "Part0" },
-                                GroundingChunkIndices = [0]
-                            },
-                            new GroundingSupport
-                            {
-                                Segment = new GroundingSegment { PartIndex = 1, StartIndex = 0, EndIndex = 5, Text = "Part1" },
-                                GroundingChunkIndices = [1]
-                            },
-                            new GroundingSupport
-                            {
-                                Segment = new GroundingSegment { PartIndex = 2, StartIndex = 0, EndIndex = 5, Text = "Part2" },
-                                GroundingChunkIndices = [2]
-                            }
-                        ]
-                    }
-                }
-            ]
-        };
-
-        var chatResponse = ChatResponseMapper.ToChatResponse(response, DefaultModel);
-        var textContents = chatResponse.Messages[0].Contents.OfType<TextContent>().ToList();
-        Assert.Equal(3, textContents.Count);
-
-        // Verify Part 0 -> Chunk 0
-        var p0Cite = Assert.Single(textContents[0].Annotations!.OfType<CitationAnnotation>());
-        Assert.Equal("Chunk 0", p0Cite.Title);
-        var r0 = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(p0Cite.AnnotatedRegions!));
-        Assert.Equal(0, r0.StartIndex);
-        Assert.Equal(5, r0.EndIndex);
-
-        // Verify Part 1 -> Chunk 1
-        var p1Cite = Assert.Single(textContents[1].Annotations!.OfType<CitationAnnotation>());
-        Assert.Equal("Chunk 1", p1Cite.Title);
-        var r1 = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(p1Cite.AnnotatedRegions!));
-        Assert.Equal(0, r1.StartIndex);
-        Assert.Equal(5, r1.EndIndex);
-
-        // Verify Part 2 -> Chunk 2
-        var p2Cite = Assert.Single(textContents[2].Annotations!.OfType<CitationAnnotation>());
-        Assert.Equal("Chunk 2", p2Cite.Title);
-        var r2 = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(p2Cite.AnnotatedRegions!));
-        Assert.Equal(0, r2.StartIndex);
-        Assert.Equal(5, r2.EndIndex);
-    }
-
-    [Fact]
-    public void Pattern1_NonStreaming_MultiCandidateResponse_CandidateIndexZero_MappedToPrimaryMessage()
+    public void NonStreaming_MultiCandidateResponse_CandidateIndexZero_MappedToPrimaryMessage()
     {
         var candidate0 = new Candidate
         {
@@ -228,7 +79,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern1_NonStreaming_MultiCandidateResponse_ArrayCollection_PreservesCandidateZero()
+    public void NonStreaming_MultiCandidateResponse_ArrayCollection_PreservesCandidateZero()
     {
         var candidate0 = new Candidate
         {
@@ -255,7 +106,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern1_NonStreaming_ZeroLengthSegment_AsciiText_GeneratesZeroSpanRegion()
+    public void NonStreaming_ZeroLengthSegment_AsciiText_GeneratesZeroSpanRegion()
     {
         var response = new GenerateContentResponse
         {
@@ -291,7 +142,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern1_NonStreaming_ZeroLengthSegment_MidString_GeneratesZeroSpanRegionAtOffset()
+    public void NonStreaming_ZeroLengthSegment_MidString_GeneratesZeroSpanRegionAtOffset()
     {
         var response = new GenerateContentResponse
         {
@@ -327,7 +178,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern1_NonStreaming_ZeroLengthSegment_Utf8MultiByte_GeneratesZeroSpanRegion()
+    public void NonStreaming_ZeroLengthSegment_Utf8MultiByte_GeneratesZeroSpanRegion()
     {
         var response = new GenerateContentResponse
         {
@@ -363,44 +214,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern1_NonStreaming_ZeroLengthSegment_EmptyText_GeneratesZeroSpanRegion()
-    {
-        var response = new GenerateContentResponse
-        {
-            Candidates =
-            [
-                new Candidate
-                {
-                    Index = 0,
-                    Content = new Content { Role = Role.Model, Parts = [Part.FromText("")] },
-                    GroundingMetadata = new GroundingMetadata
-                    {
-                        GroundingChunks = [new GroundingChunk { Web = new GroundingChunkWeb { Uri = "https://example.com/empty", Title = "Empty Source" } }],
-                        GroundingSupports =
-                        [
-                            new GroundingSupport
-                            {
-                                Segment = new GroundingSegment { PartIndex = 0, StartIndex = 0, EndIndex = 0, Text = "" },
-                                GroundingChunkIndices = [0]
-                            }
-                        ]
-                    }
-                }
-            ]
-        };
-
-        var chatResponse = ChatResponseMapper.ToChatResponse(response, DefaultModel);
-        var tc = Assert.IsType<TextContent>(Assert.Single(chatResponse.Messages[0].Contents));
-        Assert.Equal("", tc.Text);
-        var cite = Assert.Single(tc.Annotations!.OfType<CitationAnnotation>());
-        var region = Assert.IsType<TextSpanAnnotatedRegion>(Assert.Single(cite.AnnotatedRegions!));
-
-        Assert.Equal(0, region.StartIndex);
-        Assert.Equal(0, region.EndIndex);
-    }
-
-    [Fact]
-    public void Pattern1_NonStreaming_ZeroLengthSegment_CitationMetadata_GeneratesZeroSpanRegion()
+    public void NonStreaming_ZeroLengthSegment_CitationMetadata_GeneratesZeroSpanRegion()
     {
         var response = new GenerateContentResponse
         {
@@ -437,7 +251,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern1_NonStreaming_ZeroLengthSegment_UnattachedGroundingSupport_GeneratesZeroSpanRegion()
+    public void NonStreaming_ZeroLengthSegment_UnattachedGroundingSupport_GeneratesZeroSpanRegion()
     {
         var response = new GenerateContentResponse
         {
@@ -475,7 +289,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     #region 2. Pattern 2: Abstract Collection Types Verification
 
     [Fact]
-    public void Pattern2_ChatOptionsMapper_RequestToolsReadOnlyCollection_AppendsNewToolWithoutMutationError()
+    public void ChatOptionsMapper_RequestToolsReadOnlyCollection_AppendsNewToolWithoutMutationError()
     {
         var existingTool = new Tool { CodeExecution = new CodeExecutionTool() };
         var readOnlyTools = new ReadOnlyCollection<Tool>(new List<Tool> { existingTool });
@@ -502,7 +316,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern2_ChatOptionsMapper_RequestToolsArray_AppendsNewToolSuccessfully()
+    public void ChatOptionsMapper_RequestToolsArray_AppendsNewToolSuccessfully()
     {
         var existingTool = new Tool { CodeExecution = new CodeExecutionTool() };
         var toolArray = new Tool[] { existingTool };
@@ -528,7 +342,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern2_ChatOptionsMapper_ReadOnlyFunctionDeclarations_ReplacesAndAppendsDeclaration()
+    public void ChatOptionsMapper_ReadOnlyFunctionDeclarations_ReplacesAndAppendsDeclaration()
     {
         var existingFunc = new FunctionDeclaration { Name = "fn_one" };
         var readOnlyDecls = new ReadOnlyCollection<FunctionDeclaration>(new List<FunctionDeclaration> { existingFunc });
@@ -554,7 +368,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern2_ChatOptionsMapper_ArrayFunctionDeclarations_AppendsDeclaration()
+    public void ChatOptionsMapper_ArrayFunctionDeclarations_AppendsDeclaration()
     {
         var existingFunc = new FunctionDeclaration { Name = "fn_one" };
         var declArray = new FunctionDeclaration[] { existingFunc };
@@ -580,7 +394,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern2_ChatOptionsMapper_OptionsToolsReadOnlyCollection_MapsAllTools()
+    public void ChatOptionsMapper_OptionsToolsReadOnlyCollection_MapsAllTools()
     {
         var options = new ChatOptions
         {
@@ -601,7 +415,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern2_ChatOptionsMapper_OptionsToolsArray_MapsAllTools()
+    public void ChatOptionsMapper_OptionsToolsArray_MapsAllTools()
     {
         var options = new ChatOptions
         {
@@ -622,7 +436,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern2_ChatMessageContents_CustomNonListEnumerable_MapsAllParts()
+    public void ChatMessageContents_CustomNonListEnumerable_MapsAllParts()
     {
         var customContents = new CustomAIContentCollection(
         [
@@ -646,7 +460,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern2_ChatMessageContents_CustomReadOnlyCollection_ConsecutiveMessagesMerged()
+    public void ChatMessageContents_CustomReadOnlyCollection_ConsecutiveMessagesMerged()
     {
         var msg1Contents = new CustomReadOnlyAIContentCollection([new TextContent("Message 1 text")]);
         var msg2Contents = new CustomReadOnlyAIContentCollection([new TextContent("Message 2 text")]);
@@ -665,37 +479,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern2_ChatMessageContents_MergingWithReadOnlyParts_ReplacesWithMutableList()
-    {
-        var template = new GenerateContentRequest
-        {
-            Contents =
-            [
-                new Content
-                {
-                    Role = Role.User,
-                    Parts = new ReadOnlyCollection<Part>([Part.FromText("Initial readonly part")])
-                }
-            ]
-        };
-
-        var options = new ChatOptions
-        {
-            RawRepresentationFactory = _ => template
-        };
-
-        var incoming = new ChatMessage(ChatRole.User, "Appended text from user");
-        var request = ChatRequestMapper.ToRequest([incoming], options, client: null!, DefaultModel, JsonSerializerOptions.Default);
-
-        Assert.Single(request.Contents);
-        var parts = request.Contents[0].Parts;
-        Assert.Equal(2, parts.Count);
-        Assert.Equal("Initial readonly part", parts[0].Text);
-        Assert.Equal("Appended text from user", parts[1].Text);
-    }
-
-    [Fact]
-    public void Pattern2_ChatRequestMapper_LazyMessagesEnumerable_MapsAllMessages()
+    public void ChatRequestMapper_LazyMessagesEnumerable_MapsAllMessages()
     {
         static IEnumerable<ChatMessage> CreateLazyMessages()
         {
@@ -720,7 +504,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     #region 3. Pattern 5: Mutation Safety on Cache Reuse Verification
 
     [Fact]
-    public void Pattern5_AreUnmodifiedArguments_CaseInsensitiveKeyMismatch_ReturnsFalseAndReSerializesWithUserCasing()
+    public void ReplayedArguments_CaseInsensitiveKeyMismatch_ReturnsFalseAndReSerializesWithUserCasing()
     {
         using var rawDoc = JsonDocument.Parse("""{"city":"Tokyo"}""");
         var rawArgs = rawDoc.RootElement.Clone();
@@ -778,7 +562,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern5_AreUnmodifiedArguments_DynamicallyAddedArgument_BypassesCacheAndSerializesAllArguments()
+    public void ReplayedArguments_DynamicallyAddedArgument_BypassesCacheAndSerializesAllArguments()
     {
         using var rawDoc = JsonDocument.Parse("""{"city":"Tokyo"}""");
         var rawArgs = rawDoc.RootElement.Clone();
@@ -833,7 +617,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern5_AreUnmodifiedArguments_DynamicallyAddedJsonElementArgument_BypassesCache()
+    public void ReplayedArguments_DynamicallyAddedJsonElementArgument_BypassesCache()
     {
         using var rawDoc = JsonDocument.Parse("""{"city":"Tokyo"}""");
         var rawArgs = rawDoc.RootElement.Clone();
@@ -887,7 +671,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern5_AreUnmodifiedArguments_MutatedJsonElementValue_BypassesCache()
+    public void ReplayedArguments_MutatedJsonElementValue_BypassesCache()
     {
         using var rawDoc = JsonDocument.Parse("""{"city":"Tokyo"}""");
         var rawArgs = rawDoc.RootElement.Clone();
@@ -937,7 +721,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern5_AreUnmodifiedArguments_MutatedClrObjectValue_BypassesCache()
+    public void ReplayedArguments_MutatedClrObjectValue_BypassesCache()
     {
         using var rawDoc = JsonDocument.Parse("""{"city":"Tokyo"}""");
         var rawArgs = rawDoc.RootElement.Clone();
@@ -987,7 +771,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern5_AreUnmodifiedArguments_RemovedArgument_BypassesCache()
+    public void ReplayedArguments_RemovedArgument_BypassesCache()
     {
         using var rawDoc = JsonDocument.Parse("""{"city":"Tokyo","units":"metric"}""");
         var rawArgs = rawDoc.RootElement.Clone();
@@ -1039,7 +823,7 @@ public sealed class AdversarialBugHuntPatterns125Tests
     }
 
     [Fact]
-    public void Pattern5_AreUnmodifiedArguments_UnmodifiedArguments_ReusesCachedRawArgs()
+    public void ReplayedArguments_UnmodifiedArguments_ReusesCachedRawArgs()
     {
         using var rawDoc = JsonDocument.Parse("""{"city":"Tokyo","units":"metric"}""");
         var rawArgs = rawDoc.RootElement.Clone();
@@ -1083,66 +867,6 @@ public sealed class AdversarialBugHuntPatterns125Tests
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
         Assert.NotNull(replayedCall.Args);
         Assert.True(JsonElement.DeepEquals(rawArgs, replayedCall.Args.Value));
-    }
-
-    [Fact]
-    public void Pattern5_AreUnmodifiedArguments_DirectReflectionAudit_ValidatesAllEdgeCases()
-    {
-        using var wireDoc = JsonDocument.Parse("""{"city":"Tokyo"}""");
-        var wireArgs = wireDoc.RootElement.Clone();
-        var jsonTokyo = wireArgs.GetProperty("city").Clone();
-
-        using var kyotoDoc = JsonDocument.Parse("\"Kyoto\"");
-        var jsonKyoto = kyotoDoc.RootElement.Clone();
-
-        using var arrayDoc = JsonDocument.Parse("[]");
-        var jsonArray = arrayDoc.RootElement.Clone();
-
-        using var emptyObjDoc = JsonDocument.Parse("{}");
-        var jsonEmptyObj = emptyObjDoc.RootElement.Clone();
-
-        // 1. Exact match -> TRUE
-        var exactDict = new Dictionary<string, object?> { ["city"] = jsonTokyo };
-        Assert.True(InvokeAreUnmodifiedArguments(exactDict, wireArgs));
-
-        // 2. Case-insensitive key mismatch ("CITY" vs "city") -> FALSE
-        var caseMismatchDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["CITY"] = jsonTokyo };
-        Assert.False(InvokeAreUnmodifiedArguments(caseMismatchDict, wireArgs));
-
-        // 3. Dynamically added key (2 keys vs 1 property) -> FALSE
-        var addedKeyDict = new Dictionary<string, object?> { ["city"] = jsonTokyo, ["extra"] = jsonTokyo };
-        Assert.False(InvokeAreUnmodifiedArguments(addedKeyDict, wireArgs));
-
-        // 4. Removed key (0 keys vs 1 property) -> FALSE
-        var removedKeyDict = new Dictionary<string, object?>();
-        Assert.False(InvokeAreUnmodifiedArguments(removedKeyDict, wireArgs));
-
-        // 5. Non-JsonElement value (plain string "Tokyo") -> FALSE
-        var nonJsonElementDict = new Dictionary<string, object?> { ["city"] = "Tokyo" };
-        Assert.False(InvokeAreUnmodifiedArguments(nonJsonElementDict, wireArgs));
-
-        // 6. Mutated JsonElement value ("Kyoto" vs "Tokyo") -> FALSE
-        var mutatedValDict = new Dictionary<string, object?> { ["city"] = jsonKyoto };
-        Assert.False(InvokeAreUnmodifiedArguments(mutatedValDict, wireArgs));
-
-        // 7. Value is null -> FALSE
-        var nullValDict = new Dictionary<string, object?> { ["city"] = null };
-        Assert.False(InvokeAreUnmodifiedArguments(nullValDict, wireArgs));
-
-        // 8. RawArgs is null -> FALSE
-        Assert.False(InvokeAreUnmodifiedArguments(exactDict, null));
-
-        // 9. RawArgs is undefined (default) -> FALSE
-        Assert.False(InvokeAreUnmodifiedArguments(exactDict, default(JsonElement)));
-
-        // 10. RawArgs is an Array (not Object) -> FALSE
-        Assert.False(InvokeAreUnmodifiedArguments(exactDict, jsonArray));
-
-        // 11. Empty dict vs Empty Object -> TRUE
-        Assert.True(InvokeAreUnmodifiedArguments(new Dictionary<string, object?>(), jsonEmptyObj));
-
-        // 12. Empty dict vs 1-prop Object -> FALSE
-        Assert.False(InvokeAreUnmodifiedArguments(new Dictionary<string, object?>(), wireArgs));
     }
 
     #endregion

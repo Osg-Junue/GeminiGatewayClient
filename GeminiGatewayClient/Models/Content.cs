@@ -89,21 +89,4 @@ public sealed class Content
 
         return null;
     }
-
-    internal Content Clone()
-    {
-        // Null elements are kept so request validation reports them instead of the clone silently dropping them.
-        var clonedParts = new List<Part>(Parts.Count);
-        foreach (var part in Parts)
-        {
-            clonedParts.Add(part?.Clone()!);
-        }
-
-        return new Content
-        {
-            Role = Role,
-            Parts = clonedParts,
-            ExtensionData = ExtensionData is not null ? new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal) : null
-        };
-    }
 }

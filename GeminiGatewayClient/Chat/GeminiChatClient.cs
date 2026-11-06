@@ -110,20 +110,14 @@ public sealed class GeminiChatClient : IChatClient
         string? model,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var stream = new ChatResponseMapper.StreamState();
-        GenerateContentResponse? lastUsageChunk = null;
+        var mapper = new ChatStreamMapper(model);
 
         await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (chunk.UsageMetadata is not null)
-            {
-                lastUsageChunk = chunk;
-            }
-
-            yield return ChatResponseMapper.ToChatResponseUpdate(chunk, model, stream);
+            yield return mapper.ToUpdate(chunk);
         }
 
-        if (ChatResponseMapper.ToUsageUpdate(lastUsageChunk, model) is { } usageUpdate)
+        if (mapper.ToUsageUpdate() is { } usageUpdate)
         {
             yield return usageUpdate;
         }

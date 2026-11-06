@@ -3,15 +3,16 @@ using System.Collections;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Microsoft.Extensions.AI;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace GeminiGatewayClient.Chat;
 
 /// <summary>
 /// Converts function-call arguments and function results between <c>Microsoft.Extensions.AI</c> object graphs and the
-/// JSON objects required by Gemini. System.Text.Json does the work whenever type metadata exists, so custom converters
-/// and naming policies apply. Plain dictionaries and sequences without metadata, which are common under Native AOT,
-/// are written structurally.
+/// JSON objects required by Gemini. Dictionaries and sequences are walked element by element, because under Native AOT
+/// metadata for a collection says nothing about what it holds at run time. Everything else goes to System.Text.Json, so
+/// custom converters and options apply to each value.
 /// </summary>
 internal static class ToolJsonConverter
 {
@@ -21,22 +22,13 @@ internal static class ToolJsonConverter
     /// Converts function-call arguments to a JSON object, or <c>null</c> when there are none.
     /// </summary>
     public static JsonElement? ToArguments(IDictionary<string, object?>? arguments, JsonSerializerOptions options) =>
-        arguments is null ? null : ToJsonElement(arguments, options);
+        arguments is null ? null : ToElement(writer => WriteObject(writer, arguments, options));
 
     /// <summary>
     /// Converts an arbitrary value into a <see cref="JsonElement"/>.
     /// </summary>
-    public static JsonElement ToJsonElement(object? value, JsonSerializerOptions options)
-    {
-        var buffer = new ArrayBufferWriter<byte>(256);
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            WriteValue(writer, value, options);
-        }
-
-        var reader = new Utf8JsonReader(buffer.WrittenSpan);
-        return JsonElement.ParseValue(ref reader);
-    }
+    public static JsonElement ToJsonElement(object? value, JsonSerializerOptions options) =>
+        ToElement(writer => WriteValue(writer, value, options));
 
     /// <summary>
     /// Converts a function result to the JSON object required by <c>functionResponse.response</c>.
@@ -47,7 +39,7 @@ internal static class ToolJsonConverter
         var element = ToJsonElement(result, options);
         return element.ValueKind == JsonValueKind.Object
             ? element
-            : ToJsonElement(new Dictionary<string, object?> { [ResultPropertyName] = element }, options);
+            : ToElement(writer => WriteObject(writer, [new(ResultPropertyName, element)], options));
     }
 
     /// <summary>
@@ -69,6 +61,33 @@ internal static class ToolJsonConverter
         return result;
     }
 
+    private static JsonElement ToElement(Action<Utf8JsonWriter> write)
+    {
+        var buffer = new ArrayBufferWriter<byte>(256);
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            write(writer);
+        }
+
+        var reader = new Utf8JsonReader(buffer.WrittenSpan);
+        return JsonElement.ParseValue(ref reader);
+    }
+
+    /// <summary>
+    /// Writes keys verbatim: they are parameter names, which a naming policy must not change.
+    /// </summary>
+    private static void WriteObject(Utf8JsonWriter writer, IEnumerable<KeyValuePair<string, object?>> properties, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        foreach (var (key, value) in properties)
+        {
+            writer.WritePropertyName(key);
+            WriteValue(writer, value, options);
+        }
+
+        writer.WriteEndObject();
+    }
+
     private static void WriteValue(Utf8JsonWriter writer, object? value, JsonSerializerOptions options)
     {
         switch (value)
@@ -85,10 +104,7 @@ internal static class ToolJsonConverter
                 node.WriteTo(writer);
                 break;
 
-            case not null when TrySerialize(writer, value, options):
-                break;
-
-            case not null when IsScalar(value) && TrySerialize(writer, value, AIJsonUtilities.DefaultOptions):
+            case not null when TrySerialize(writer, value, options) || TrySerialize(writer, value, ToolScalarContext.Default.Options):
                 break;
 
             case Enum enumValue:
@@ -96,14 +112,7 @@ internal static class ToolJsonConverter
                 break;
 
             case IEnumerable<KeyValuePair<string, object?>> pairs:
-                writer.WriteStartObject();
-                foreach (var (key, item) in pairs)
-                {
-                    writer.WritePropertyName(key);
-                    WriteValue(writer, item, options);
-                }
-
-                writer.WriteEndObject();
+                WriteObject(writer, pairs, options);
                 break;
 
             case IDictionary dictionary:
@@ -134,13 +143,11 @@ internal static class ToolJsonConverter
         }
     }
 
-    private static bool IsScalar(object value) =>
-        value is string or bool or decimal or Guid or DateTime or DateTimeOffset or DateOnly or TimeOnly or TimeSpan or Uri or byte[] ||
-        value.GetType().IsPrimitive;
-
     private static bool TrySerialize(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
     {
-        if (options.TypeInfoResolver is null || !options.TryGetTypeInfo(value.GetType(), out var typeInfo))
+        if (options.TypeInfoResolver is null ||
+            !options.TryGetTypeInfo(value.GetType(), out var typeInfo) ||
+            (typeInfo.Kind is JsonTypeInfoKind.Enumerable or JsonTypeInfoKind.Dictionary && options.ReferenceHandler is null))
         {
             return false;
         }
@@ -149,3 +156,30 @@ internal static class ToolJsonConverter
         return true;
     }
 }
+
+/// <summary>
+/// Metadata for the plain values a tool may return, available even when the caller's options do not describe them.
+/// </summary>
+[JsonSerializable(typeof(string))]
+[JsonSerializable(typeof(bool))]
+[JsonSerializable(typeof(byte))]
+[JsonSerializable(typeof(sbyte))]
+[JsonSerializable(typeof(short))]
+[JsonSerializable(typeof(ushort))]
+[JsonSerializable(typeof(int))]
+[JsonSerializable(typeof(uint))]
+[JsonSerializable(typeof(long))]
+[JsonSerializable(typeof(ulong))]
+[JsonSerializable(typeof(float))]
+[JsonSerializable(typeof(double))]
+[JsonSerializable(typeof(decimal))]
+[JsonSerializable(typeof(Guid))]
+[JsonSerializable(typeof(DateTime))]
+[JsonSerializable(typeof(DateTimeOffset))]
+[JsonSerializable(typeof(DateOnly))]
+[JsonSerializable(typeof(TimeOnly))]
+[JsonSerializable(typeof(TimeSpan))]
+[JsonSerializable(typeof(Uri))]
+[JsonSerializable(typeof(byte[]))]
+[JsonSerializable(typeof(ReadOnlyMemory<byte>))]
+internal sealed partial class ToolScalarContext : JsonSerializerContext;

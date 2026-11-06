@@ -261,52 +261,6 @@ public class GeminiClientTests
     }
 
     [Fact]
-    public async Task Stream_JsonArrayFormat_ParsesJsonArrayChunksWithoutAltSse()
-    {
-        const string streamJson = """
-            [
-              {
-                "candidates": [
-                  {
-                    "index": 0,
-                    "content": { "role": "model", "parts": [ { "text": "Hello " } ] }
-                  }
-                ]
-              },
-              {
-                "candidates": [
-                  {
-                    "index": 0,
-                    "content": { "role": "model", "parts": [ { "text": "world!" } ] },
-                    "finishReason": "STOP"
-                  }
-                ]
-              }
-            ]
-            """;
-
-        using var handler = new RecordingHandler(streamJson);
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key",
-            StreamingFormat = GeminiStreamingFormat.JsonArray
-        }, httpClient);
-
-        var chunks = new List<string?>();
-        await foreach (var chunk in client.StreamGenerateContentAsync("Hi"))
-        {
-            chunks.Add(chunk.Text);
-        }
-
-        Assert.Equal(["Hello ", "world!"], chunks);
-        Assert.Equal(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent",
-            handler.LastRequest?.RequestUri?.ToString());
-    }
-
-    [Fact]
     public async Task Stream_StalledResponse_ThrowsTimeoutExceptionAfterStreamIdleTimeout()
     {
         using var handler = new RecordingHandler((_, _) =>
@@ -366,76 +320,6 @@ public class GeminiClientTests
         }
 
         Assert.Equal(["Chunk 1", "Chunk 2"], received);
-    }
-
-    [Fact]
-    public async Task Stream_RawJsonErrorReturnedOnHttp200SseStream_ThrowsGeminiApiException()
-    {
-        const string rawJsonError = """
-            {
-              "error": {
-                "code": 503,
-                "message": "Backend unavailable mid-stream",
-                "status": "UNAVAILABLE"
-              }
-            }
-            """;
-
-        using var handler = new RecordingHandler(rawJsonError, HttpStatusCode.OK, contentType: "text/event-stream");
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key"
-        }, httpClient);
-
-        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
-        {
-            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
-            {
-            }
-        });
-
-        Assert.Equal("UNAVAILABLE", ex.ErrorStatus);
-        Assert.Equal("Backend unavailable mid-stream", ex.ErrorMessage);
-    }
-
-    [Fact]
-    public async Task Stream_RawJsonErrorAfterSseKeepAliveCommentAndEventField_ThrowsGeminiApiException()
-    {
-        const string keepAliveFollowedByRawJsonError = """
-            : keep-alive
-            event: message
-            retry: 3000
-
-            {
-              "error": {
-                "code": 502,
-                "message": "Bad gateway after initial keep-alive",
-                "status": "UNAVAILABLE"
-              }
-            }
-            """;
-
-        using var handler = new RecordingHandler(keepAliveFollowedByRawJsonError, HttpStatusCode.OK, contentType: "text/event-stream");
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key"
-        }, httpClient);
-
-        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
-        {
-            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
-            {
-            }
-        });
-
-        Assert.Equal(HttpStatusCode.BadGateway, ex.StatusCode);
-        Assert.True(ex.IsTransient);
-        Assert.Equal("UNAVAILABLE", ex.ErrorStatus);
-        Assert.Equal("Bad gateway after initial keep-alive", ex.ErrorMessage);
     }
 
     [Theory]
@@ -512,55 +396,6 @@ public class GeminiClientTests
     }
 
     [Fact]
-    public async Task ErrorStatus_FallsBackToHttpRetryAfterHeader_AndTruncatesOversizedBody()
-    {
-        var largeBody = new string('X', 80 * 1024);
-        using var handler = new RecordingHandler(
-            largeBody,
-            HttpStatusCode.ServiceUnavailable,
-            configureResponse: resp => resp.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(12)));
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key"
-        }, httpClient);
-
-        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("Hi"));
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, ex.StatusCode);
-        Assert.True(ex.IsTransient);
-        Assert.Equal(TimeSpan.FromSeconds(12), ex.RetryAfter);
-        Assert.NotNull(ex.ErrorContent);
-        Assert.Equal(64 * 1024, ex.ErrorContent.Length);
-    }
-
-    [Theory]
-    [InlineData(GeminiStreamingFormat.ServerSentEvents, "data: {not-valid-json}\n\n")]
-    [InlineData(GeminiStreamingFormat.JsonArray, "[{not-valid-json}]")]
-    public async Task Stream_MalformedJson_ThrowsGeminiApiExceptionWithInnerJsonException(
-        GeminiStreamingFormat format,
-        string badPayload)
-    {
-        using var handler = new RecordingHandler(badPayload);
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key",
-            StreamingFormat = format
-        }, httpClient);
-
-        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
-        {
-            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
-            {
-            }
-        });
-
-        Assert.IsAssignableFrom<JsonException>(ex.InnerException);
-    }
-
-    [Fact]
     public async Task Stream_HttpError_ThrowsGeminiApiException()
     {
         const string errorBody = """{"error":{"code":401,"message":"Invalid credentials","status":"UNAUTHENTICATED"}}""";
@@ -630,28 +465,6 @@ public class GeminiClientTests
     }
 
     [Fact]
-    public async Task GenerateContentAsync_StalledBodyAfterHeaders_ThrowsTimeoutExceptionAfterStreamIdleTimeout()
-    {
-        using var handler = new RecordingHandler((_, _) =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StallingStreamContent("{\"candidates\":[")
-            };
-            return Task.FromResult(response);
-        });
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key",
-            StreamIdleTimeout = TimeSpan.FromMilliseconds(150)
-        }, httpClient);
-
-        await Assert.ThrowsAsync<TimeoutException>(() => client.GenerateContentAsync("Hi"));
-    }
-
-    [Fact]
     public async Task GenerateContentAsync_MalformedJsonOnHttp200_IncludesRawBodyInErrorContent()
     {
         const string gatewayHtml = "<html><body>502 Bad Gateway</body></html>";
@@ -666,56 +479,6 @@ public class GeminiClientTests
         var ex = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("Hi"));
         Assert.IsAssignableFrom<JsonException>(ex.InnerException);
         Assert.Equal(gatewayHtml, ex.ErrorContent);
-    }
-
-    [Fact]
-    public async Task Stream_ErrorPayloadWithErrorPropertyNotFirst_ThrowsGeminiApiException()
-    {
-        const string sseErrorWithLeadingProp = """
-            data: {"id":"req-99","error":{"code":8,"message":"Quota exceeded","status":"RESOURCE_EXHAUSTED","details":[{"retryDelay":"500us"}]}}
-
-            """;
-
-        using var handler = new RecordingHandler(sseErrorWithLeadingProp, HttpStatusCode.OK, contentType: "text/event-stream");
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key"
-        }, httpClient);
-
-        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
-        {
-            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
-            {
-            }
-        });
-
-        Assert.Equal(HttpStatusCode.TooManyRequests, ex.StatusCode);
-        Assert.True(ex.IsTransient);
-        Assert.Equal("RESOURCE_EXHAUSTED", ex.ErrorStatus);
-        Assert.Equal("Quota exceeded", ex.ErrorMessage);
-        Assert.NotNull(ex.RetryAfter);
-    }
-
-    [Fact]
-    public async Task StreamIdleWatchdog_TimerExpiringInRaceWindowAfterReadCompletes_DoesNotCauseFalseTimeoutOnNextRead()
-    {
-        // Simulate the exact race where the idle timer fires after ReadAsync has returned bytes
-        // but before AfterRead(succeeded: true) runs in the finally block.
-        using var watchdog = new GeminiGatewayClient.Http.StreamIdleWatchdog(TimeSpan.FromMilliseconds(15), CancellationToken.None);
-
-        watchdog.BeforeRead();
-        await Task.Delay(40); // timer fires while read has conceptually just completed with data
-        watchdog.AfterRead(succeeded: true);
-
-        Assert.False(watchdog.HasTimedOut);
-        Assert.False(watchdog.Token.IsCancellationRequested);
-
-        // Next read must start with a fresh, uncancelled token
-        watchdog.BeforeRead();
-        Assert.False(watchdog.Token.IsCancellationRequested);
-        watchdog.AfterRead(succeeded: true);
     }
 
     [Fact]
@@ -819,42 +582,6 @@ public class GeminiClientTests
     }
 
     [Fact]
-    public async Task Stream_JsonArrayFormat_RawErrorObjectOnHttp200_PreservesGoogleErrorDetails()
-    {
-        const string rawJsonError = """
-            {
-              "error": {
-                "code": 8,
-                "message": "Quota exceeded on JsonArray stream",
-                "status": "RESOURCE_EXHAUSTED",
-                "details": [ { "retryDelay": "5s" } ]
-              }
-            }
-            """;
-
-        using var handler = new RecordingHandler(rawJsonError, HttpStatusCode.OK);
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key",
-            StreamingFormat = GeminiStreamingFormat.JsonArray
-        }, httpClient);
-
-        var ex = await Assert.ThrowsAsync<GeminiApiException>(async () =>
-        {
-            await foreach (var _ in client.StreamGenerateContentAsync("Hi"))
-            {
-            }
-        });
-
-        Assert.Equal(HttpStatusCode.TooManyRequests, ex.StatusCode);
-        Assert.Equal("RESOURCE_EXHAUSTED", ex.ErrorStatus);
-        Assert.Equal("Quota exceeded on JsonArray stream", ex.ErrorMessage);
-        Assert.Equal(TimeSpan.FromSeconds(5), ex.RetryAfter);
-    }
-
-    [Fact]
     public async Task DisposedClient_ThrowsObjectDisposedExceptionEagerly()
     {
         using var handler = new RecordingHandler(OkResponseJson);
@@ -869,43 +596,6 @@ public class GeminiClientTests
 
         await Assert.ThrowsAsync<ObjectDisposedException>(() => client.GenerateContentAsync("Hi"));
         Assert.Throws<ObjectDisposedException>(() => { _ = client.StreamGenerateContentAsync("Hi"); });
-    }
-
-    [Fact]
-    public async Task Stream_JsonArrayFormat_SlowReadNearIdleTimeout_ContinuesToYieldRemainingChunksWithoutDisposedTokenFailure()
-    {
-        const string chunk1 = "[{\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"First \"}]}}]},";
-        const string chunk2 = "{\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Second\"}]}," +
-                              "\"finishReason\":\"STOP\"}]}]";
-
-        using var handler = new RecordingHandler((_, _) =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new DelayedMultiChunkStreamContent(
-                    [Encoding.UTF8.GetBytes(chunk1), Encoding.UTF8.GetBytes(chunk2)],
-                    delayPerRead: TimeSpan.FromMilliseconds(45))
-            };
-            return Task.FromResult(response);
-        });
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key",
-            StreamingFormat = GeminiStreamingFormat.JsonArray,
-            // Idle timeout shorter than delayPerRead, but our test stream returns bytes without observing the inner token
-            // so the watchdog timer fires right before AfterRead(succeeded: true) and rotates the internal CTS.
-            StreamIdleTimeout = TimeSpan.FromMilliseconds(15)
-        }, httpClient);
-
-        var received = new List<string?>();
-        await foreach (var chunk in client.StreamGenerateContentAsync("Hi"))
-        {
-            received.Add(chunk.Text);
-        }
-
-        Assert.Equal(["First ", "Second"], received);
     }
 
     [Fact]
@@ -1040,62 +730,6 @@ public class GeminiClientTests
         Assert.NotNull(modelContent);
         Assert.Single(modelContent.Parts);
         Assert.Equal("Valid output", modelContent.Parts[0].Text);
-    }
-
-    [Fact]
-    public async Task ToModelContent_And_ToModelContentAsync_CoalesceThoughtsTextSignaturesAndToolCalls()
-    {
-        const string sse = """
-            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Step 1... ","thought":true}]}}]}
-
-            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Step 2.","thought":true,"thoughtSignature":"sig-thought"}]}}]}
-
-            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello "}]}}]}
-
-            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"world!"}]}}]}
-
-            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"","thoughtSignature":"sig-text"}]}}]}
-
-            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"get_weather","args":{"city":"Tokyo"}},"thoughtSignature":"sig-fc"}]}}]}
-
-            data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}
-
-            """;
-
-        using var handler = new RecordingHandler(sse, contentType: "text/event-stream");
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key"
-        }, httpClient);
-
-        var aggregatedAsync = await client.StreamGenerateContentAsync("Hi").ToModelContentAsync();
-        Assert.NotNull(aggregatedAsync);
-        Assert.Equal(Role.Model, aggregatedAsync.Role);
-        Assert.Equal(3, aggregatedAsync.Parts.Count);
-
-        Assert.True(aggregatedAsync.Parts[0].Thought);
-        Assert.Equal("Step 1... Step 2.", aggregatedAsync.Parts[0].Text);
-        Assert.Equal("sig-thought", aggregatedAsync.Parts[0].ThoughtSignature);
-
-        Assert.Null(aggregatedAsync.Parts[1].Thought);
-        Assert.Equal("Hello world!", aggregatedAsync.Parts[1].Text);
-        Assert.Equal("sig-text", aggregatedAsync.Parts[1].ThoughtSignature);
-
-        Assert.NotNull(aggregatedAsync.Parts[2].FunctionCall);
-        Assert.Equal("get_weather", aggregatedAsync.Parts[2].FunctionCall!.Name);
-        Assert.Equal("sig-fc", aggregatedAsync.Parts[2].ThoughtSignature);
-
-        // Synchronous ToModelContent on empty chunks returns null
-        GenerateContentResponse[] emptyChunks =
-        [
-            new GenerateContentResponse
-            {
-                Candidates = [new Candidate { Content = new Content { Role = Role.Model } }]
-            }
-        ];
-        Assert.Null(emptyChunks.ToModelContent());
     }
 
     [Fact]

@@ -162,32 +162,6 @@ public sealed class GenerationConfig
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
 
     /// <summary>
-    /// Creates a copy of this configuration with nested mutable objects cloned.
-    /// </summary>
-    internal GenerationConfig Clone()
-    {
-        var clone = (GenerationConfig)MemberwiseClone();
-        clone.ThinkingConfig = ThinkingConfig?.Clone();
-        clone.ResponseSchema = ResponseSchema?.Clone();
-        if (StopSequences is not null)
-        {
-            clone.StopSequences = [.. StopSequences];
-        }
-
-        if (ResponseModalities is not null)
-        {
-            clone.ResponseModalities = [.. ResponseModalities];
-        }
-
-        if (ExtensionData is not null)
-        {
-            clone.ExtensionData = new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
-        }
-
-        return clone;
-    }
-
-    /// <summary>
     /// Validates mutually exclusive settings and enum values.
     /// </summary>
     /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
