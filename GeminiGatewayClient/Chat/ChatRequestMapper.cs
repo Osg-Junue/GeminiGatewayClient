@@ -51,6 +51,7 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
     private static Part WithMetadata(Part part, Part? raw, string? signature)
     {
         part.ThoughtSignature = signature;
+        part.Thought ??= raw?.Thought;
         part.VideoMetadata = raw?.VideoMetadata;
         part.ExtensionData = raw?.ExtensionData;
 

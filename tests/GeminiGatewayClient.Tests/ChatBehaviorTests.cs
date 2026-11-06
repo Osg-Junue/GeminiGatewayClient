@@ -42,6 +42,37 @@ public class ChatBehaviorTests
         Assert.Equal(buffered.FinishReason, streamed.FinishReason);
     }
 
+    [Theory]
+    [InlineData("MALFORMED_FUNCTION_CALL")]
+    [InlineData("TOO_MANY_TOOL_CALLS")]
+    public async Task FunctionCall_FollowedByAFailureChunk_IsNotReportedAsToolCalls(string reason)
+    {
+        var sse = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"f\",\"args\":{}}}]}}]}\n\n" +
+                  "data: {\"candidates\":[{\"finishReason\":\"" + reason + "\"}]}\n\n";
+        using var handler = new RecordingHandler(sse, contentType: "text/event-stream");
+
+        var response = await CreateClient(handler).AsIChatClient().GetStreamingResponseAsync("hi").ToChatResponseAsync();
+
+        Assert.Null(response.FinishReason);
+    }
+
+    [Theory]
+    [InlineData("""{"thought":true,"thoughtSignature":"U0lH","inlineData":{"mimeType":"image/png","data":"AAEC"}}""", "inlineData")]
+    [InlineData("""{"thought":true,"inlineData":{"mimeType":"image/png","data":"AAEC"}}""", "inlineData")]
+    [InlineData("""{"thought":true,"executableCode":{"language":"PYTHON","code":"print(1)"}}""", "executableCode")]
+    [InlineData("""{"thought":true,"toolCall":{"id":"1"}}""", "toolCall")]
+    public async Task ThoughtPart_WithDataOfItsOwn_IsResentWithThatData(string part, string key)
+    {
+        using var handler = new RecordingHandler($$$"""{"candidates":[{"content":{"role":"model","parts":[{{{part}}},{"text":"answer"}]},"finishReason":"STOP"}]}""");
+        var first = await CreateClient(handler).AsIChatClient().GetResponseAsync("hi");
+
+        var parts = await SentParts([.. first.Messages, new ChatMessage(ChatRole.User, "next")], contentIndex: 0);
+
+        Assert.True(parts[0].TryGetProperty(key, out _));
+        Assert.True(parts[0].GetProperty("thought").GetBoolean());
+        Assert.False(parts[0].TryGetProperty("text", out _));
+    }
+
     [Fact]
     public async Task StandaloneSignaturePart_StaysSeparateFromTheTextBeforeIt()
     {

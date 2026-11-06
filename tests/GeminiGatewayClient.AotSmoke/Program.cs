@@ -32,6 +32,7 @@ Require(response.Messages[0].Contents[0].Annotations?.Count == 1, "citation");
 
 var streamed = await chat.GetStreamingResponseAsync("hi").ToChatResponseAsync();
 Require(streamed.Text == "hello", "streaming text");
+Require(handler.LastApiKey == "rotated-key", "custom API key header on a stream");
 
 // The format Gemini sends when a gateway does not forward alt=sse.
 var arrayClient = new GeminiClient(new GeminiClientOptions { Model = "gemini-2.5-flash" }, new HttpClient(new StubHandler { StreamAsJsonArray = true }));
@@ -85,6 +86,7 @@ catch (GeminiApiException error)
 
 var embedding = await client.AsIEmbeddingGenerator().GenerateAsync(["a"]);
 Require(embedding[0].Vector.Length == 2, "embedding");
+Require(handler.LastApiKey == "rotated-key", "custom API key header on an embedding");
 
 var services = new ServiceCollection();
 services.AddGeminiClient(options =>

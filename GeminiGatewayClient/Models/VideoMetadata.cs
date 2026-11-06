@@ -14,21 +14,18 @@ public sealed class VideoMetadata
     /// Optional. Start offset of the video clip to process.
     /// </summary>
     [JsonPropertyName("startOffset")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public VideoOffset? StartOffset { get; set; }
 
     /// <summary>
     /// Optional. End offset of the video clip to process.
     /// </summary>
     [JsonPropertyName("endOffset")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public VideoOffset? EndOffset { get; set; }
 
     /// <summary>
     /// Optional. Frame rate (frames per second) at which the video should be sampled.
     /// </summary>
     [JsonPropertyName("fps")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? Fps { get; set; }
 
     /// <summary>

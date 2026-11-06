@@ -45,6 +45,10 @@ The library is now much smaller: it favors plain code and the base class library
 - **`Part.FromBytes(byte[], string)` is removed.** The `ReadOnlySpan<byte>` overload accepts a `byte[]` and copies it. A `null` array now gives an empty part.
 - **Request bodies use the default JSON encoder**, which writes non-ASCII text as `\uXXXX` escapes. The content is the same, but Japanese text takes about twice the bytes.
 
+- **The prompt overloads of `GenerateContentAsync`, `StreamGenerateContentAsync`, and `EmbedContentAsync` take `model` second**, like the request overloads. Positional arguments after the prompt or text change meaning.
+- **An `error` value of any shape on a 2xx response throws `GeminiApiException`**, not only Google's object.
+- **A streamed `FinishReason` comes only from the chunk that ends the response**, so a failure after a function call is no longer reported as `ToolCalls`. A stream without any finish reason reports none.
+
 ### Added
 - `GeminiClientOptions.UseServerSentEvents`, for a gateway that rejects `alt=sse`. With `false`, the client sends what version 1.0.3 sent and reads the JSON array Gemini answers with.
 - `GeminiClient.CreateDefaultHandler()` is public, so a caller-supplied `HttpClient` can follow no redirects and store no cookies, like the clients this library creates.
@@ -52,6 +56,7 @@ The library is now much smaller: it favors plain code and the base class library
 - A Native AOT smoke test that CI publishes with warnings as errors and runs as a native binary.
 
 ### Fixed
+- A thought part with data of its own, such as an image or code, keeps that data in the chat history.
 - Streaming works when a gateway does not forward `alt=sse`, as in version 1.0.3, which read the JSON array Gemini sends in that case.
 - The handler this library creates no longer stores cookies, which one caller's gateway session could pass to the next caller.
 - A function schema without top-level `properties`, such as `additionalProperties` or `allOf` alone, is no longer dropped.
@@ -104,6 +109,10 @@ The library is now much smaller: it favors plain code and the base class library
 
 ## [2.1.0] - 2026-11-04
 
+- **The prompt overloads of `GenerateContentAsync`, `StreamGenerateContentAsync`, and `EmbedContentAsync` take `model` second**, like the request overloads. Positional arguments after the prompt or text change meaning.
+- **An `error` value of any shape on a 2xx response throws `GeminiApiException`**, not only Google's object.
+- **A streamed `FinishReason` comes only from the chunk that ends the response**, so a failure after a function call is no longer reported as `ToolCalls`. A stream without any finish reason reports none.
+
 ### Added
 - `GeminiClientOptions.UseServerSentEvents`, for a gateway that rejects `alt=sse`. With `false`, the client sends what version 1.0.3 sent and reads the JSON array Gemini answers with.
 - **Google Search grounding & URL context support (#10)**:
@@ -147,6 +156,10 @@ The library is now much smaller: it favors plain code and the base class library
 - Added failure mode and exception boundary tables, production deployment checklist, and API scope/compatibility notes to `README.md` and `docs/USAGE.md`.
 
 ## [2.0.0] - 2026-11-02
+
+- **The prompt overloads of `GenerateContentAsync`, `StreamGenerateContentAsync`, and `EmbedContentAsync` take `model` second**, like the request overloads. Positional arguments after the prompt or text change meaning.
+- **An `error` value of any shape on a 2xx response throws `GeminiApiException`**, not only Google's object.
+- **A streamed `FinishReason` comes only from the chunk that ends the response**, so a failure after a function call is no longer reported as `ToolCalls`. A stream without any finish reason reports none.
 
 ### Added
 - `GeminiClientOptions.UseServerSentEvents`, for a gateway that rejects `alt=sse`. With `false`, the client sends what version 1.0.3 sent and reads the JSON array Gemini answers with.

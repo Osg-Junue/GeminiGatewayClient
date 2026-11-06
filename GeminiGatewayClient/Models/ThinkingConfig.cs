@@ -20,7 +20,6 @@ public sealed class ThinkingConfig
     /// Mutually exclusive with <see cref="ThinkingLevel"/>.
     /// </summary>
     [JsonPropertyName("thinkingBudget")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? ThinkingBudget { get; set; }
 
     /// <summary>
@@ -28,14 +27,12 @@ public sealed class ThinkingConfig
     /// Mutually exclusive with <see cref="ThinkingBudget"/>.
     /// </summary>
     [JsonPropertyName("thinkingLevel")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ThinkingLevel? ThinkingLevel { get; set; }
 
     /// <summary>
     /// Optional. Indicates whether thought summaries should be included in the response parts.
     /// </summary>
     [JsonPropertyName("includeThoughts")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? IncludeThoughts { get; set; }
 
     /// <summary>

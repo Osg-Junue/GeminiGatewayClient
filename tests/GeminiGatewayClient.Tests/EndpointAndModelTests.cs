@@ -52,6 +52,25 @@ public class EndpointAndModelTests
     }
 
     [Fact]
+    public async Task PromptOverloads_TakeTheModelSecondLikeTheRequestOverloads()
+    {
+        using var handler = new RecordingHandler("""{"candidates":[],"embedding":{"values":[1]}}""");
+        using var client = new GeminiClient(new GeminiClientOptions { Model = "default" }, new HttpClient(handler));
+
+        await client.GenerateContentAsync("hi", "other-model");
+        Assert.Contains("/models/other-model:generateContent", handler.LastRequest!.RequestUri!.AbsoluteUri, StringComparison.Ordinal);
+
+        await foreach (var _ in client.StreamGenerateContentAsync("hi", "other-model"))
+        {
+        }
+
+        Assert.Contains("/models/other-model:streamGenerateContent", handler.LastRequest!.RequestUri!.AbsoluteUri, StringComparison.Ordinal);
+
+        await client.EmbedContentAsync("hi", "other-model");
+        Assert.Contains("/models/other-model:embedContent", handler.LastRequest!.RequestUri!.AbsoluteUri, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task BatchEmbedContents_BareModelOnAnItem_IsNormalizedOnTheWire()
     {
         using var handler = new RecordingHandler("""{"embeddings":[{"values":[1]}]}""");

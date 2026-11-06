@@ -14,7 +14,6 @@ public sealed class GenerateContentRequest
     /// Format: <c>cachedContents/{cachedContent}</c> or <c>projects/{project}/locations/{location}/cachedContents/{cachedContent}</c>.
     /// </summary>
     [JsonPropertyName("cachedContent")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CachedContent { get; set; }
 
     /// <summary>
@@ -29,14 +28,12 @@ public sealed class GenerateContentRequest
     /// <see cref="Content.Role"/> is ignored by the API.
     /// </summary>
     [JsonPropertyName("systemInstruction")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Content? SystemInstruction { get; set; }
 
     /// <summary>
     /// Optional. Configuration parameters that control generation behavior (temperature, token limits, structured output, etc.).
     /// </summary>
     [JsonPropertyName("generationConfig")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public GenerationConfig? GenerationConfig { get; set; }
 
     /// <summary>
@@ -44,28 +41,24 @@ public sealed class GenerateContentRequest
     /// See <see href="https://ai.google.dev/gemini-api/docs/function-calling"/>.
     /// </summary>
     [JsonPropertyName("tools")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IList<Tool>? Tools { get; set; }
 
     /// <summary>
     /// Optional. Configuration controlling how the model uses declared <see cref="Tools"/>.
     /// </summary>
     [JsonPropertyName("toolConfig")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ToolConfig? ToolConfig { get; set; }
 
     /// <summary>
     /// Optional. Per-category safety blocking thresholds applied to responses.
     /// </summary>
     [JsonPropertyName("safetySettings")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IList<SafetySetting>? SafetySettings { get; set; }
 
     /// <summary>
     /// Optional. Controls whether the request and response are stored by the service when conversation logging is supported.
     /// </summary>
     [JsonPropertyName("store")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Store { get; set; }
 
     /// <summary>
@@ -73,7 +66,6 @@ public sealed class GenerateContentRequest
     /// User-defined key/value metadata labels for billing and filtering on Vertex AI endpoints.
     /// </summary>
     [JsonPropertyName("labels")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IDictionary<string, string>? Labels { get; set; }
 
     /// <summary>

@@ -130,7 +130,8 @@ internal static class ChatResponseMapper
                 contents.Add(ToFunctionCallContent(part, call));
                 break;
 
-            case { Thought: true }:
+            // A thought with data of its own, even data this client does not model, is handled below.
+            case { Thought: true, HasNonTextData: false } when part is not { Text: null, ExtensionData.Count: > 0 }:
                 if (!string.IsNullOrEmpty(part.Text) || !string.IsNullOrEmpty(part.ThoughtSignature))
                 {
                     contents.Add(ToReasoningContent(part));

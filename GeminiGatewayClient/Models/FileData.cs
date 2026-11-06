@@ -13,7 +13,6 @@ public sealed class FileData
     /// Optional. IANA MIME type of the referenced file (see <see cref="MimeTypes"/> for common constants).
     /// </summary>
     [JsonPropertyName("mimeType")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MimeType { get; set; }
 
     /// <summary>

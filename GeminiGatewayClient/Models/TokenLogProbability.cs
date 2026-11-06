@@ -22,7 +22,6 @@ public sealed class TokenLogProbability
     /// Optional. The vocabulary token ID corresponding to <see cref="Token"/>.
     /// </summary>
     [JsonPropertyName("tokenId")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? TokenId { get; set; }
 
     /// <summary>

@@ -18,9 +18,9 @@ public static class GeminiClientExtensions
         /// Sends a single user prompt to <c>:generateContent</c> and returns the complete response.
         /// </summary>
         /// <param name="prompt">The user prompt text.</param>
+        /// <param name="model">The model to call, or <c>null</c> to use <see cref="IGeminiClient.DefaultModel"/>.</param>
         /// <param name="systemInstruction">Optional system instruction text.</param>
         /// <param name="generationConfig">Optional generation parameters.</param>
-        /// <param name="model">The model to call, or <c>null</c> to use <see cref="IGeminiClient.DefaultModel"/>.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>The parsed response.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
@@ -35,9 +35,9 @@ public static class GeminiClientExtensions
         /// </exception>
         public Task<GenerateContentResponse> GenerateContentAsync(
             string prompt,
+            string? model = null,
             string? systemInstruction = null,
             GenerationConfig? generationConfig = null,
-            string? model = null,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(client);
@@ -49,9 +49,9 @@ public static class GeminiClientExtensions
         /// Arguments are validated when this method is called, not on first enumeration.
         /// </summary>
         /// <param name="prompt">The user prompt text.</param>
+        /// <param name="model">The model to call, or <c>null</c> to use <see cref="IGeminiClient.DefaultModel"/>.</param>
         /// <param name="systemInstruction">Optional system instruction text.</param>
         /// <param name="generationConfig">Optional generation parameters.</param>
-        /// <param name="model">The model to call, or <c>null</c> to use <see cref="IGeminiClient.DefaultModel"/>.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>An async stream of response chunks.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
@@ -73,9 +73,9 @@ public static class GeminiClientExtensions
         /// </exception>
         public IAsyncEnumerable<GenerateContentResponse> StreamGenerateContentAsync(
             string prompt,
+            string? model = null,
             string? systemInstruction = null,
             GenerationConfig? generationConfig = null,
-            string? model = null,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(client);
@@ -86,10 +86,10 @@ public static class GeminiClientExtensions
         /// Sends a single text string to <c>:embedContent</c> and returns the embedding response.
         /// </summary>
         /// <param name="text">The text to embed.</param>
+        /// <param name="model">The embedding model to call, or <c>null</c> to use <see cref="IGeminiClient.DefaultEmbeddingModel"/>.</param>
         /// <param name="taskType">Optional downstream task type hint.</param>
         /// <param name="title">Optional document title (only valid when <paramref name="taskType"/> is <see cref="TaskType.RetrievalDocument"/>).</param>
         /// <param name="outputDimensionality">Optional reduced output dimension.</param>
-        /// <param name="model">The embedding model to call, or <c>null</c> to use <see cref="IGeminiClient.DefaultEmbeddingModel"/>.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>The parsed embedding response.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="client"/> or <paramref name="text"/> is <c>null</c>.</exception>
@@ -103,10 +103,10 @@ public static class GeminiClientExtensions
         /// </exception>
         public Task<EmbedContentResponse> EmbedContentAsync(
             string text,
+            string? model = null,
             TaskType? taskType = null,
             string? title = null,
             int? outputDimensionality = null,
-            string? model = null,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(client);

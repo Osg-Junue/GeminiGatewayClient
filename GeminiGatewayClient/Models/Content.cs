@@ -14,7 +14,6 @@ public sealed class Content
     /// Leave <c>null</c> for <see cref="GenerateContentRequest.SystemInstruction"/>; for single-turn requests the API treats a missing role as <see cref="Models.Role.User"/>.
     /// </summary>
     [JsonPropertyName("role")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Role? Role { get; set; }
 
     /// <summary>

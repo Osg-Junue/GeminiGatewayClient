@@ -7,8 +7,8 @@ namespace GeminiGatewayClient;
 /// Client for the Gemini content generation and embedding endpoints.
 /// <para>
 /// Depend on this interface (rather than <see cref="GeminiClient"/>) to substitute a fake in unit tests.
-/// Convenience overloads such as <see cref="GeminiClientExtensions.GenerateContentAsync(IGeminiClient, string, string?, GenerationConfig?, string?, CancellationToken)"/>,
-/// <see cref="GeminiClientExtensions.EmbedContentAsync(IGeminiClient, string, TaskType?, string?, int?, string?, CancellationToken)"/>,
+/// Convenience overloads such as <see cref="GeminiClientExtensions.GenerateContentAsync(IGeminiClient, string, string?, string?, GenerationConfig?, CancellationToken)"/>,
+/// <see cref="GeminiClientExtensions.EmbedContentAsync(IGeminiClient, string, string?, TaskType?, string?, int?, CancellationToken)"/>,
 /// <see cref="GeminiClientExtensions.AsIChatClient(IGeminiClient, string?, System.Text.Json.JsonSerializerOptions?)"/>, and
 /// <see cref="GeminiClientExtensions.AsIEmbeddingGenerator(IGeminiClient, string?, int?)"/> are provided as extension methods.
 /// </para>

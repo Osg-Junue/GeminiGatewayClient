@@ -26,21 +26,18 @@ public sealed class SafetyRating
     /// Optional. Numeric probability score (<c>0.0</c> to <c>1.0</c>) for <see cref="Category"/>.
     /// </summary>
     [JsonPropertyName("probabilityScore")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public float? ProbabilityScore { get; set; }
 
     /// <summary>
     /// Optional. Assessed severity of harm in <see cref="Category"/>.
     /// </summary>
     [JsonPropertyName("severity")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public HarmSeverity? Severity { get; set; }
 
     /// <summary>
     /// Optional. Numeric severity score (<c>0.0</c> to <c>1.0</c>) for <see cref="Category"/>.
     /// </summary>
     [JsonPropertyName("severityScore")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public float? SeverityScore { get; set; }
 
     /// <summary>

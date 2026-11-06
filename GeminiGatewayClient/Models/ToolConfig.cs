@@ -13,7 +13,6 @@ public sealed class ToolConfig
     /// Optional. Configuration for function calling behavior.
     /// </summary>
     [JsonPropertyName("functionCallingConfig")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public FunctionCallingConfig? FunctionCallingConfig { get; set; }
 
     /// <summary>

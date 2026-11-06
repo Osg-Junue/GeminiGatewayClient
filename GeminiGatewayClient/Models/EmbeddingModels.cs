@@ -16,7 +16,6 @@ public sealed class EmbedContentRequest
     /// Resource name of the model (<c>models/{model}</c>).
     /// </summary>
     [JsonPropertyName("model")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Model { get; set; }
 
     /// <summary>
@@ -29,21 +28,18 @@ public sealed class EmbedContentRequest
     /// Optional. Downstream task type for which the embedding will be used.
     /// </summary>
     [JsonPropertyName("taskType")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TaskType? TaskType { get; set; }
 
     /// <summary>
     /// Optional. Title for the text. Only applicable when <see cref="TaskType"/> is <see cref="Models.TaskType.RetrievalDocument"/>.
     /// </summary>
     [JsonPropertyName("title")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Title { get; set; }
 
     /// <summary>
     /// Optional. Reduced dimension for the output embedding. When set, must be a positive integer supported by the model.
     /// </summary>
     [JsonPropertyName("outputDimensionality")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? OutputDimensionality { get; set; }
 
     /// <summary>

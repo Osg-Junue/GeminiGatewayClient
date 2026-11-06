@@ -149,7 +149,7 @@ internal static class GeminiResponseReader
     private static JsonElement? FindError(IDictionary<string, JsonElement>? extensionData) =>
         extensionData is not null &&
         extensionData.TryGetValue("error", out var error) &&
-        error.ValueKind == JsonValueKind.Object
+        error.ValueKind != JsonValueKind.Null
             ? error
             : null;
 

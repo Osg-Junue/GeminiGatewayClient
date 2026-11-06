@@ -1,4 +1,6 @@
 using System.Net;
+using GeminiGatewayClient.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace GeminiGatewayClient.Tests;
@@ -85,6 +87,55 @@ public class GatewayCredentialTests
 
         Assert.Null(Header(request, GeminiClientOptions.DefaultApiKeyHeader));
         Assert.Equal("a", Header(request, "x-tenant"));
+    }
+
+    public static TheoryData<string> Operations => ["generate", "stream", "embed", "batch", "chat", "chat stream", "embedding generator"];
+
+    [Theory]
+    [MemberData(nameof(Operations))]
+    public async Task EveryOperation_SendsTheKeyInTheConfiguredHeader(string operation)
+    {
+        using var handler = new RecordingHandler("""{"candidates":[],"embedding":{"values":[1]},"embeddings":[{"values":[1]}]}""");
+        using var client = new GeminiClient(
+            new GeminiClientOptions
+            {
+                ApiKeyHeader = "x-gateway-key",
+                ApiKeyPrefix = "Bearer ",
+                ApiKeyProvider = _ => ValueTask.FromResult("rotated"),
+                Model = "gemini-2.5-flash"
+            },
+            new HttpClient(handler));
+
+        switch (operation)
+        {
+            case "generate":
+                await client.GenerateContentAsync("hi");
+                break;
+            case "stream":
+                await foreach (var _ in client.StreamGenerateContentAsync("hi"))
+                {
+                }
+
+                break;
+            case "embed":
+                await client.EmbedContentAsync("hi");
+                break;
+            case "batch":
+                await client.BatchEmbedContentsAsync(new BatchEmbedContentsRequest { Requests = [EmbedContentRequest.FromText("hi")] });
+                break;
+            case "chat":
+                await client.AsIChatClient().GetResponseAsync("hi");
+                break;
+            case "chat stream":
+                await client.AsIChatClient().GetStreamingResponseAsync("hi").ToChatResponseAsync();
+                break;
+            default:
+                await client.AsIEmbeddingGenerator().GenerateAsync(["hi"]);
+                break;
+        }
+
+        Assert.Equal("Bearer rotated", Header(handler.LastRequest!, "x-gateway-key"));
+        Assert.Null(Header(handler.LastRequest!, GeminiClientOptions.DefaultApiKeyHeader));
     }
 
     [Fact]

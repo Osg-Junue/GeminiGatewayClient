@@ -13,14 +13,12 @@ public sealed class ExecutableCode
     /// Gets or sets the programming language of the <see cref="Code"/>.
     /// </summary>
     [JsonPropertyName("language")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CodeExecutionLanguage? Language { get; set; }
 
     /// <summary>
     /// Gets or sets the code to be executed.
     /// </summary>
     [JsonPropertyName("code")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Code { get; set; }
 
     /// <summary>
@@ -39,14 +37,12 @@ public sealed class CodeExecutionResult
     /// Gets or sets the outcome of the code execution.
     /// </summary>
     [JsonPropertyName("outcome")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CodeExecutionOutcome? Outcome { get; set; }
 
     /// <summary>
     /// Gets or sets stdout when code execution succeeds, or stderr / diagnostic description when it fails.
     /// </summary>
     [JsonPropertyName("output")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Output { get; set; }
 
     /// <summary>

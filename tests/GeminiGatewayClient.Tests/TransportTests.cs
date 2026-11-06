@@ -414,6 +414,33 @@ public class TransportTests
     }
 
     [Fact]
+    public async Task Stream_ThatStallsBeforeTheFirstByte_ThrowsTimeoutException()
+    {
+        await Assert.ThrowsAsync<TimeoutException>(() => StreamTextsAsync(Stream(new StallingStream([])), TimeSpan.FromMilliseconds(100)));
+    }
+
+    [Theory]
+    [InlineData("""{"error":"quota exceeded"}""")]
+    [InlineData("""{"error":["quota exceeded"]}""")]
+    public async Task Generate_ErrorOfAnyShapeOnA2xx_IsAFailure(string body)
+    {
+        using var client = CreateClient(Body(body, "application/json"));
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync(Request()));
+
+        Assert.Contains("quota exceeded", error.ErrorMessage, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.InternalServerError, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task Generate_NullError_IsNotAFailure()
+    {
+        using var client = CreateClient(Body("""{"error":null,"candidates":[]}""", "application/json"));
+
+        Assert.Empty((await client.GenerateContentAsync(Request())).Candidates);
+    }
+
+    [Fact]
     public async Task Stream_WithoutServerSentEvents_SendsNoAltSseAndReadsTheArray()
     {
         using var handler = new RecordingHandler($"[{Chunk},{Chunk}]");

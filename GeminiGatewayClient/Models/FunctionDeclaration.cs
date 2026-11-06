@@ -24,7 +24,6 @@ public sealed class FunctionDeclaration
     /// Optional. Brief description of what the function does, used by the model to decide when to call it.
     /// </summary>
     [JsonPropertyName("description")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Description { get; set; }
 
     /// <summary>
@@ -32,7 +31,6 @@ public sealed class FunctionDeclaration
     /// Mutually exclusive with <see cref="ParametersJsonSchema"/>.
     /// </summary>
     [JsonPropertyName("parameters")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Schema? Parameters { get; set; }
 
     /// <summary>
@@ -41,7 +39,6 @@ public sealed class FunctionDeclaration
     /// Mutually exclusive with <see cref="Parameters"/>.
     /// </summary>
     [JsonPropertyName("parametersJsonSchema")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? ParametersJsonSchema { get; set; }
 
     /// <summary>
@@ -49,7 +46,6 @@ public sealed class FunctionDeclaration
     /// Mutually exclusive with <see cref="ResponseJsonSchema"/>.
     /// </summary>
     [JsonPropertyName("response")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Schema? Response { get; set; }
 
     /// <summary>
@@ -57,7 +53,6 @@ public sealed class FunctionDeclaration
     /// Mutually exclusive with <see cref="Response"/>.
     /// </summary>
     [JsonPropertyName("responseJsonSchema")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? ResponseJsonSchema { get; set; }
 
     /// <summary>
