@@ -34,7 +34,7 @@ internal static class GeminiResponseReader
 
             if (FindError(extensionDataSelector(response)) is { } error)
             {
-                throw GeminiErrorParser.FromErrorElement(error, ToBoundedString(utf8Json), statusCode);
+                throw GeminiErrorParser.FromErrorElement(error, ToBoundedString(utf8Json));
             }
 
             return response;
@@ -125,7 +125,7 @@ internal static class GeminiResponseReader
 
                 if (FindError(chunk.ExtensionData) is { } error)
                 {
-                    throw GeminiErrorParser.FromErrorElement(error, error.GetRawText(), statusCode);
+                    throw GeminiErrorParser.FromErrorElement(error, error.GetRawText());
                 }
 
                 yield return chunk;

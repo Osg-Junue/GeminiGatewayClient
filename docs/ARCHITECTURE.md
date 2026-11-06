@@ -161,7 +161,7 @@ classDiagram
     class GeminiErrorParser {
         <<internal static>>
         +FromResponseAsync(response, readTimeout, ct)$
-        +FromErrorElement(error, rawBody, status)$
+        +FromErrorElement(error, rawBody)$
     }
 
     class GeminiApiException {
