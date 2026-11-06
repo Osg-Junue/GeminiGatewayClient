@@ -16,7 +16,7 @@ namespace GeminiGatewayClient;
 public interface IGeminiClient
 {
     /// <summary>
-    /// The endpoint that model resources are resolved against.
+    /// The endpoint that model resources are resolved against, without a query string or user info, which may hold credentials.
     /// </summary>
     Uri Endpoint { get; }
 
@@ -32,12 +32,6 @@ public interface IGeminiClient
     string? DefaultEmbeddingModel => DefaultModel;
 
     /// <summary>
-    /// Serializer options for tool arguments and results (<see cref="GeminiClientOptions.ToolSerializerOptions"/>), or <c>null</c>.
-    /// A decorator should forward this so its chat client keeps the caller's options.
-    /// </summary>
-    JsonSerializerOptions? ToolSerializerOptions => null;
-
-    /// <summary>
     /// Calls <c>:generateContent</c> and returns the complete response.
     /// </summary>
     /// <param name="request">The request to send.</param>
@@ -45,15 +39,14 @@ public interface IGeminiClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed response.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="request"/> is invalid.</exception>
+    /// <exception cref="ArgumentException">The model has a relative path segment, or the key from the provider cannot be sent.</exception>
     /// <exception cref="InvalidOperationException">
-    /// No model was specified and <see cref="DefaultModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
-    /// returned an empty or invalid value.
+    /// No model was specified and <see cref="DefaultModel"/> is <c>null</c>.
     /// </exception>
     /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
     /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
     /// <exception cref="OperationCanceledException">
-    /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
+    /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> elapsed.
     /// </exception>
     Task<GenerateContentResponse> GenerateContentAsync(
         GenerateContentRequest request,
@@ -69,22 +62,21 @@ public interface IGeminiClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An async stream of response chunks.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="request"/> is invalid.</exception>
+    /// <exception cref="ArgumentException">The model has a relative path segment, or the key from the provider cannot be sent.</exception>
     /// <exception cref="InvalidOperationException">
-    /// No model was specified and <see cref="DefaultModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
-    /// returned an empty or invalid value during enumeration.
+    /// No model was specified and <see cref="DefaultModel"/> is <c>null</c>.
     /// </exception>
     /// <exception cref="GeminiApiException">
     /// Thrown during enumeration when the endpoint returns a non-2xx status, an in-stream <c>{"error": ...}</c> payload, or malformed JSON.
     /// </exception>
     /// <exception cref="TimeoutException">
-    /// Thrown during enumeration when no chunk data is received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
+    /// Thrown during enumeration when no data is received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
     /// </exception>
     /// <exception cref="HttpRequestException">
     /// Thrown during enumeration when a transport-level network or TLS failure occurs.
     /// </exception>
     /// <exception cref="OperationCanceledException">
-    /// Thrown during enumeration when <paramref name="cancellationToken"/> is canceled or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapses.
+    /// Thrown during enumeration when <paramref name="cancellationToken"/> is canceled or <see cref="HttpClient.Timeout"/> elapses.
     /// </exception>
     IAsyncEnumerable<GenerateContentResponse> StreamGenerateContentAsync(
         GenerateContentRequest request,
@@ -99,15 +91,14 @@ public interface IGeminiClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed embedding response.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="request"/> is invalid.</exception>
+    /// <exception cref="ArgumentException">The model has a relative path segment, or the key from the provider cannot be sent.</exception>
     /// <exception cref="InvalidOperationException">
-    /// No model was specified and <see cref="DefaultEmbeddingModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
-    /// returned an empty or invalid value.
+    /// No model was specified and <see cref="DefaultEmbeddingModel"/> is <c>null</c>.
     /// </exception>
     /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
     /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
     /// <exception cref="OperationCanceledException">
-    /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
+    /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> elapsed.
     /// </exception>
     Task<EmbedContentResponse> EmbedContentAsync(
         EmbedContentRequest request,
@@ -124,15 +115,14 @@ public interface IGeminiClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed batch embedding response.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="request"/> is invalid.</exception>
+    /// <exception cref="ArgumentException">The model has a relative path segment, or the key from the provider cannot be sent.</exception>
     /// <exception cref="InvalidOperationException">
-    /// No model was specified and <see cref="DefaultEmbeddingModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
-    /// returned an empty or invalid value.
+    /// No model was specified and <see cref="DefaultEmbeddingModel"/> is <c>null</c>.
     /// </exception>
     /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
     /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
     /// <exception cref="OperationCanceledException">
-    /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
+    /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> elapsed.
     /// </exception>
     Task<BatchEmbedContentsResponse> BatchEmbedContentsAsync(
         BatchEmbedContentsRequest request,

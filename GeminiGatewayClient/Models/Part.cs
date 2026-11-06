@@ -108,17 +108,6 @@ public sealed class Part
         (ExtensionData is null || ExtensionData.Count == 0);
 
     /// <summary>
-    /// <c>true</c> when no data, metadata, or extension field is set on this part.
-    /// </summary>
-    internal bool IsEmpty =>
-        Text is null &&
-        Thought is null &&
-        ThoughtSignature is null &&
-        !HasNonTextData &&
-        VideoMetadata is null &&
-        (ExtensionData is null || ExtensionData.Count == 0);
-
-    /// <summary>
     /// Creates a text part.
     /// </summary>
     /// <param name="text">The text content.</param>
@@ -127,20 +116,6 @@ public sealed class Part
     {
         ArgumentNullException.ThrowIfNull(text);
         return new Part { Text = text };
-    }
-
-    /// <summary>
-    /// Creates an inline media part without copying the underlying byte array.
-    /// Prefer <see cref="FromUri"/> (Files API) for payloads larger than about 20 MB.
-    /// </summary>
-    /// <param name="data">The raw media bytes.</param>
-    /// <param name="mimeType">The IANA MIME type of <paramref name="data"/> (see <see cref="MimeTypes"/>).</param>
-    /// <returns>A new <see cref="Part"/>.</returns>
-    public static Part FromBytes(byte[] data, string mimeType)
-    {
-        ArgumentNullException.ThrowIfNull(data);
-        ArgumentException.ThrowIfNullOrWhiteSpace(mimeType);
-        return new Part { InlineData = new Blob { MimeType = mimeType, Data = data } };
     }
 
     /// <summary>
@@ -183,79 +158,5 @@ public sealed class Part
         }
 
         return new Part { FunctionResponse = new FunctionResponse { Name = name, Response = response, Id = id } };
-    }
-
-    /// <summary>
-    /// Returns why this part is invalid as a message suffix for the caller's path, or <c>null</c> when it is valid.
-    /// Callers format the path only on failure, so validating a long history allocates nothing per part.
-    /// </summary>
-    internal string? GetValidationError()
-    {
-        if (IsEmpty)
-        {
-            return " must have at least one field set.";
-        }
-
-        var nonTextFieldsSet =
-            (InlineData is not null ? 1 : 0) +
-            (FileData is not null ? 1 : 0) +
-            (FunctionCall is not null ? 1 : 0) +
-            (FunctionResponse is not null ? 1 : 0) +
-            (ExecutableCode is not null ? 1 : 0) +
-            (CodeExecutionResult is not null ? 1 : 0);
-
-        var hasEffectiveText = Text is not null && (Text.Length > 0 || nonTextFieldsSet == 0);
-        var dataFieldsSet = (hasEffectiveText ? 1 : 0) + nonTextFieldsSet;
-
-        if (dataFieldsSet > 1)
-        {
-            return " cannot set more than one primary data field (Text, InlineData, FileData, FunctionCall, FunctionResponse, ExecutableCode, CodeExecutionResult) on the same Part.";
-        }
-
-        if (InlineData is not null)
-        {
-            if (string.IsNullOrWhiteSpace(InlineData.MimeType))
-            {
-                return ".InlineData.MimeType cannot be null or whitespace.";
-            }
-
-            if (InlineData.Data is null || InlineData.Data.Length == 0)
-            {
-                return ".InlineData.Data cannot be null or empty.";
-            }
-        }
-
-        if (FileData is not null && string.IsNullOrWhiteSpace(FileData.FileUri))
-        {
-            return ".FileData.FileUri cannot be null or whitespace.";
-        }
-
-        if (FunctionCall is not null)
-        {
-            if (string.IsNullOrWhiteSpace(FunctionCall.Name))
-            {
-                return ".FunctionCall.Name cannot be null or whitespace.";
-            }
-
-            if (FunctionCall.Args is { ValueKind: JsonValueKind.Undefined })
-            {
-                return ".FunctionCall.Args cannot be JsonValueKind.Undefined.";
-            }
-        }
-
-        if (FunctionResponse is not null)
-        {
-            if (string.IsNullOrWhiteSpace(FunctionResponse.Name))
-            {
-                return ".FunctionResponse.Name cannot be null or whitespace.";
-            }
-
-            if (FunctionResponse.Response is not { ValueKind: JsonValueKind.Object })
-            {
-                return ".FunctionResponse.Response must be a non-null JSON object (JsonValueKind.Object).";
-            }
-        }
-
-        return null;
     }
 }

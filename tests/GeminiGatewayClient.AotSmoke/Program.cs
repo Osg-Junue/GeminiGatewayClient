@@ -33,6 +33,11 @@ Require(response.Messages[0].Contents[0].Annotations?.Count == 1, "citation");
 var streamed = await chat.GetStreamingResponseAsync("hi").ToChatResponseAsync();
 Require(streamed.Text == "hello", "streaming text");
 
+// The format Gemini sends when a gateway does not forward alt=sse.
+var arrayClient = new GeminiClient(new GeminiClientOptions { Model = "gemini-2.5-flash" }, new HttpClient(new StubHandler { StreamAsJsonArray = true }));
+var fromArray = await arrayClient.AsIChatClient().GetStreamingResponseAsync("hi").ToChatResponseAsync();
+Require(fromArray.Text == "hello", "JSON array stream");
+
 await chat.GetResponseAsync(
 [
     new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("call_1", "lookup")]),
@@ -59,6 +64,14 @@ foreach (var value in toolValues)
         new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call_1", value)])
     ]);
 }
+
+// An enum without metadata is written by name, on a path only Native AOT reaches.
+await plainChat.GetResponseAsync(
+[
+    new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("call_1", "lookup")]),
+    new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call_1", DayOfWeek.Monday)])
+]);
+Require(handler.LastBody?.Contains("Monday", StringComparison.Ordinal) == true, "enum tool result");
 
 try
 {
@@ -103,7 +116,10 @@ internal sealed class StubHandler : HttpMessageHandler
     private const string GenerateBody = """{"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.com"}}],"groundingSupports":[{"segment":{"endIndex":5},"groundingChunkIndices":[0]}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}""";
     private const string ErrorBody = """{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"retryDelay":"2s"}]}}""";
     private const string StreamBody = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"hel\"}]}}]}\n\ndata: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"lo\"}]},\"finishReason\":\"STOP\"}]}\n\n";
+    private const string StreamArrayBody = """[{"candidates":[{"content":{"role":"model","parts":[{"text":"hel"}]}}]},{"candidates":[{"content":{"role":"model","parts":[{"text":"lo"}]},"finishReason":"STOP"}]}]""";
     private const string EmbeddingsBody = """{"embeddings":[{"values":[0.5,0.25]}]}""";
+
+    public bool StreamAsJsonArray { get; init; }
 
     public string? LastBody { get; private set; }
 
@@ -119,7 +135,7 @@ internal sealed class StubHandler : HttpMessageHandler
         }
 
         var path = request.RequestUri!.AbsolutePath;
-        var (body, mediaType) = path.Contains("streamGenerateContent", StringComparison.Ordinal) ? (StreamBody, "text/event-stream")
+        var (body, mediaType) = path.Contains("streamGenerateContent", StringComparison.Ordinal) ? (StreamAsJsonArray ? (StreamArrayBody, "application/json") : (StreamBody, "text/event-stream"))
             : path.Contains("mbed", StringComparison.Ordinal) ? (EmbeddingsBody, "application/json")
             : (GenerateBody, "application/json");
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, new MediaTypeHeaderValue(mediaType)) };

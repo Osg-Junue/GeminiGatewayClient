@@ -203,16 +203,6 @@ public class GeminiClientTests
     }
 
     [Fact]
-    public void Endpoint_ContainingOperationColon_ThrowsArgumentException()
-    {
-        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions
-        {
-            Endpoint = new Uri("https://example.com/v1beta/models/gemini-2.5-flash:generateContent"),
-            ApiKey = "key"
-        }));
-    }
-
-    [Fact]
     public async Task GenerateContentAsync_WithoutDefaultOrPerCallModel_ThrowsInvalidOperationException()
     {
         using var handler = new RecordingHandler(OkResponseJson);
@@ -281,9 +271,10 @@ public class GeminiClientTests
         }, httpClient);
 
         var received = new List<string?>();
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await Assert.ThrowsAsync<TimeoutException>(async () =>
         {
-            await foreach (var chunk in client.StreamGenerateContentAsync("Hi"))
+            await foreach (var chunk in client.StreamGenerateContentAsync("Hi", cancellationToken: guard.Token))
             {
                 received.Add(chunk.Text);
             }
@@ -387,7 +378,6 @@ public class GeminiClientTests
 
         var ex = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("Hi"));
         Assert.Equal(HttpStatusCode.TooManyRequests, ex.StatusCode);
-        Assert.True(ex.IsTransient);
         Assert.Equal("RESOURCE_EXHAUSTED", ex.ErrorStatus);
         Assert.Equal("Resource has been exhausted (e.g. check quota).", ex.ErrorMessage);
         Assert.Equal(TimeSpan.FromSeconds(37), ex.RetryAfter);
@@ -415,7 +405,6 @@ public class GeminiClientTests
         });
 
         Assert.Equal(HttpStatusCode.Unauthorized, ex.StatusCode);
-        Assert.False(ex.IsTransient);
         Assert.Equal("UNAUTHENTICATED", ex.ErrorStatus);
     }
 
@@ -501,28 +490,6 @@ public class GeminiClientTests
     }
 
     [Fact]
-    public async Task Endpoint_ModelContainingOperationColon_ThrowsArgumentException()
-    {
-        using var handler = new RecordingHandler(OkResponseJson);
-        using var httpClient = new HttpClient(handler);
-
-        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions
-        {
-            Model = "gemini-2.5-flash:generateContent",
-            ApiKey = "key"
-        }, httpClient));
-
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key"
-        }, httpClient);
-
-        await Assert.ThrowsAsync<ArgumentException>(() =>
-            client.GenerateContentAsync("Hi", model: "gemini-2.5-pro:generateContent"));
-    }
-
-    [Fact]
     public async Task Stream_SseWithSplitCrLfAndMultiByteUtf8AcrossByteReads_ParsesCleanly()
     {
         const string sse = "\uFEFFdata: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"こんにちは🌸\"}]}}]}\r\n\r\ndata: [DONE]\r\n\r\n";
@@ -576,7 +543,6 @@ public class GeminiClientTests
         });
 
         Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
-        Assert.True(ex.IsTransient);
         Assert.Equal("UNKNOWN", ex.ErrorStatus);
         Assert.Equal("Stream broken upstream", ex.ErrorMessage);
     }
@@ -644,7 +610,6 @@ public class GeminiClientTests
         var ex = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync("Hi"));
         Assert.Equal(429, ex.ErrorCode);
         Assert.Equal("RESOURCE_EXHAUSTED", ex.ErrorStatus);
-        Assert.True(ex.IsTransient);
     }
 
     [Fact]

@@ -22,7 +22,6 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
         IEnumerable<ChatMessage> messages,
         ChatOptions? options,
         IChatClient client,
-        string? modelId,
         JsonSerializerOptions toolSerializerOptions)
     {
         var request = options?.RawRepresentationFactory?.Invoke(client) as GenerateContentRequest ?? new GenerateContentRequest();
@@ -30,7 +29,7 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
 
         if (options is not null)
         {
-            ChatOptionsMapper.Apply(request, options, modelId);
+            ChatOptionsMapper.Apply(request, options);
         }
 
         return request;
@@ -226,16 +225,19 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
 
     private Part ToFunctionResponsePart(FunctionResultContent result)
     {
-        var (name, id) = _functionCalls.TryGetValue(result.CallId, out var call)
-            ? call
-            : (SynthesizedCallId.GetFunctionName(result.CallId) ?? result.CallId, null);
+        if (!_functionCalls.TryGetValue(result.CallId, out var call))
+        {
+            throw new ArgumentException(
+                $"The function result for call '{result.CallId}' has no matching FunctionCallContent in the messages, so its function name is unknown. Keep the call in the history.",
+                "messages");
+        }
 
         return new Part
         {
             FunctionResponse = new FunctionResponse
             {
-                Id = id,
-                Name = name,
+                Id = call.ApiId,
+                Name = call.Name,
                 Response = ToolJsonConverter.ToResponseObject(result.Result, toolSerializerOptions)
             }
         };

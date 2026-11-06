@@ -26,13 +26,12 @@ public static class GeminiClientExtensions
         /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
         /// <exception cref="ArgumentException"><paramref name="prompt"/> is <c>null</c>, empty, or whitespace.</exception>
         /// <exception cref="InvalidOperationException">
-        /// No model was specified and <see cref="IGeminiClient.DefaultModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
-        /// returned an empty or invalid value.
+        /// No model was specified and <see cref="IGeminiClient.DefaultModel"/> is <c>null</c>.
         /// </exception>
         /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
         /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
         /// <exception cref="OperationCanceledException">
-        /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
+        /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> elapsed.
         /// </exception>
         public Task<GenerateContentResponse> GenerateContentAsync(
             string prompt,
@@ -58,20 +57,19 @@ public static class GeminiClientExtensions
         /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
         /// <exception cref="ArgumentException"><paramref name="prompt"/> is <c>null</c>, empty, or whitespace.</exception>
         /// <exception cref="InvalidOperationException">
-        /// No model was specified and <see cref="IGeminiClient.DefaultModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
-        /// returned an empty or invalid value during enumeration.
+        /// No model was specified and <see cref="IGeminiClient.DefaultModel"/> is <c>null</c>.
         /// </exception>
         /// <exception cref="GeminiApiException">
         /// Thrown during enumeration when the endpoint returns a non-2xx status, an in-stream <c>{"error": ...}</c> payload, or malformed JSON.
         /// </exception>
         /// <exception cref="TimeoutException">
-        /// Thrown during enumeration when no chunk data is received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
+        /// Thrown during enumeration when no data is received within <see cref="GeminiClientOptions.StreamIdleTimeout"/>.
         /// </exception>
         /// <exception cref="HttpRequestException">
         /// Thrown during enumeration when a transport-level network or TLS failure occurs.
         /// </exception>
         /// <exception cref="OperationCanceledException">
-        /// Thrown during enumeration when <paramref name="cancellationToken"/> is canceled or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapses.
+        /// Thrown during enumeration when <paramref name="cancellationToken"/> is canceled or <see cref="HttpClient.Timeout"/> elapses.
         /// </exception>
         public IAsyncEnumerable<GenerateContentResponse> StreamGenerateContentAsync(
             string prompt,
@@ -95,15 +93,13 @@ public static class GeminiClientExtensions
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>The parsed embedding response.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="client"/> or <paramref name="text"/> is <c>null</c>.</exception>
-        /// <exception cref="ArgumentException">The request parameters are invalid.</exception>
         /// <exception cref="InvalidOperationException">
-        /// No model was specified and <see cref="IGeminiClient.DefaultEmbeddingModel"/> is <c>null</c>, or <see cref="GeminiClientOptions.ApiKeyProvider"/>
-        /// returned an empty or invalid value.
+        /// No model was specified and <see cref="IGeminiClient.DefaultEmbeddingModel"/> is <c>null</c>.
         /// </exception>
         /// <exception cref="GeminiApiException">The endpoint returned a non-2xx status or an unreadable/error payload.</exception>
         /// <exception cref="HttpRequestException">A transport-level network or TLS failure occurred, including the connection being lost while reading a successful response body.</exception>
         /// <exception cref="OperationCanceledException">
-        /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> (<see cref="GeminiClientOptions.Timeout"/>) elapsed.
+        /// <paramref name="cancellationToken"/> was canceled, or <see cref="HttpClient.Timeout"/> elapsed.
         /// </exception>
         public Task<EmbedContentResponse> EmbedContentAsync(
             string text,
@@ -127,8 +123,7 @@ public static class GeminiClientExtensions
         /// <param name="defaultModelId">The model used when <see cref="ChatOptions.ModelId"/> is not set; defaults to <see cref="IGeminiClient.DefaultModel"/>.</param>
         /// <param name="toolSerializerOptions">
         /// Serializer options for function arguments and results of custom types. In NativeAOT applications, supply options backed by
-        /// your <c>JsonSerializerContext</c>. Defaults to <see cref="IGeminiClient.ToolSerializerOptions"/>,
-        /// then <see cref="AIJsonUtilities.DefaultOptions"/>.
+        /// your <c>JsonSerializerContext</c>. Defaults to <see cref="AIJsonUtilities.DefaultOptions"/>.
         /// </param>
         /// <returns>An <see cref="IChatClient"/> backed by <paramref name="client"/>.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
@@ -149,7 +144,6 @@ public static class GeminiClientExtensions
         /// </param>
         /// <returns>An <see cref="IEmbeddingGenerator{TInput, TEmbedding}"/> backed by <paramref name="client"/>.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="defaultModelDimensions"/> is less than or equal to zero.</exception>
         public IEmbeddingGenerator<string, Embedding<float>> AsIEmbeddingGenerator(
             string? defaultModelId = null,
             int? defaultModelDimensions = null) =>

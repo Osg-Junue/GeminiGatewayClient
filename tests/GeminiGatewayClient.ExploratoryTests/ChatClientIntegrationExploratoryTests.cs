@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Serialization;
 using GeminiGatewayClient.Chat;
 using GeminiGatewayClient.ExploratoryTests.Infrastructure;
+using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
@@ -13,7 +14,7 @@ namespace GeminiGatewayClient.ExploratoryTests;
 /// <summary>
 /// Exploratory tests for <c>Microsoft.Extensions.AI</c> (<see cref="IChatClient"/>) integration:
 /// automatic multi-step tool invocation via <c>UseFunctionInvocation()</c>, streaming with tools,
-/// <see cref="ReasoningOptions"/> mapping, and <c>AddGeminiClient</c> dependency injection.
+/// thinking settings through <c>RawRepresentationFactory</c>, and <c>AddGeminiClient</c> dependency injection.
 /// </summary>
 public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture fixture, ITestOutputHelper output)
     : ExploratoryTestBase(fixture, output)
@@ -291,9 +292,9 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
     }
 
     [ExploratoryFact]
-    public async Task IChatClient_ReasoningOptions_MapsEffortAndReturnsReasoningContent()
+    public async Task IChatClient_ThinkingConfig_ReturnsReasoningContent()
     {
-        LogSection("IChatClient ReasoningOptions (Effort + Summary Output)");
+        LogSection("IChatClient ThinkingConfig through RawRepresentationFactory");
         using var geminiClient = CreateGeminiClient();
         IChatClient chatClient = geminiClient.AsIChatClient();
 
@@ -304,10 +305,9 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
             ],
             new ChatOptions
             {
-                Reasoning = new ReasoningOptions
+                RawRepresentationFactory = _ => new GenerateContentRequest
                 {
-                    Effort = ReasoningEffort.Low,
-                    Output = ReasoningOutput.Summary
+                    GenerationConfig = new GenerationConfig { ThinkingConfig = new ThinkingConfig { ThinkingLevel = ThinkingLevel.Low, IncludeThoughts = true } }
                 }
             });
         sw.Stop();
@@ -321,7 +321,7 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
         Assert.True(
             response.Usage.ReasoningTokenCount is > 0 ||
             response.Messages.SelectMany(m => m.Contents).OfType<TextReasoningContent>().Any(),
-            "Expected reasoning tokens or TextReasoningContent when ReasoningOptions is configured.");
+            "Expected reasoning tokens or TextReasoningContent when ThinkingConfig is set.");
     }
 
     [ExploratoryFact]
@@ -341,7 +341,6 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
                 return ValueTask.FromResult(ExploratoryTestSettings.GetRequiredApiKey());
             };
             options.AdditionalHeaders["x-client-scenario"] = "di-exploratory-test";
-            options.Timeout = TimeSpan.FromMinutes(2);
         });
 
         await using var serviceProvider = services.BuildServiceProvider();
@@ -659,10 +658,10 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
         Assert.True(telemetryMiddleware.TotalInputTokens > 0, "Expected non-zero tracked input tokens.");
         Assert.True(telemetryMiddleware.TotalOutputTokens > 0, "Expected non-zero tracked output tokens.");
 
-        var resolvedGeminiChatClient = pipeline.GetService<GeminiChatClient>();
+        var resolvedMetadata = pipeline.GetService<ChatClientMetadata>();
         var resolvedGeminiClient = pipeline.GetService<IGeminiClient>();
 
-        Assert.NotNull(resolvedGeminiChatClient);
+        Assert.NotNull(resolvedMetadata);
         Assert.NotNull(resolvedGeminiClient);
 
         Assert.NotNull(response.Text);
@@ -672,9 +671,9 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
     }
 
     [ExploratoryFact]
-    public async Task IChatClient_UseFunctionInvocation_CombinedWithReasoningOptions_PreservesThoughtSignatures()
+    public async Task IChatClient_UseFunctionInvocation_CombinedWithThinking_PreservesThoughtSignatures()
     {
-        LogSection("TC-MEAI-05: UseFunctionInvocation() Combined with ReasoningOptions (Thought Signatures)");
+        LogSection("TC-MEAI-05: UseFunctionInvocation() Combined with ThinkingConfig (Thought Signatures)");
         using var geminiClient = CreateGeminiClient();
 
         [Description("与えられた正の数値の平方根(ルート)を計算します。")]
@@ -703,10 +702,9 @@ public sealed class ChatClientIntegrationExploratoryTests(ExploratoryTestFixture
             ],
             new ChatOptions
             {
-                Reasoning = new ReasoningOptions
+                RawRepresentationFactory = _ => new GenerateContentRequest
                 {
-                    Effort = ReasoningEffort.Low,
-                    Output = ReasoningOutput.Summary
+                    GenerationConfig = new GenerationConfig { ThinkingConfig = new ThinkingConfig { ThinkingLevel = ThinkingLevel.Low, IncludeThoughts = true } }
                 },
                 Tools = tools
             });

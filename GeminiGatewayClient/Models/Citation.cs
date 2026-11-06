@@ -10,13 +10,13 @@ namespace GeminiGatewayClient.Models;
 public sealed class Citation
 {
     /// <summary>
-    /// Start byte/character offset in the response text where the cited span begins.
+    /// Start offset of the cited span in the response text, measured in UTF-8 bytes.
     /// </summary>
     [JsonPropertyName("startIndex")]
     public int? StartIndex { get; set; }
 
     /// <summary>
-    /// End byte/character offset in the response text where the cited span ends.
+    /// End offset of the cited span in the response text, measured in UTF-8 bytes.
     /// </summary>
     [JsonPropertyName("endIndex")]
     public int? EndIndex { get; set; }

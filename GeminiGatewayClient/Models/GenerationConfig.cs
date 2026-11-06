@@ -160,38 +160,6 @@ public sealed class GenerationConfig
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    /// <summary>
-    /// Validates mutually exclusive settings and enum values.
-    /// </summary>
-    /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
-    /// <exception cref="ArgumentException">Mutually exclusive members are both set or an enum is <c>Unknown</c>.</exception>
-    internal void Validate(string paramName = "request")
-    {
-        if (ResponseSchema is not null && ResponseJsonSchema is not null)
-        {
-            throw new ArgumentException(
-                "GenerationConfig.ResponseSchema and GenerationConfig.ResponseJsonSchema are mutually exclusive and cannot both be set.",
-                paramName);
-        }
-
-        if (ResponseJsonSchema is { ValueKind: JsonValueKind.Undefined })
-        {
-            throw new ArgumentException("GenerationConfig.ResponseJsonSchema cannot be JsonValueKind.Undefined.", paramName);
-        }
-
-        if (ResponseSchema?.GetValidationError() is { } schemaError)
-        {
-            throw new ArgumentException($"GenerationConfig.ResponseSchema{schemaError}", paramName);
-        }
-
-        if (MediaResolution == Models.MediaResolution.Unknown)
-        {
-            throw new ArgumentException("GenerationConfig.MediaResolution cannot be MediaResolution.Unknown.", paramName);
-        }
-
-        ThinkingConfig?.Validate(paramName);
-    }
 }
 
 /// <summary>

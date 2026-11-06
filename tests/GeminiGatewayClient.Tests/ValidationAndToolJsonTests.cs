@@ -25,185 +25,6 @@ public sealed class ValidationAndToolJsonTests
 
     #region Validation: messages are byte-for-byte stable at every location (pattern 1: index 0 and index > 0)
 
-    public static TheoryData<string, Func<Part>> InvalidParts() => new()
-    {
-        { " must have at least one field set.", () => new Part() },
-        {
-            " cannot set more than one primary data field (Text, InlineData, FileData, FunctionCall, FunctionResponse, ExecutableCode, CodeExecutionResult) on the same Part.",
-            () => new Part { Text = "x", FileData = new FileData { FileUri = "gs://b/o" } }
-        },
-        { ".InlineData.MimeType cannot be null or whitespace.", () => new Part { InlineData = new Blob { MimeType = " ", Data = [1] } } },
-        { ".InlineData.Data cannot be null or empty.", () => new Part { InlineData = new Blob { MimeType = "image/png", Data = [] } } },
-        { ".FileData.FileUri cannot be null or whitespace.", () => new Part { FileData = new FileData { FileUri = " " } } },
-        { ".FunctionCall.Name cannot be null or whitespace.", () => new Part { FunctionCall = new FunctionCall { Name = " " } } },
-        { ".FunctionCall.Args cannot be JsonValueKind.Undefined.", () => new Part { FunctionCall = new FunctionCall { Name = "f", Args = default(JsonElement) } } },
-        { ".FunctionResponse.Name cannot be null or whitespace.", () => new Part { FunctionResponse = new FunctionResponse { Name = " ", Response = Json("{}") } } },
-        {
-            ".FunctionResponse.Response must be a non-null JSON object (JsonValueKind.Object).",
-            () => new Part { FunctionResponse = new FunctionResponse { Name = "f", Response = Json("[]") } }
-        }
-    };
-
-    [Theory]
-    [MemberData(nameof(InvalidParts))]
-    public void Validate_InvalidPart_ReportsExactPathAtFirstAndLaterPositions(string reason, Func<Part> createInvalidPart)
-    {
-        var first = new GenerateContentRequest { Contents = [new Content { Role = Role.User, Parts = [createInvalidPart()] }] };
-        var firstError = Assert.Throws<ArgumentException>(() => first.Validate());
-        Assert.Equal($"GenerateContentRequest.Contents[0].Parts[0]{reason} (Parameter 'request')", firstError.Message);
-
-        var later = new GenerateContentRequest
-        {
-            Contents =
-            [
-                Content.FromText("ok"),
-                new Content { Role = Role.Model, Parts = [Part.FromText("ok"), Part.FromText("ok"), createInvalidPart()] }
-            ]
-        };
-        var laterError = Assert.Throws<ArgumentException>(() => later.Validate("custom"));
-        Assert.Equal($"GenerateContentRequest.Contents[1].Parts[2]{reason} (Parameter 'custom')", laterError.Message);
-
-        var system = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("ok")],
-            SystemInstruction = new Content { Parts = [Part.FromText("ok"), createInvalidPart()] }
-        };
-        var systemError = Assert.Throws<ArgumentException>(() => system.Validate());
-        Assert.Equal($"GenerateContentRequest.SystemInstruction.Parts[1]{reason} (Parameter 'request')", systemError.Message);
-
-        var embed = new EmbedContentRequest { Content = new Content { Parts = [createInvalidPart()] } };
-        var embedError = Assert.Throws<ArgumentException>(() => embed.Validate());
-        Assert.Equal($"EmbedContentRequest.Content.Parts[0]{reason} (Parameter 'request')", embedError.Message);
-
-        var batch = new BatchEmbedContentsRequest
-        {
-            Requests =
-            [
-                EmbedContentRequest.FromText("ok"),
-                new EmbedContentRequest { Content = new Content { Parts = [Part.FromText("ok"), createInvalidPart()] } }
-            ]
-        };
-        var batchError = Assert.Throws<ArgumentException>(() => batch.Validate());
-        Assert.Equal($"BatchEmbedContentsRequest.Requests[1].Content.Parts[1]{reason} (Parameter 'request')", batchError.Message);
-    }
-
-    [Theory]
-    [InlineData(Role.Unknown)]
-    [InlineData((Role)99)]
-    public void Validate_InvalidRole_ReportsExactPath(Role role)
-    {
-        var request = new GenerateContentRequest { Contents = [new Content { Role = role, Parts = [Part.FromText("x")] }] };
-        Assert.Equal(
-            "GenerateContentRequest.Contents[0].Role cannot be Role.Unknown. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
-
-        var embed = new EmbedContentRequest { Content = new Content { Role = role, Parts = [Part.FromText("x")] } };
-        Assert.Equal(
-            "EmbedContentRequest.Content.Role cannot be Role.Unknown. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => embed.Validate()).Message);
-    }
-
-    [Fact]
-    public void Validate_EmptyParts_RejectedUnlessExtensionDataCarriesTheContent()
-    {
-        var empty = new GenerateContentRequest { Contents = [new Content { Role = Role.User, Parts = null! }] };
-        Assert.Equal(
-            "GenerateContentRequest.Contents[0].Parts must contain at least one Part item. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => empty.Validate()).Message);
-
-        var embedEmpty = new EmbedContentRequest { Content = new Content() };
-        Assert.Equal(
-            "EmbedContentRequest.Content.Parts must contain at least one Part item. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => embedEmpty.Validate()).Message);
-
-        var extensionOnly = new GenerateContentRequest
-        {
-            Contents = [new Content { ExtensionData = new Dictionary<string, JsonElement> { ["custom"] = Json("1") } }]
-        };
-        extensionOnly.Validate();
-
-        var emptyExtension = new GenerateContentRequest
-        {
-            Contents = [new Content { ExtensionData = new Dictionary<string, JsonElement>() }]
-        };
-        Assert.Throws<ArgumentException>(() => emptyExtension.Validate());
-    }
-
-    [Fact]
-    public void Validate_NullElementsInAbstractCollections_ReportExactPath()
-    {
-        IList<Part>[] partCollections =
-        [
-            new Part[] { Part.FromText("ok"), null! },
-            new ReadOnlyCollection<Part>([Part.FromText("ok"), null!]),
-            new Collection<Part> { Part.FromText("ok"), null! }
-        ];
-
-        foreach (var parts in partCollections)
-        {
-            var request = new GenerateContentRequest { Contents = [new Content { Role = Role.User, Parts = parts }] };
-            Assert.Equal(
-                "GenerateContentRequest.Contents[0].Parts[1] cannot be null. (Parameter 'request')",
-                Assert.Throws<ArgumentException>(() => request.Validate()).Message);
-        }
-
-        var embed = new BatchEmbedContentsRequest
-        {
-            Requests = [new EmbedContentRequest { Content = new Content { Parts = new[] { (Part)null! } } }]
-        };
-        Assert.Equal(
-            "BatchEmbedContentsRequest.Requests[0].Content.Parts[0] cannot be null. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => embed.Validate()).Message);
-    }
-
-    [Fact]
-    public void Validate_EmbedRequestRules_ReportExactPathAndKeepExceptionTypes()
-    {
-        var nullContent = new EmbedContentRequest { Content = null! };
-        Assert.Equal("EmbedContentRequest.Content cannot be null. (Parameter 'request')", Assert.Throws<ArgumentException>(() => nullContent.Validate()).Message);
-
-        var unknownTask = EmbedContentRequest.FromText("x", TaskType.Unknown);
-        Assert.Equal("EmbedContentRequest.TaskType cannot be TaskType.Unknown. (Parameter 'request')", Assert.Throws<ArgumentException>(() => unknownTask.Validate()).Message);
-
-        var titledQuery = EmbedContentRequest.FromText("x", TaskType.RetrievalQuery, "title");
-        Assert.Equal(
-            "EmbedContentRequest.Title can only be specified when TaskType is TaskType.RetrievalDocument. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => titledQuery.Validate()).Message);
-
-        foreach (var dimensions in new[] { 0, -1 })
-        {
-            var batch = new BatchEmbedContentsRequest
-            {
-                Requests = [EmbedContentRequest.FromText("ok"), EmbedContentRequest.FromText("x", outputDimensionality: dimensions)]
-            };
-            var error = Assert.Throws<ArgumentOutOfRangeException>(() => batch.Validate());
-            Assert.Equal("request", error.ParamName);
-            Assert.Equal(dimensions, error.ActualValue);
-            Assert.StartsWith("BatchEmbedContentsRequest.Requests[1].OutputDimensionality must be greater than zero.", error.Message, StringComparison.Ordinal);
-        }
-
-        EmbedContentRequest.FromText("x", TaskType.RetrievalDocument, "title", 8).Validate();
-    }
-
-    [Fact]
-    public void Validate_ReportsTheFirstViolationInDocumentOrder()
-    {
-        var request = new GenerateContentRequest
-        {
-            Contents =
-            [
-                new Content { Role = Role.Unknown, Parts = [new Part()] },
-                new Content { Role = Role.User, Parts = [new Part()] }
-            ],
-            SystemInstruction = new Content { Parts = [new Part()] }
-        };
-
-        Assert.StartsWith(
-            "GenerateContentRequest.Contents[0].Role ",
-            Assert.Throws<ArgumentException>(() => request.Validate()).Message,
-            StringComparison.Ordinal);
-    }
-
     #endregion
 
     #region Tool results: every result shape keeps its wire form after the single-writer rewrite
@@ -385,7 +206,7 @@ public sealed class ValidationAndToolJsonTests
     private static string WireArgs(ChatMessage message)
     {
         using var client = new GeminiClient("key", Model);
-        var request = ChatRequestMapper.ToRequest([message], null, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
+        var request = ChatRequestMapper.ToRequest([message], null, client.AsIChatClient(), AIJsonUtilities.DefaultOptions);
         return Raw(request.Contents[0].Parts[0].FunctionCall!.Args!.Value);
     }
 
@@ -612,110 +433,6 @@ public sealed class ValidationAndToolJsonTests
 
     #endregion
 
-    #region Wire encoding: bodies stay semantically identical to the default encoder
-
-    private static GenerateContentRequest RequestWithText(string text) =>
-        new() { Contents = [new Content { Role = Role.User, Parts = [new Part { Text = text }] }] };
-
-    private static string WireBody(GenerateContentRequest request) =>
-        Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(request, GeminiJsonContext.Wire.GenerateContentRequest));
-
-    [Fact]
-    public void WireEncoding_KeepsMultiByteTextAsUtf8()
-    {
-        var body = WireBody(RequestWithText("東京"));
-
-        Assert.Contains("東京", body, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void WireEncoding_StillEscapesHtmlSensitiveAscii()
-    {
-        var body = WireBody(RequestWithText("<script>&'+"));
-
-        Assert.DoesNotContain("<script>", body, StringComparison.Ordinal);
-        Assert.DoesNotContain("&", body, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void WireEncoding_MatchesTheDefaultEncoderAfterParsing_ForRandomText()
-    {
-        string[] alphabet =
-        [
-            "a", "<", "&", "\"", "\\", "\n", "\u0000", "\u001F", "\u007F", "\u0080", "é", "あ", "🌸", "𠮷",
-            "\u2028", "\u2029", "\uFEFF", "\uFFFD", "\uFFFF", "\uD83C", "\uDF38"
-        ];
-        var random = new Random(20261105);
-
-        for (var iteration = 0; iteration < 5_000; iteration++)
-        {
-            var builder = new StringBuilder();
-            for (var i = random.Next(0, 32); i > 0; i--)
-            {
-                builder.Append(alphabet[random.Next(alphabet.Length)]);
-            }
-
-            var request = RequestWithText(builder.ToString());
-            var viaDefault = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(request, GeminiJsonContext.Default.GenerateContentRequest));
-            var viaWire = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(request, GeminiJsonContext.Wire.GenerateContentRequest));
-
-            Assert.True(JsonElement.DeepEquals(viaDefault.RootElement, viaWire.RootElement), Convert.ToHexString(Encoding.Unicode.GetBytes(builder.ToString())));
-        }
-    }
-
-    [Fact]
-    public async Task WireEncoding_EveryRequestTypeSendsUtf8ThroughTheClient()
-    {
-        using var handler = new RecordingHandler("""{"candidates":[],"embedding":{"values":[0.1]},"embeddings":[{"values":[0.1]}]}""");
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions { ApiKey = "key", Model = Model, EmbeddingModel = Model }, httpClient);
-
-        await client.GenerateContentAsync(RequestWithText("東京"));
-        Assert.Contains("東京", handler.LastRequestBody!, StringComparison.Ordinal);
-
-        await foreach (var _ in client.StreamGenerateContentAsync(RequestWithText("京都")))
-        {
-        }
-
-        Assert.Contains("京都", handler.LastRequestBody!, StringComparison.Ordinal);
-
-        await client.EmbedContentAsync(EmbedContentRequest.FromText("大阪"));
-        Assert.Contains("大阪", handler.LastRequestBody!, StringComparison.Ordinal);
-
-        await client.BatchEmbedContentsAsync(new BatchEmbedContentsRequest { Requests = [EmbedContentRequest.FromText("奈良")] });
-        Assert.Contains("奈良", handler.LastRequestBody!, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void WireEncoding_ToolValuesProducedByTheConverter_AreNotLeftEscaped()
-    {
-        var request = new GenerateContentRequest
-        {
-            Contents =
-            [
-                new Content
-                {
-                    Role = Role.User,
-                    Parts =
-                    [
-                        new Part
-                        {
-                            FunctionResponse = new FunctionResponse
-                            {
-                                Name = "f",
-                                Response = ToolJsonConverter.ToResponseObject("東京", AIJsonUtilities.DefaultOptions)
-                            }
-                        }
-                    ]
-                }
-            ]
-        };
-
-        Assert.Contains("東京", WireBody(request), StringComparison.Ordinal);
-    }
-
-    #endregion
-
     #region Argument reuse: the raw-byte shortcut never decides a difference on its own
 
     [Fact]
@@ -798,30 +515,6 @@ public sealed class ValidationAndToolJsonTests
         var converted = ToolJsonConverter.ToResponseObject(new OneShotSequence(), options);
 
         Assert.Equal("""{"result":[1,2,3]}""", Raw(converted));
-    }
-
-    public static TheoryData<Func<IList<Part>>> TemplatePartsWithNull() => new()
-    {
-        () => new[] { Part.FromText("ok"), null! },
-        () => new List<Part> { Part.FromText("ok"), null! },
-        () => new ReadOnlyCollection<Part>([Part.FromText("ok"), null!])
-    };
-
-    [Theory]
-    [MemberData(nameof(TemplatePartsWithNull))]
-    public void ToRequest_NullPartInTemplate_IsReportedForEveryCollectionType(Func<IList<Part>> createParts)
-    {
-        var options = new ChatOptions
-        {
-            RawRepresentationFactory = _ => new GenerateContentRequest { Contents = [new Content { Role = Role.Model, Parts = createParts() }] }
-        };
-        using var client = new GeminiClient("key", Model);
-
-        var request = ChatRequestMapper.ToRequest([new ChatMessage(ChatRole.User, "next")], options, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
-
-        Assert.Equal(
-            "GenerateContentRequest.Contents[0].Parts[1] cannot be null. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
     }
 
     [Fact]
@@ -922,26 +615,11 @@ public sealed class ValidationAndToolJsonTests
     {
         using var client = new GeminiClient("key", Model);
         var request = ChatRequestMapper.ToRequest(
-            [.. history, new ChatMessage(ChatRole.Tool, [result])],
+            [new ChatMessage(ChatRole.Assistant, [new FunctionCallContent(result.CallId, "f")]), .. history, new ChatMessage(ChatRole.Tool, [result])],
             null,
             client.AsIChatClient(),
-            Model,
             AIJsonUtilities.DefaultOptions);
         return request.Contents[^1].Parts[^1];
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("stray text")]
-    public void ToRequest_TextOnAttachedRaw_IsDroppedSoTheRequestStaysValid(string text)
-    {
-        var raw = AttachedResponsePart();
-        raw.Text = text;
-
-        var part = MapResult(new FunctionResultContent("local-id", "fresh") { RawRepresentation = raw });
-
-        Assert.Null(part.Text);
-        Assert.Null(part.GetValidationError());
     }
 
     [Fact]
@@ -970,7 +648,7 @@ public sealed class ValidationAndToolJsonTests
     {
         var part = MapResult(new FunctionResultContent("local-id", "fresh") { RawRepresentation = new Part { ThoughtSignature = "sig" } });
 
-        Assert.Equal("local-id", part.FunctionResponse!.Name);
+        Assert.Equal("f", part.FunctionResponse!.Name);
         Assert.Equal("""{"result":"fresh"}""", Raw(part.FunctionResponse.Response!.Value));
     }
 
@@ -985,124 +663,20 @@ public sealed class ValidationAndToolJsonTests
     }
 
     [Fact]
-    public void WireEncoding_SupplementaryCharacters_StayEscapedAndRoundTrip()
-    {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(RequestWithText("🌸"), GeminiJsonContext.Wire.GenerateContentRequest);
-
-        Assert.DoesNotContain("🌸", Encoding.UTF8.GetString(bytes), StringComparison.Ordinal);
-        Assert.Equal("🌸", JsonSerializer.Deserialize(bytes, GeminiJsonContext.Default.GenerateContentRequest)!.Contents[0].Parts[0].Text);
-    }
-
-    [Fact]
-    public void Validate_SchemaWithSeveralViolations_ReportsItemsThenPropertiesThenAnyOf()
-    {
-        var unknown = new Schema { Type = SchemaType.Unknown };
-        var schema = new Schema
-        {
-            Type = SchemaType.Object,
-            Items = unknown,
-            Properties = new Dictionary<string, Schema> { ["a"] = unknown },
-            AnyOf = [unknown]
-        };
-
-        Assert.StartsWith("GenerationConfig.ResponseSchema.Items.", SchemaError(schema), StringComparison.Ordinal);
-
-        schema.Items = null;
-        Assert.StartsWith("GenerationConfig.ResponseSchema.Properties['a'].", SchemaError(schema), StringComparison.Ordinal);
-
-        schema.Properties = null;
-        Assert.StartsWith("GenerationConfig.ResponseSchema.AnyOf[0].", SchemaError(schema), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Validate_FunctionDeclarationWithInvalidSchemas_ReportsParametersFirst()
-    {
-        var declaration = new FunctionDeclaration
-        {
-            Name = "f",
-            Parameters = new Schema { Type = SchemaType.Unknown },
-            Response = new Schema { Type = SchemaType.Unknown }
-        };
-
-        Assert.StartsWith("FunctionDeclaration('f').Parameters.", Assert.Throws<ArgumentException>(() => declaration.Validate()).Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void ToRequest_FunctionResultChangedAfterRawWasAttached_SendsTheCurrentResult()
     {
         var stale = Part.FromFunctionResponse("f", Json("""{"stale":true}"""), "c1");
         var message = new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", "fresh") { RawRepresentation = stale }]);
+        var call = new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("c1", "f")]);
         using var client = new GeminiClient("key", Model);
 
-        var request = ChatRequestMapper.ToRequest([message], null, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
+        var request = ChatRequestMapper.ToRequest([call, message], null, client.AsIChatClient(), AIJsonUtilities.DefaultOptions);
 
-        Assert.Equal("""{"result":"fresh"}""", Raw(request.Contents[0].Parts[0].FunctionResponse!.Response!.Value));
+        Assert.Equal("""{"result":"fresh"}""", Raw(request.Contents[1].Parts[0].FunctionResponse!.Response!.Value));
     }
 
-    [Fact]
-    public void Validate_EmbedRequestWithSeveralViolations_ReportsContentThenTaskTypeThenDimensionality()
-    {
-        var everythingWrong = EmbedContentRequest.FromText("x", TaskType.Unknown, outputDimensionality: 0);
-        everythingWrong.Content.Role = Role.Unknown;
-        Assert.StartsWith("EmbedContentRequest.Content.Role ", Assert.Throws<ArgumentException>(() => everythingWrong.Validate()).Message, StringComparison.Ordinal);
-
-        var wrongTaskAndDimensions = EmbedContentRequest.FromText("x", TaskType.Unknown, outputDimensionality: 0);
-        Assert.StartsWith("EmbedContentRequest.TaskType ", Assert.Throws<ArgumentException>(() => wrongTaskAndDimensions.Validate()).Message, StringComparison.Ordinal);
-
-        var wrongTitleAndDimensions = EmbedContentRequest.FromText("x", TaskType.RetrievalQuery, "title", 0);
-        Assert.StartsWith("EmbedContentRequest.Title ", Assert.Throws<ArgumentException>(() => wrongTitleAndDimensions.Validate()).Message, StringComparison.Ordinal);
-    }
-
-    private static string SchemaError(Schema schema) =>
-        Assert.Throws<ArgumentException>(() => new GenerationConfig { ResponseSchema = schema }.Validate()).Message;
-
-    [Fact]
-    public void Validate_Schema_ReportsExactNestedPaths()
-    {
-        var unknown = new Schema { Type = SchemaType.Unknown };
-        var valid = new Schema { Type = SchemaType.String };
-
-        Assert.Equal(
-            "GenerationConfig.ResponseSchema.Type cannot be SchemaType.Unknown. (Parameter 'request')",
-            SchemaError(unknown));
-        Assert.Equal(
-            "GenerationConfig.ResponseSchema.Default cannot be JsonValueKind.Undefined. (Parameter 'request')",
-            SchemaError(new Schema { Type = SchemaType.String, Default = default(JsonElement) }));
-        Assert.Equal(
-            "GenerationConfig.ResponseSchema.Items.Items.Type cannot be SchemaType.Unknown. (Parameter 'request')",
-            SchemaError(new Schema { Type = SchemaType.Array, Items = new Schema { Type = SchemaType.Array, Items = unknown } }));
-        Assert.Equal(
-            "GenerationConfig.ResponseSchema.Properties['a'].Type cannot be SchemaType.Unknown. (Parameter 'request')",
-            SchemaError(new Schema { Type = SchemaType.Object, Properties = new Dictionary<string, Schema> { ["a"] = unknown } }));
-        Assert.Equal(
-            "GenerationConfig.ResponseSchema.Properties['a'] cannot be null. (Parameter 'request')",
-            SchemaError(new Schema { Type = SchemaType.Object, Properties = new Dictionary<string, Schema> { ["a"] = null! } }));
-        Assert.Equal(
-            "GenerationConfig.ResponseSchema.AnyOf[0].Type cannot be SchemaType.Unknown. (Parameter 'request')",
-            SchemaError(new Schema { Type = SchemaType.Object, AnyOf = [unknown, valid] }));
-        Assert.Equal(
-            "GenerationConfig.ResponseSchema.AnyOf[1] cannot be null. (Parameter 'request')",
-            SchemaError(new Schema { Type = SchemaType.Object, AnyOf = [valid, null!] }));
-
-        var declaration = new FunctionDeclaration { Name = "f", Parameters = unknown };
-        Assert.Equal(
-            "FunctionDeclaration('f').Parameters.Type cannot be SchemaType.Unknown. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => declaration.Validate()).Message);
-
-        var response = new FunctionDeclaration { Name = "f", Response = new Schema { Type = SchemaType.Array, Items = unknown } };
-        Assert.Equal(
-            "FunctionDeclaration('f').Response.Items.Type cannot be SchemaType.Unknown. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => response.Validate()).Message);
-    }
-
-    [Fact]
-    public void Validate_SelfReferencingSchema_Terminates()
-    {
-        var schema = new Schema { Type = SchemaType.Object };
-        schema.Properties = new Dictionary<string, Schema> { ["self"] = schema };
-
-        new GenerationConfig { ResponseSchema = schema }.Validate();
-    }
+    private static GenerateContentRequest WithDeclaration(FunctionDeclaration declaration) =>
+        new() { Contents = [Content.FromText("x")], Tools = [new Tool { FunctionDeclarations = [declaration] }] };
 
     #endregion
 
@@ -1112,28 +686,7 @@ public sealed class ValidationAndToolJsonTests
     {
         var options = new ChatOptions { RawRepresentationFactory = _ => new GenerateContentRequest { Contents = templateContents } };
         using var client = new GeminiClient("key", Model);
-        return ChatRequestMapper.ToRequest(messages, options, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
-    }
-
-    public static TheoryData<Func<IList<Content>>, int> TemplateContentsWithNull() => new()
-    {
-        { () => new List<Content> { null! }, 0 },
-        { () => new List<Content> { null!, Content.FromText("template") }, 0 },
-        { () => new List<Content> { Content.FromText("template"), null! }, 1 },
-        { () => new List<Content> { Content.FromText("a"), null!, Content.FromText("b") }, 1 },
-        { () => new[] { Content.FromText("template"), null! }, 1 },
-        { () => new ReadOnlyCollection<Content>([Content.FromText("template"), null!]), 1 }
-    };
-
-    [Theory]
-    [MemberData(nameof(TemplateContentsWithNull))]
-    public void ToRequest_NullContentInTemplate_IsReportedAtItsTemplateIndex(Func<IList<Content>> createContents, int expectedIndex)
-    {
-        var request = MapWithTemplateContents(createContents(), new ChatMessage(ChatRole.User, "next"));
-
-        Assert.Equal(
-            $"GenerateContentRequest.Contents[{expectedIndex}] cannot be null. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
+        return ChatRequestMapper.ToRequest(messages, options, client.AsIChatClient(), AIJsonUtilities.DefaultOptions);
     }
 
     [Theory]
@@ -1149,106 +702,17 @@ public sealed class ValidationAndToolJsonTests
         Assert.Null(request.Contents[1]);
     }
 
-    [Fact]
-    public async Task GetResponse_NullContentInTemplate_FailsBeforeAnythingIsSent()
-    {
-        using var handler = new RecordingHandler("""{"candidates":[]}""");
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions { ApiKey = "key", Model = Model }, httpClient);
-        var options = new ChatOptions
-        {
-            RawRepresentationFactory = _ => new GenerateContentRequest { Contents = [Content.FromText("template"), null!] }
-        };
-
-        await Assert.ThrowsAsync<ArgumentException>(() => client.AsIChatClient().GetResponseAsync("next", options));
-
-        Assert.Empty(handler.Requests);
-    }
-
     private static GenerateContentRequest MapWithTemplate(GenerateContentRequest template, ChatOptions? additionalOptions = null)
     {
         var options = additionalOptions ?? new ChatOptions();
         options.RawRepresentationFactory = _ => template;
         using var client = new GeminiClient("key", Model);
-        return ChatRequestMapper.ToRequest([new ChatMessage(ChatRole.User, "next")], options, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
+        return ChatRequestMapper.ToRequest([new ChatMessage(ChatRole.User, "next")], options, client.AsIChatClient(), AIJsonUtilities.DefaultOptions);
     }
 
     private static Tool ToolWith(string name) => new() { FunctionDeclarations = [new FunctionDeclaration { Name = name }] };
 
     private static SafetySetting Setting() => new() { Category = HarmCategory.Harassment, Threshold = HarmBlockThreshold.BlockNone };
-
-    public static TheoryData<Func<IList<Tool>>, int> TemplateToolsWithNull() => new()
-    {
-        { () => new List<Tool> { null! }, 0 },
-        { () => new List<Tool> { ToolWith("a"), null! }, 1 },
-        { () => new[] { ToolWith("a"), null! }, 1 },
-        { () => new ReadOnlyCollection<Tool>([null!, ToolWith("a")]), 0 }
-    };
-
-    [Theory]
-    [MemberData(nameof(TemplateToolsWithNull))]
-    public void ToRequest_NullToolInTemplate_IsReportedAtItsTemplateIndex(Func<IList<Tool>> createTools, int expectedIndex)
-    {
-        var request = MapWithTemplate(new GenerateContentRequest { Tools = createTools() });
-
-        Assert.Equal(
-            $"GenerateContentRequest.Tools[{expectedIndex}] cannot be null. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
-    }
-
-    [Fact]
-    public void ToRequest_NullToolInTemplate_SurvivesMergingChatOptionTools()
-    {
-        var options = new ChatOptions { Tools = [AIFunctionFactory.Create((string a) => a, "added"), new HostedWebSearchTool()] };
-
-        var request = MapWithTemplate(new GenerateContentRequest { Tools = [ToolWith("existing"), null!] }, options);
-
-        Assert.Equal(
-            "GenerateContentRequest.Tools[1] cannot be null. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
-    }
-
-    [Fact]
-    public void ToRequest_NullFunctionDeclarationInTemplate_IsReported()
-    {
-        var template = new GenerateContentRequest { Tools = [new Tool { FunctionDeclarations = [new FunctionDeclaration { Name = "a" }, null!] }] };
-        var options = new ChatOptions { Tools = [AIFunctionFactory.Create((string a) => a, "added")] };
-
-        foreach (var request in new[] { MapWithTemplate(template), MapWithTemplate(template, options) })
-        {
-            Assert.Equal(
-                "Tool.FunctionDeclarations cannot contain null elements. (Parameter 'request')",
-                Assert.Throws<ArgumentException>(() => request.Validate()).Message);
-        }
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public void ToRequest_NullSafetySettingInTemplate_IsReportedAtItsTemplateIndex(int nullIndex)
-    {
-        IList<SafetySetting> settings = [Setting(), Setting()];
-        settings[nullIndex] = null!;
-
-        var request = MapWithTemplate(new GenerateContentRequest { SafetySettings = settings });
-
-        Assert.Equal(
-            $"GenerateContentRequest.SafetySettings[{nullIndex}] cannot be null. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
-    }
-
-    [Fact]
-    public void ToRequest_NullAnyOfInTemplateSchema_IsReported()
-    {
-        var schema = new Schema { Type = SchemaType.Object, AnyOf = [new Schema { Type = SchemaType.String }, null!] };
-        var template = new GenerateContentRequest { GenerationConfig = new GenerationConfig { ResponseSchema = schema } };
-
-        var request = MapWithTemplate(template);
-
-        Assert.Equal(
-            "GenerationConfig.ResponseSchema.AnyOf[1] cannot be null. (Parameter 'request')",
-            Assert.Throws<ArgumentException>(() => request.Validate()).Message);
-    }
 
     [Fact]
     public void ToModelContent_NullsInServerResponses_StayTolerated()
@@ -1321,22 +785,10 @@ public sealed class ValidationAndToolJsonTests
         var message = ChatResponseMapper.ToChatResponse(ParseResponse("""{"inlineData":{"data":"AQID"}}"""), Model).Messages[0];
 
         var request = MapMessages(message);
-        request.Validate();
 
         var blob = request.Contents[0].Parts[0].InlineData!;
         Assert.Equal(MimeTypes.ApplicationOctetStream, blob.MimeType);
         Assert.Equal([1, 2, 3], blob.Data);
-    }
-
-    [Theory]
-    [InlineData("""{"inlineData":{"data":"AQID"}}""", ".InlineData.MimeType cannot be null or whitespace.")]
-    [InlineData("""{"inlineData":{"mimeType":"image/png"}}""", ".InlineData.Data cannot be null or empty.")]
-    [InlineData("""{"inlineData":{}}""", ".InlineData.MimeType cannot be null or whitespace.")]
-    public void InlineData_FromAPartialResponse_IsStillRejectedWhenSent(string partJson, string reason)
-    {
-        var part = ParseResponse(partJson).Candidates[0].Content!.Parts[0];
-
-        Assert.Equal(reason, part.GetValidationError());
     }
 
     [Fact]
@@ -1355,7 +807,7 @@ public sealed class ValidationAndToolJsonTests
     private static GenerateContentRequest MapMessages(params ChatMessage[] messages)
     {
         using var client = new GeminiClient("key", Model);
-        return ChatRequestMapper.ToRequest(messages, null, client.AsIChatClient(), Model, AIJsonUtilities.DefaultOptions);
+        return ChatRequestMapper.ToRequest(messages, null, client.AsIChatClient(), AIJsonUtilities.DefaultOptions);
     }
 
     [Theory]
@@ -1457,7 +909,6 @@ public sealed class ValidationAndToolJsonTests
         var message = ChatResponseMapper.ToChatResponse(ParseResponse(ToolPartsJson), Model).Messages[0];
 
         var request = MapMessages(message);
-        request.Validate();
 
         var parts = request.Contents[0].Parts;
         Assert.Equal(3, parts.Count);
@@ -1499,19 +950,6 @@ public sealed class ValidationAndToolJsonTests
         var contents = ChatResponseMapper.ToChatResponse(ParseResponse("""{"thoughtSignature":"s"}"""), Model).Messages[0].Contents;
 
         Assert.Equal("s", Assert.IsType<TextReasoningContent>(Assert.Single(contents)).ProtectedData);
-    }
-
-    [Theory]
-    [InlineData("""{"fileData":{"fileUri":""},"custom":1}""")]
-    [InlineData("""{"inlineData":{"mimeType":"a/b"},"custom":1}""")]
-    [InlineData("""{"inlineData":{},"custom":1}""")]
-    public void UnmappedPart_ThatCouldNotBeResent_IsIgnoredInsteadOfBreakingTheConversation(string partJson)
-    {
-        var response = ParseResponse(partJson + """,{"text":"ok"}""");
-        var message = ChatResponseMapper.ToChatResponse(response, Model).Messages[0];
-
-        Assert.Equal("ok", Assert.IsType<TextContent>(Assert.Single(message.Contents)).Text);
-        MapMessages(message).Validate();
     }
 
     [Fact]

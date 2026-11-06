@@ -43,7 +43,7 @@ Reference: [`models.generateContent` Request Body](https://ai.google.dev/api/gen
 
 | JSON Wire Field | Official Type | Status | C# Property (`GenerateContentRequest`) | Notes |
 |---|---|---|---|---|
-| `contents` | `Content[]` | ✅ Supported | `Contents` (`IList<Content>`) | Required; validated non-empty before sending |
+| `contents` | `Content[]` | ✅ Supported | `Contents` (`IList<Content>`) | Required |
 | `tools` | `Tool[]` | ✅ Supported | `Tools` (`IList<Tool>?`) | Functions, Google Search, Code Execution, URL Context |
 | `toolConfig` | `ToolConfig` | ✅ Supported | `ToolConfig` (`ToolConfig?`) | Controls `FunctionCallingConfig` (`Mode`, `AllowedFunctionNames`) |
 | `safetySettings` | `SafetySetting[]` | ✅ Supported | `SafetySettings` (`IList<SafetySetting>?`) | Per-category `HarmBlockThreshold` and `HarmBlockMethod` |
@@ -154,7 +154,7 @@ Reference: [`Embeddings`](https://ai.google.dev/api/embeddings)
 | `model` | `string` | ✅ Supported | `EmbedContentRequest.Model` | Normalized automatically to `"models/{model}"` on each item in `BatchEmbedContentsAsync` |
 | `content` | `Content` | ✅ Supported | `EmbedContentRequest.Content` | Convenience factory `EmbedContentRequest.FromText(...)` |
 | `taskType` | `TaskType` | ✅ Supported | `EmbedContentRequest.TaskType` | `RetrievalQuery`, `RetrievalDocument`, `SemanticSimilarity`, `Classification`, `Clustering`, `QuestionAnswering`, `FactVerification`, `CodeRetrievalQuery` + `Unknown` |
-| `title` | `string` | ✅ Supported | `EmbedContentRequest.Title` | Validated only when `TaskType` is `RetrievalDocument` |
+| `title` | `string` | ✅ Supported | `EmbedContentRequest.Title` | Only valid when `TaskType` is `RetrievalDocument` |
 | `outputDimensionality` | `integer` | ✅ Supported | `EmbedContentRequest.OutputDimensionality` | Positive reduced vector dimension |
 | `embedding.values` | `number[]` | ✅ Supported | `EmbedContentResponse.Embedding.Values` (`IList<float>`) | Dense float embedding vector |
 | `requests` / `embeddings` | `EmbedContentRequest[]` / `ContentEmbedding[]` | ✅ Supported | `BatchEmbedContentsRequest.Requests` / `BatchEmbedContentsResponse.Embeddings` | Batch embedding request and response |
@@ -177,17 +177,17 @@ Reference: [`Embeddings`](https://ai.google.dev/api/embeddings)
 | `DataContent` | `Part.InlineData` (`Blob` with `MimeType` and `Data` bytes) |
 | `UriContent` | `Part.FileData` (`FileData` with `FileUri` and `MimeType`) |
 | `FunctionCallContent` | `Part.FunctionCall` (preserves `ThoughtSignature` and synthesized ID markers in `AdditionalProperties`) |
-| `FunctionResultContent` | `Part.FunctionResponse` (correlated with the preceding `FunctionCallContent` name and call ID) |
+| `FunctionResultContent` | `Part.FunctionResponse` (correlated with the preceding `FunctionCallContent` name and call ID; a result without its call throws `ArgumentException`) |
 | `UsageContent` / `UsageDetails` | Mapped from `UsageMetadata` (emitted once as a single trailing update in streaming to avoid cumulative double-counting) |
-| `AIFunctionDeclaration` | `FunctionDeclaration` (`Name`, `Description`, `ParametersJsonSchema`, `ResponseJsonSchema`) |
+| `AIFunctionDeclaration` | `FunctionDeclaration` (`Name`, `Description`, `ParametersJsonSchema`, `ResponseJsonSchema`); each schema is sent as it is, except an empty one and the empty `properties` of a parameterless function |
 | `HostedWebSearchTool` | `Tool { GoogleSearch = new GoogleSearchTool() }` |
 | `HostedCodeInterpreterTool` | `Tool { CodeExecution = new CodeExecutionTool() }` |
 | `ChatToolMode.Auto` / `None` / `RequireAny` | `FunctionCallingMode.Auto` / `None` / `Any` (with `AllowedFunctionNames` when `RequiredFunctionName` is specified) |
 | `ChatResponseFormatText` | `GenerationConfig.ResponseMimeType = "text/plain"` |
 | `ChatResponseFormatJson` | `GenerationConfig.ResponseMimeType = "application/json"` + `ResponseJsonSchema` |
-| `ChatOptions.Reasoning` | Mapped to `ThinkingConfig` (`ThinkingLevel` on Gemini 3+, `ThinkingBudget` on Gemini 2.5, `IncludeThoughts` from `ReasoningOutput`) |
+| `ChatOptions.Reasoning` | Throws `NotSupportedException`. Set `ThinkingConfig` through `RawRepresentationFactory` |
 | `ChatOptions.RawRepresentationFactory` | Accepts a `GenerateContentRequest` template, which the client modifies, so return a new instance on each call |
-| `IEmbeddingGenerator<string, Embedding<float>>` | Always calls `:batchEmbedContents`; maps `EmbeddingGenerationOptions.ModelId`, `Dimensions` (`outputDimensionality`), and `RawRepresentationFactory` (`EmbedContentRequest`) |
+| `IEmbeddingGenerator<string, Embedding<float>>` | Always one `:batchEmbedContents` call, limited by the API to 100 inputs; maps `EmbeddingGenerationOptions.ModelId`, `Dimensions` (`outputDimensionality`), and `RawRepresentationFactory` (`EmbedContentRequest`) |
 
 ---
 
@@ -195,8 +195,7 @@ Reference: [`Embeddings`](https://ai.google.dev/api/embeddings)
 
 To prevent deserialization crashes when Google adds new fields or enum values to the Gemini API:
 
-1. **`[JsonExtensionData]` on every DTO**: All request and response model classes include `IDictionary<string, JsonElement>? ExtensionData`, ensuring unknown JSON properties survive round-trip serialization. Through `IChatClient`, a `Part` with such properties that maps to no other chat content (for example `toolCall` or `toolResponse`) is surfaced as a plain `AIContent` whose `RawRepresentation` is the part, and is replayed unchanged on the next turn. A part that would fail request validation is ignored instead. `RawRepresentation` is not serialized, so these parts, including any `thoughtSignature` they carry, do not survive persisting chat history as JSON.
+1. **`[JsonExtensionData]` on every DTO**: All request and response model classes include `IDictionary<string, JsonElement>? ExtensionData`, ensuring unknown JSON properties survive round-trip serialization. Through `IChatClient`, a `Part` with such properties that maps to no other chat content (for example `toolCall` or `toolResponse`) is surfaced as a plain `AIContent` whose `RawRepresentation` is the part, and is replayed unchanged on the next turn. `RawRepresentation` is not serialized, so these parts, including any `thoughtSignature` they carry, do not survive persisting chat history as JSON.
 2. **`LenientStringEnumConverter<TEnum>` on all 16 wire enums**:
    - `FinishReason`, `BlockReason`, `HarmCategory`, `HarmProbability`, `HarmSeverity`, `HarmBlockThreshold`, `HarmBlockMethod`, `Role`, `SchemaType`, `ThinkingLevel`, `MediaResolution`, `FunctionCallingMode`, `CodeExecutionLanguage`, `CodeExecutionOutcome`, `UrlRetrievalStatus`, and `TaskType`.
    - Known members use official Google Protobuf enum numbers (`Unspecified = 0` where defined); unrecognized string or integer tokens deserialize to `Unknown` (`-1`) instead of throwing `JsonException`.
-   - Outbound validation (`GenerateContentRequest.Validate()`, `EmbedContentRequest.Validate()`, `BatchEmbedContentsRequest.Validate()`) rejects `Unknown` on request enums before an HTTP call is made (while allowing response-originated `CodeExecutionLanguage.Unknown` and `CodeExecutionOutcome.Unknown` for multi-turn history replay).

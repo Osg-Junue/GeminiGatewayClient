@@ -8,7 +8,7 @@ This guide provides practical usage patterns for `GeminiGatewayClient`, modeled 
 2. [Dependency Injection, `IHttpClientFactory` & Resilience](#2-dependency-injection-ihttpclientfactory--resilience)
 3. [Single-Turn Generation & Streaming](#3-single-turn-generation--streaming)
 4. [Structured JSON Output (`ResponseJsonSchema`)](#4-structured-json-output-responsejsonschema)
-5. [Thinking & Reasoning (`ThinkingConfig` and `ReasoningOptions`)](#5-thinking--reasoning-thinkingconfig-and-reasoningoptions)
+5. [Thinking (`ThinkingConfig`)](#5-thinking-thinkingconfig)
 6. [Multimodal Inputs (Inline Bytes & File URIs)](#6-multimodal-inputs-inline-bytes--file-uris)
 7. [`Microsoft.Extensions.AI` (`IChatClient`) & Automatic Tool Chains](#7-microsoftextensionsai-ichatclient--automatic-tool-chains)
 8. [Manual Multi-Step & Parallel Function Calling (`GeminiClient`)](#8-manual-multi-step--parallel-function-calling-geminiclient)
@@ -90,7 +90,6 @@ services.AddGeminiClient(options =>
     options.Model = "gemini-flash-latest";
     options.ApiKeyProvider = async ct => await tokenService.GetTokenAsync(ct);
     options.AdditionalHeaders["x-client-scenario"] = "order-assistant";
-    options.Timeout = TimeSpan.FromMinutes(3);
 });
 
 await using var provider = services.BuildServiceProvider();
@@ -98,6 +97,8 @@ await using var provider = services.BuildServiceProvider();
 var geminiClient = provider.GetRequiredService<IGeminiClient>();
 var chatClient = provider.GetRequiredService<IChatClient>();
 ```
+
+The named `HttpClient` has a 5-minute timeout. Change it on the returned builder: `.ConfigureHttpClient(client => client.Timeout = TimeSpan.FromMinutes(3))`. The registered `IChatClient` uses the default tool serializer options; for others, register your own `client.AsIChatClient(toolSerializerOptions: ...)`.
 
 ### Tuning `AddStandardResilienceHandler` for Reasoning Models
 
@@ -113,7 +114,7 @@ services.AddGeminiClient(options => { /* ... */ })
     });
 ```
 
-> **Note (Streaming & Post-Header Retry Boundary):** `HttpMessageHandler` resilience pipelines (such as `AddStandardResilienceHandler`) operate at the `SendAsync` header boundary (`HttpCompletionOption.ResponseHeadersRead` for streaming). They automatically retry transient transport errors and non-2xx HTTP status codes (e.g., `429` / `503`) before response headers arrive, whereas mid-stream failures after an HTTP 200 header is received—such as an in-stream `{"error": ...}` payload (`GeminiApiException` with `IsTransient == true`) or a stalled stream (`TimeoutException` from `StreamIdleTimeout`)—surface to the caller during enumeration.
+> **Note (Streaming & Post-Header Retry Boundary):** `HttpMessageHandler` resilience pipelines (such as `AddStandardResilienceHandler`) operate at the `SendAsync` header boundary (`HttpCompletionOption.ResponseHeadersRead` for streaming). They automatically retry transient transport errors and non-2xx HTTP status codes (e.g., `429` / `503`) before response headers arrive, whereas mid-stream failures after an HTTP 200 header is received—such as an in-stream `{"error": ...}` payload (`GeminiApiException`) or a stalled stream (`TimeoutException` from `StreamIdleTimeout`)—surface to the caller during enumeration.
 
 ---
 
@@ -144,7 +145,7 @@ Console.WriteLine($"Tokens: prompt={response.UsageMetadata?.PromptTokenCount}, t
 
 ### Real-Time Streaming
 
-`StreamGenerateContentAsync` uses Server-Sent Events (`?alt=sse`), which flushes chunks immediately through proxies.
+`StreamGenerateContentAsync` asks for Server-Sent Events (`?alt=sse`), which flushes chunks immediately through proxies. A gateway that does not forward the query string makes Gemini answer with a JSON array instead, and the client reads that as it arrives too, though a complete chunk may wait for the data after it. A gateway that rejects the query string fails with its own status; set `UseServerSentEvents = false` to send neither `alt=sse` nor the `Accept: text/event-stream` header.
 
 ```csharp
 var chunks = new List<GenerateContentResponse>();
@@ -226,7 +227,7 @@ internal sealed partial class CatalogJsonContext : JsonSerializerContext;
 
 ---
 
-## 5. Thinking & Reasoning (`ThinkingConfig` and `ReasoningOptions`)
+## 5. Thinking (`ThinkingConfig`)
 
 - **Gemini 3+ models** use `ThinkingConfig.ThinkingLevel` (`Minimal`, `Low`, `Medium`, `High`).
 - **Gemini 2.5 models** use `ThinkingConfig.ThinkingBudget` (`-1` for dynamic, `0` to disable where supported, or a positive token count).
@@ -264,11 +265,12 @@ Console.WriteLine($"[Answer] {response.Text}");
 Console.WriteLine($"[Thoughts Tokens] {response.UsageMetadata?.ThoughtsTokenCount}");
 ```
 
-### Via `IChatClient` (`ReasoningOptions`)
+### Via `IChatClient`
 
-When using `IChatClient`, `ChatOptions.Reasoning.Effort` is automatically mapped according to the target model (`gemini-2.5*` -> `thinkingBudget`; other models, including aliases such as `gemini-flash-latest` -> `thinkingLevel`; `gemini-1*` and `gemini-2.0*` send neither):
+`ChatOptions.Reasoning` throws `NotSupportedException`: which thinking settings a model accepts is yours to decide. Set `ThinkingConfig` through `RawRepresentationFactory`, which must return a new request on each call. A model that does not accept a value answers HTTP 400:
 
 ```csharp
+using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
 
 IChatClient chatClient = client.AsIChatClient();
@@ -277,10 +279,12 @@ var response = await chatClient.GetResponseAsync(
     "Calculate 2^10 - 2^5.",
     new ChatOptions
     {
-        Reasoning = new ReasoningOptions
+        RawRepresentationFactory = _ => new GenerateContentRequest
         {
-            Effort = ReasoningEffort.Low,
-            Output = ReasoningOutput.Summary
+            GenerationConfig = new GenerationConfig
+            {
+                ThinkingConfig = new ThinkingConfig { ThinkingLevel = ThinkingLevel.Low, IncludeThoughts = true }
+            }
         }
     });
 
@@ -295,20 +299,11 @@ foreach (var reasoning in response.Messages
 Console.WriteLine(response.Text);
 ```
 
-| `ReasoningEffort` | Gemini 2.5 (`thinkingBudget`) | Other models (`thinkingLevel`) |
-|---|---|---|
-| `None` | `0` | `Minimal` |
-| `Low` | `1024` | `Low` |
-| `Medium` | `8192` | `Medium` |
-| `High` / `ExtraHigh` | `24576` | `High` |
-
-The value closest to the requested effort is sent as is, whatever the model. A model that does not accept it fails with `GeminiApiException` (HTTP 400) instead of quietly thinking more or less than asked: for example, Gemini 2.5 Pro rejects a budget of `0`, and some models and aliases, such as `gemini-flash-latest`, reject `Minimal`. Pick an effort the model supports, or set `ThinkingConfig` through `RawRepresentationFactory`, which takes precedence over `Reasoning.Effort`.
-
 ---
 
 ## 6. Multimodal Inputs (Inline Bytes & File URIs)
 
-Use `Part.FromBytes(byte[], mimeType)` for inline payloads (`Blob.Data` is serialized as Base64 automatically) or `Part.FromUri(fileUri, mimeType)` for files uploaded via the Files API or Cloud Storage:
+Use `Part.FromBytes(data, mimeType)` for inline payloads (`Blob.Data` is serialized as Base64 automatically) or `Part.FromUri(fileUri, mimeType)` for files uploaded via the Files API or Cloud Storage:
 
 ```csharp
 using GeminiGatewayClient.Models;
@@ -546,7 +541,7 @@ if (candidate.UrlContextMetadata is { } urlContext)
 
 ### Embeddings (`IEmbeddingGenerator<string, Embedding<float>>` & `GeminiClient`)
 
-Use `client.AsIEmbeddingGenerator()` (or inject `IEmbeddingGenerator<string, Embedding<float>>` from DI). Every call uses `:batchEmbedContents`, and an `EmbedContentRequest` from `RawRepresentationFactory` supplies the settings shared by all inputs:
+Use `client.AsIEmbeddingGenerator()` (or inject `IEmbeddingGenerator<string, Embedding<float>>` from DI). Every call is one `:batchEmbedContents` request, so more than 100 inputs fail with HTTP 400; split them yourself. An `EmbedContentRequest` from `RawRepresentationFactory` supplies the settings shared by all inputs:
 
 ```csharp
 using GeminiGatewayClient;
@@ -589,6 +584,8 @@ When persisting `Microsoft.Extensions.AI` `ChatMessage` history to a database or
 
 Simply serialize and deserialize `ChatMessage.Contents` (including `AdditionalProperties` and `ProtectedData`) and pass the restored `IList<ChatMessage>` to `chatClient.GetResponseAsync(history, options)`.
 
+When trimming a history, remove a `FunctionCallContent` together with its `FunctionResultContent`. A result without its call in the messages throws `ArgumentException`, because only the call knows the function name.
+
 ---
 
 ## 11. Safety Blocks, Timeouts & Error Handling
@@ -597,16 +594,16 @@ Settings without a `ChatOptions` counterpart go through `ChatOptions.RawRepresen
 
 ### Exception & Failure Modes Matrix
 
-`GeminiClient` and `GeminiChatClient` distinguish between validation errors, upstream API errors, idle stream stalls, and request cancellation:
+Upstream API errors, idle stream stalls, and request cancellation surface as different exceptions. Requests are not checked before sending, so an invalid one comes back as `GeminiApiException` with HTTP 400:
 
 | Exception | When It Is Thrown | Key Properties & Recovery Guidance |
 |---|---|---|
-| `GeminiApiException` | • Non-2xx HTTP status from Gemini or the gateway<br>• In-stream `{"error": ...}` payload arriving after an HTTP 200 header<br>• Empty or malformed JSON response body | Inspect `StatusCode`, `ErrorStatus` (e.g., `RESOURCE_EXHAUSTED`, `UNAVAILABLE`), `ErrorCode`, `ErrorMessage`, and `ErrorContent` (up to 64 KB). Retry when `IsTransient == true`, honoring `RetryAfter` when present. |
-| `TimeoutException` | No streaming chunk bytes arrive within `GeminiClientOptions.StreamIdleTimeout` (default: **2 minutes**). | Indicates a stalled stream or hung upstream connection after headers were received. Safe to retry if the operation is idempotent. |
-| `OperationCanceledException` / `TaskCanceledException` | • The caller's `CancellationToken` was canceled<br>• `HttpClient.Timeout` (`GeminiClientOptions.Timeout`, default: **5 minutes**, covering a complete response or the headers of a stream) elapsed | Tell them apart with your own token: `ct.IsCancellationRequested` is `true` for caller cancellation and `false` for the timeout. Do not compare `ex.CancellationToken` with `ct`: the client links tokens, so the exception may carry another token. Increase `GeminiClientOptions.Timeout` for deep thinking requests. |
-| `HttpRequestException` | • Transport-level DNS, socket, or TLS failure, including the connection being lost while reading a response body or stream. `StatusCode` is set only for a stream.<br>• A response body read as a whole (a non-streaming call, or a stream answered with a single JSON or HTML body) is larger than `HttpClient.MaxResponseContentBufferSize` (64 MiB on clients this library creates) | Check gateway reachability, TLS certificates, or proxy settings. `HttpRequestError` gives the failure category when known (`ConfigurationLimitExceeded` for an oversized body). |
-| `InvalidOperationException` | • Neither per-call `model` nor `GeminiClientOptions.Model` was set<br>• `ApiKeyProvider` returned an empty, whitespace-only, or non-ASCII token | Fix client configuration or token provider implementation. |
-| `ArgumentException` / `ArgumentNullException` | Invalid `GenerateContentRequest` or `GeminiClientOptions` (thrown **eagerly** before network I/O, including when calling `StreamGenerateContentAsync` before enumeration starts). | Fix request parameters (e.g., empty `Contents`, conflicting `ThinkingLevel` and `ThinkingBudget`, or `Unknown` wire enum values). |
+| `GeminiApiException` | • Non-2xx HTTP status from Gemini or the gateway<br>• In-stream `{"error": ...}` payload or `error` event with data arriving after an HTTP 200 header<br>• Empty or malformed JSON response body | Inspect `StatusCode`, `ErrorStatus` (e.g., `RESOURCE_EXHAUSTED`, `UNAVAILABLE`), `ErrorCode`, `ErrorMessage`, and `ErrorContent` (up to 64 KB). Decide on retries from `StatusCode` and `ErrorStatus`, honoring `RetryAfter` when present. |
+| `TimeoutException` | No data arrives within `GeminiClientOptions.StreamIdleTimeout` (default: **2 minutes**). Keep-alive comments from a gateway count as data. | Indicates a stalled stream or hung upstream connection after headers were received. Safe to retry if the operation is idempotent. |
+| `OperationCanceledException` / `TaskCanceledException` | • The caller's `CancellationToken` was canceled<br>• `HttpClient.Timeout` (default: **5 minutes** on clients this library creates, covering a complete response or the headers of a stream) elapsed | Tell them apart with your own token: `ct.IsCancellationRequested` is `true` for caller cancellation and `false` for the timeout. Do not compare `ex.CancellationToken` with `ct`: the client links tokens, so the exception may carry another token. Increase `HttpClient.Timeout` for deep thinking requests. |
+| `HttpRequestException` | • Transport-level DNS, socket, or TLS failure, including the connection being lost while reading a response body or stream. `StatusCode` is set only for a stream.<br>• A non-streaming response body is larger than `HttpClient.MaxResponseContentBufferSize` | Check gateway reachability, TLS certificates, or proxy settings. `HttpRequestError` gives the failure category when known (`ConfigurationLimitExceeded` for an oversized body). |
+| `InvalidOperationException` | • Neither per-call `model` nor `GeminiClientOptions.Model` was set | Set a model. |
+| `ArgumentException` / `ArgumentNullException` | • A `null` argument<br>• A header that cannot be sent: when the client is created, or on each call for a key from `ApiKeyProvider`<br>• A function result without its call | Fix the argument, header, or history. |
 
 ### Handling `GeminiApiException`, `TimeoutException`, and Safety Blocks
 
@@ -629,7 +626,7 @@ try
 catch (GeminiApiException ex)
 {
     Console.Error.WriteLine(
-        $"HTTP {(int)ex.StatusCode} (status={ex.ErrorStatus}, code={ex.ErrorCode}, transient={ex.IsTransient}): {ex.ErrorMessage}");
+        $"HTTP {(int)ex.StatusCode} (status={ex.ErrorStatus}, code={ex.ErrorCode}): {ex.ErrorMessage}");
 
     if (ex.RetryAfter is { } retryAfter)
     {
@@ -643,7 +640,7 @@ catch (TimeoutException ex)
 }
 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
 {
-    // HttpClient.Timeout (GeminiClientOptions.Timeout) elapsed
+    // HttpClient.Timeout elapsed
     Console.Error.WriteLine("Request timed out.");
 }
 ```
@@ -651,8 +648,8 @@ catch (OperationCanceledException) when (!ct.IsCancellationRequested)
 ### Operational Note: Caller-Supplied `HttpClient` Instances
 
 When you pass your own `HttpClient` to `new GeminiClient(options, httpClient)`, `GeminiClient` does **not** mutate or dispose that instance:
-- `GeminiClientOptions.Timeout` is not applied to a caller-supplied `HttpClient`—configure `httpClient.Timeout` directly (or via `IHttpClientBuilder`).
-- Configure `SocketsHttpHandler.AllowAutoRedirect = false` on your custom handler so credentials in custom headers (`x-goog-api-key`, `Ocp-Apim-Subscription-Key`) are never forwarded across cross-host redirects (`services.AddGeminiClient(...)` and internally created clients configure this automatically).
+- Configure `httpClient.Timeout` directly (or via `IHttpClientBuilder`).
+- Build it on `GeminiClient.CreateDefaultHandler()`, as in `new HttpClient(GeminiClient.CreateDefaultHandler())`, so credentials in custom headers (`x-goog-api-key`, `Ocp-Apim-Subscription-Key`) are never forwarded across cross-host redirects and cookies never pass between callers. With a handler of your own, set `AllowAutoRedirect = false` and `UseCookies = false`. `services.AddGeminiClient(...)` and internally created clients do this automatically; a primary handler you attach to its `IHttpClientBuilder` needs the same settings.
 
 ---
 
@@ -669,8 +666,7 @@ When you pass your own `HttpClient` to `new GeminiClient(options, httpClient)`, 
 | `ApiKeyProvider` | `Func<CancellationToken, ValueTask<string>>?` | `null` | Async callback invoked once per client call to obtain a fresh API key or bearer token. Retries inside an HTTP handler, such as `AddStandardResilienceHandler`, resend the same value. |
 | `ApiKeyHeader` | `string` | `"x-goog-api-key"` | Header name used to send `ApiKey` or the value returned by `ApiKeyProvider`. |
 | `ApiKeyPrefix` | `string?` | `null` | Prefix prepended to the key value (for example `"Bearer "`). |
-| `AdditionalHeaders` | `IDictionary<string, string>` | Empty | Extra request headers sent on every call. Validated against CRLF injection and duplicates. |
-| `Timeout` | `TimeSpan` | 5 minutes | Request timeout applied to internally created and DI-managed `HttpClient` instances. |
-| `StreamIdleTimeout` | `TimeSpan?` | 2 minutes | Maximum idle time between streaming chunks before throwing `TimeoutException` (`null` or `Timeout.InfiniteTimeSpan` disables). |
+| `AdditionalHeaders` | `IDictionary<string, string>` | Empty | Extra request headers sent on every call. A value with a line break or NUL throws `ArgumentException`. |
+| `StreamIdleTimeout` | `TimeSpan?` | 2 minutes | Maximum time without received data on a stream before throwing `TimeoutException`; keep-alive comments reset it (`null` or `Timeout.InfiniteTimeSpan` disables). |
+| `UseServerSentEvents` | `bool` | `true` | Whether streaming calls ask for Server-Sent Events with `alt=sse`. With `false`, Gemini answers with a JSON array. |
 | `AllowInsecureHttp` | `bool` | `false` | Allows plain `http://` for non-loopback hosts when `true` (`http://localhost` is always allowed). |
-| `ToolSerializerOptions` | `JsonSerializerOptions?` | `null` | Optional `JsonSerializerOptions` (e.g., custom `JsonSerializerContext`) for serializing custom POCO tool results in `IChatClient`. |

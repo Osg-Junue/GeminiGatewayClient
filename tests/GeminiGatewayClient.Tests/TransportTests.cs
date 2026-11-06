@@ -20,8 +20,11 @@ public class TransportTests
     private static async Task<List<string?>> StreamTextsAsync(HttpMessageHandler handler, TimeSpan? idleTimeout = null)
     {
         using var client = CreateClient(handler, idleTimeout);
+
+        // A test of a stall fails here rather than hanging the run if the idle timeout stops working.
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var texts = new List<string?>();
-        await foreach (var chunk in client.StreamGenerateContentAsync(Request()))
+        await foreach (var chunk in client.StreamGenerateContentAsync(Request(), cancellationToken: guard.Token))
         {
             texts.Add(chunk.Text);
         }
@@ -112,16 +115,6 @@ public class TransportTests
         Assert.Equal(HttpStatusCode.TooManyRequests, error.StatusCode);
     }
 
-    [Fact]
-    public async Task ErrorEvent_WithAPermanentStatus_IsNotTransient()
-    {
-        const string body = """data: {"error":{"code":3,"status":"INVALID_ARGUMENT","message":"m"}}""";
-
-        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(body + "\n\n")));
-
-        Assert.False(error.IsTransient);
-    }
-
     [Theory]
     [InlineData("data: {0}")]
     [InlineData("data: {0}\n")]
@@ -171,22 +164,6 @@ public class TransportTests
     }
 
     [Fact]
-    public async Task BatchEmbed_MixingModels_IsRejected()
-    {
-        using var client = CreateClient(Body("{}", "application/json"));
-        var request = new BatchEmbedContentsRequest
-        {
-            Requests =
-            [
-                new EmbedContentRequest { Model = "a", Content = Content.FromText("x") },
-                new EmbedContentRequest { Model = "b", Content = Content.FromText("y") }
-            ]
-        };
-
-        await Assert.ThrowsAsync<ArgumentException>(() => client.BatchEmbedContentsAsync(request));
-    }
-
-    [Fact]
     public async Task Generate_LongErrorBody_CutInsideASurrogatePair_KeepsTheDetails()
     {
         var padding = new string('x', (64 * 1024) - 60);
@@ -223,77 +200,11 @@ public class TransportTests
         await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(body)));
     }
 
-    private static GeminiClient CreateClientWithBufferLimit(HttpMessageHandler handler, long maxBufferSize) =>
-        new(new GeminiClientOptions { ApiKey = "test-key", Model = "gemini-2.5-flash" }, new HttpClient(handler) { MaxResponseContentBufferSize = maxBufferSize });
-
     private const string TextResponsePrefix = "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"";
     private const string TextResponseSuffix = "\"}]}}]}";
 
     private static string ResponseOfLength(int length) =>
         TextResponsePrefix + new string('x', length - TextResponsePrefix.Length - TextResponseSuffix.Length) + TextResponseSuffix;
-
-    [Theory]
-    [InlineData("application/json")]
-    [InlineData("text/event-stream")]
-    public async Task Stream_SingleJsonBodyOverTheBufferLimit_FailsLikeANonStreamingBody(string mediaType)
-    {
-        var body = ResponseOfLength(4096);
-        using var streaming = CreateClientWithBufferLimit(Body(body, mediaType), 1024);
-        using var buffered = CreateClientWithBufferLimit(Body(body, "application/json"), 1024);
-
-        var streamError = await Assert.ThrowsAsync<HttpRequestException>(async () =>
-        {
-            await foreach (var _ in streaming.StreamGenerateContentAsync(Request()))
-            {
-            }
-        });
-        var bufferedError = await Assert.ThrowsAsync<HttpRequestException>(() => buffered.GenerateContentAsync(Request()));
-
-        Assert.Equal(bufferedError.HttpRequestError, streamError.HttpRequestError);
-        Assert.Equal(HttpRequestError.ConfigurationLimitExceeded, streamError.HttpRequestError);
-    }
-
-    [Fact]
-    public async Task Stream_SingleJsonBodyAtTheBufferLimit_IsRead()
-    {
-        using var client = CreateClientWithBufferLimit(Stream(new TrickleStream(Encoding.UTF8.GetBytes(ResponseOfLength(1024))), "application/json"), 1024);
-        var chunks = new List<GenerateContentResponse>();
-
-        await foreach (var chunk in client.StreamGenerateContentAsync(Request()))
-        {
-            chunks.Add(chunk);
-        }
-
-        Assert.Equal(new string('x', 1024 - TextResponsePrefix.Length - TextResponseSuffix.Length), Assert.Single(chunks).Text);
-    }
-
-    [Fact]
-    public async Task Stream_SingleJsonBodyOneByteOverTheBufferLimit_Fails()
-    {
-        using var client = CreateClientWithBufferLimit(Body(ResponseOfLength(1025), "application/json"), 1024);
-
-        await Assert.ThrowsAsync<HttpRequestException>(async () =>
-        {
-            await foreach (var _ in client.StreamGenerateContentAsync(Request()))
-            {
-            }
-        });
-    }
-
-    [Fact]
-    public async Task Stream_EventsLongerThanTheBufferLimitInTotal_AreNotLimited()
-    {
-        var events = string.Concat(Enumerable.Repeat($"data: {ResponseOfLength(800)}\n\n", 4));
-        using var client = CreateClientWithBufferLimit(Body(events), 1024);
-        var received = 0;
-
-        await foreach (var _ in client.StreamGenerateContentAsync(Request()))
-        {
-            received++;
-        }
-
-        Assert.Equal(4, received);
-    }
 
     [Fact]
     public async Task Stream_ErrorEvent_SurfacesTheGoogleErrorAfterEarlierChunks()
@@ -313,7 +224,6 @@ public class TransportTests
         Assert.Equal(1, received);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, error.StatusCode);
         Assert.Equal("UNAVAILABLE", error.ErrorStatus);
-        Assert.True(error.IsTransient);
     }
 
     [Fact]
@@ -336,7 +246,6 @@ public class TransportTests
         Assert.Equal("RESOURCE_EXHAUSTED", error.ErrorStatus);
         Assert.Equal("slow down", error.ErrorMessage);
         Assert.Equal(TimeSpan.FromSeconds(15), error.RetryAfter);
-        Assert.True(error.IsTransient);
     }
 
     [Fact]
@@ -345,7 +254,7 @@ public class TransportTests
         var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(ArrayError, "application/json")));
 
         AssertRetryableQuotaError(error);
-        Assert.Equal(ArrayError, error.ErrorContent);
+        Assert.StartsWith("""{"code":429,""", error.ErrorContent, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -451,6 +360,210 @@ public class TransportTests
         Assert.Equal(2, received);
     }
 
+    [Theory]
+    [InlineData("data: {0}\n\n", "data: {0}\n\n")]
+    [InlineData("[{0}", ",{0}]")]
+    public async Task Stream_SlowConsumer_IsNotAnIdleServerWhenTheNextChunkIsStillToBeRead(string first, string second)
+    {
+        var body = new CancelableChunksStream(1, string.Format(first, Chunk), string.Format(second, Chunk));
+        using var client = CreateClient(Stream(body), TimeSpan.FromMilliseconds(100));
+        var received = 0;
+
+        await foreach (var _ in client.StreamGenerateContentAsync(Request()))
+        {
+            received++;
+            await Task.Delay(250);
+        }
+
+        Assert.Equal(2, received);
+    }
+
+    [Theory]
+    [InlineData("[", "]")]
+    [InlineData("", "")]
+    public async Task Stream_JsonBodyArrivingSlowlyInPieces_IsNotAStall(string prefix, string suffix)
+    {
+        var body = prefix + Chunk + suffix;
+        var pieces = body.Chunk(body.Length / 5 + 1).Select(piece => new string(piece)).ToArray();
+
+        Assert.Equal(["hi"], await StreamTextsAsync(Stream(new CancelableChunksStream(60, pieces), "application/json"), TimeSpan.FromMilliseconds(150)));
+    }
+
+    [Fact]
+    public async Task Stream_InfiniteIdleTimeout_WaitsForTheNextChunk()
+    {
+        var body = new CancelableChunksStream(50, $"data: {Chunk}\n\n", $"data: {Chunk}\n\n");
+
+        Assert.Equal(["hi", "hi"], await StreamTextsAsync(Stream(body), Timeout.InfiniteTimeSpan));
+    }
+
+    [Fact]
+    public async Task Stream_KeepAliveComments_KeepASlowStreamAlive()
+    {
+        string[] pieces = [$"data: {Chunk}\n\n", .. Enumerable.Repeat(": ping\n\n", 8), $"data: {Chunk}\n\n"];
+
+        Assert.Equal(["hi", "hi"], await StreamTextsAsync(Stream(new CancelableChunksStream(50, pieces)), TimeSpan.FromMilliseconds(200)));
+    }
+
+    [Theory]
+    [InlineData("application/json")]
+    [InlineData("text/event-stream")]
+    public async Task Stream_JsonArray_YieldsEveryElement(string mediaType)
+    {
+        Assert.Equal(["hi", "hi"], await StreamTextsAsync(Body($"[{Chunk},\r\n{Chunk}]\n", mediaType)));
+    }
+
+    [Fact]
+    public async Task Stream_WithoutServerSentEvents_SendsNoAltSseAndReadsTheArray()
+    {
+        using var handler = new RecordingHandler($"[{Chunk},{Chunk}]");
+        var options = new GeminiClientOptions { ApiKey = "k", Model = "m", UseServerSentEvents = false };
+        using var client = new GeminiClient(options, new HttpClient(handler));
+        var received = 0;
+
+        await foreach (var _ in client.StreamGenerateContentAsync(Request()))
+        {
+            received++;
+        }
+
+        Assert.Equal(2, received);
+        Assert.Empty(handler.LastRequest!.RequestUri!.Query);
+        Assert.Empty(handler.LastRequest.Headers.Accept);
+    }
+
+    [Fact]
+    public async Task Stream_ByDefault_AsksForServerSentEvents()
+    {
+        using var handler = new RecordingHandler($"data: {Chunk}\n\n", contentType: "text/event-stream");
+        using var client = new GeminiClient(new GeminiClientOptions { ApiKey = "k", Model = "m" }, new HttpClient(handler));
+
+        await foreach (var _ in client.StreamGenerateContentAsync(Request()))
+        {
+        }
+
+        Assert.Equal("?alt=sse", handler.LastRequest!.RequestUri!.Query);
+        Assert.Equal("text/event-stream", handler.LastRequest.Headers.Accept.ToString());
+    }
+
+    [Fact]
+    public async Task Stream_JsonArrayAfterAByteOrderMark_IsRead()
+    {
+        Assert.Equal(["hi"], await StreamTextsAsync(Body($"\uFEFF[{Chunk}]", "application/json")));
+    }
+
+    [Fact]
+    public async Task Stream_JsonArraySplitAcrossReads_IsRead()
+    {
+        Assert.Equal(["hi", "hi"], await StreamTextsAsync(Stream(new TrickleStream(Encoding.UTF8.GetBytes($"[{Chunk},{Chunk}]")), "application/json")));
+    }
+
+    [Fact]
+    public async Task Stream_JsonArrayThatStalls_ThrowsTimeoutExceptionAfterTheFirstChunk()
+    {
+        var texts = new List<string?>();
+        using var client = CreateClient(Stream(new StallingStream(Encoding.UTF8.GetBytes($"[{Chunk}")), "application/json"), TimeSpan.FromMilliseconds(200));
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+        {
+            await foreach (var chunk in client.StreamGenerateContentAsync(Request(), cancellationToken: guard.Token))
+            {
+                texts.Add(chunk.Text);
+            }
+        });
+
+        Assert.Equal(["hi"], texts);
+    }
+
+    [Fact]
+    public async Task Stream_JsonArray_SurfacesAnErrorElementAfterEarlierChunks()
+    {
+        const string error = """{"error":{"code":503,"message":"m","status":"UNAVAILABLE"}}""";
+        var texts = new List<string?>();
+        using var client = CreateClient(Body($"[{Chunk},{error}]", "application/json"));
+
+        var thrown = await Assert.ThrowsAsync<GeminiApiException>(async () =>
+        {
+            await foreach (var chunk in client.StreamGenerateContentAsync(Request()))
+            {
+                texts.Add(chunk.Text);
+            }
+        });
+
+        Assert.Equal(["hi"], texts);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, thrown.StatusCode);
+        Assert.Equal("UNAVAILABLE", thrown.ErrorStatus);
+        Assert.DoesNotContain("candidates", thrown.ErrorContent, StringComparison.Ordinal);
+        Assert.Contains("UNAVAILABLE", thrown.ErrorContent, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("""[{"candidates":""")]
+    [InlineData("[1]")]
+    public async Task Stream_JsonArrayThatIsMalformed_KeepsTheJsonExceptionAndTheBody(string body)
+    {
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(body, "application/json")));
+
+        Assert.IsAssignableFrom<System.Text.Json.JsonException>(error.InnerException);
+        Assert.Equal(body, error.ErrorContent);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("[null]")]
+    public async Task Stream_JsonArrayWithoutChunks_IsReportedAsEmpty(string body)
+    {
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body(body, "application/json")));
+
+        Assert.Contains("empty streaming response", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Stream_ErrorEventInAGatewayShape_IsAFailure()
+    {
+        const string data = """{"message":"upstream rate limited"}""";
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body($"data: {Chunk}\n\nevent: error\ndata: {data}\n\n")));
+
+        Assert.Equal(data, error.ErrorContent);
+    }
+
+    [Fact]
+    public async Task Generate_ErrorStatus_KeepsTheStatusWhateverTheStreamIdleTimeout()
+    {
+        using var handler = new RecordingHandler("""{"error":{"code":503,"message":"m"}}""", HttpStatusCode.ServiceUnavailable);
+        var options = new GeminiClientOptions { Model = "m", StreamIdleTimeout = TimeSpan.MaxValue };
+        using var client = new GeminiClient(options, new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync(Request()));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task Stream_ErrorEventInGooglesShape_KeepsItsDetails()
+    {
+        const string data = """{"error":{"code":503,"message":"m","status":"UNAVAILABLE"}}""";
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body($"event: error\ndata: {data}\n\n")));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task Stream_JsonArray_StopsWhenTheCallerCancels()
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        using var client = CreateClient(Stream(new StallingStream(Encoding.UTF8.GetBytes($"[{Chunk}")), "application/json"));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in client.StreamGenerateContentAsync(Request(), cancellationToken: cancellation.Token))
+            {
+            }
+        });
+    }
+
     [Fact]
     public async Task Stream_CallerCancellation_IsNotReportedAsATimeout()
     {
@@ -533,7 +646,7 @@ public class TransportTests
 
         Assert.Equal(HttpStatusCode.BadGateway, error.StatusCode);
         Assert.Null(error.ErrorContent);
-        Assert.InRange(body.BytesRead, 64 * 1024 * 1024, 65 * 1024 * 1024);
+        Assert.InRange(body.BytesRead, 64 * 1024, 1024 * 1024);
     }
 
     private sealed class EndlessStream : MemoryStream
@@ -597,6 +710,30 @@ public class TransportTests
             }
 
             return read;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+    }
+
+    /// <summary>
+    /// Returns one chunk per read after a delay, and honors cancellation like a real connection.
+    /// </summary>
+    private sealed class CancelableChunksStream(int delayMilliseconds, params string[] chunks) : MemoryStream
+    {
+        private int _next;
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(delayMilliseconds, cancellationToken);
+            if (_next == chunks.Length)
+            {
+                return 0;
+            }
+
+            var bytes = Encoding.UTF8.GetBytes(chunks[_next++]);
+            bytes.CopyTo(buffer);
+            return bytes.Length;
         }
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>

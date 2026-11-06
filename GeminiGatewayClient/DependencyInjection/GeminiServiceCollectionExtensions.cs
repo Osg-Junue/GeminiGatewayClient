@@ -26,8 +26,9 @@ public static class GeminiServiceCollectionExtensions
         /// Options come from the options pattern, so <paramref name="configure"/> can be combined with
         /// <c>services.AddOptions&lt;GeminiClientOptions&gt;().BindConfiguration("Gemini")</c>. Options are validated at host startup
         /// (<see cref="OptionsBuilderExtensions.ValidateOnStart{TOptions}(OptionsBuilder{TOptions})"/>) and when the client is first resolved.
-        /// <see cref="GeminiClientOptions.Timeout"/> is applied to the named <see cref="HttpClient"/>, and the default primary handler does not
-        /// follow redirects (so credential headers are never forwarded to another host).
+        /// The named <see cref="HttpClient"/> has a 5-minute timeout, and the default primary handler does not
+        /// follow redirects (so credential headers are never forwarded to another host) or store cookies. A different primary
+        /// handler must do the same; <see cref="GeminiClient.CreateDefaultHandler"/> creates one.
         /// </para>
         /// <para>
         /// The returned <see cref="IHttpClientBuilder"/> can be used to attach resilience pipelines (for example <c>.AddStandardResilienceHandler()</c>),
@@ -84,8 +85,7 @@ public static class GeminiServiceCollectionExtensions
         if (!alreadyRegistered)
         {
             httpClientBuilder
-                .ConfigureHttpClient(static (sp, httpClient) =>
-                    GeminiClient.ConfigureHttpClient(httpClient, sp.GetRequiredService<GeminiClientSettings>().Timeout))
+                .ConfigureHttpClient(static httpClient => httpClient.Timeout = GeminiClient.DefaultTimeout)
                 .ConfigurePrimaryHttpMessageHandler(static () => GeminiClient.CreateDefaultHandler());
         }
 

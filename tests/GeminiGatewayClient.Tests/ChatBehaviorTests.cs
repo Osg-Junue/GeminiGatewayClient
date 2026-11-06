@@ -13,8 +13,8 @@ public class ChatBehaviorTests
 {
     private const string OkResponse = """{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}""";
 
-    private static GeminiClient CreateClient(RecordingHandler handler, JsonSerializerOptions? toolOptions = null) =>
-        new(new GeminiClientOptions { ApiKey = "test-key", Model = "gemini-2.5-flash", ToolSerializerOptions = toolOptions }, new HttpClient(handler));
+    private static GeminiClient CreateClient(RecordingHandler handler) =>
+        new(new GeminiClientOptions { ApiKey = "test-key", Model = "gemini-2.5-flash" }, new HttpClient(handler));
 
     private static async Task<JsonElement> SentParts(IEnumerable<ChatMessage> messages, int contentIndex, IChatClient? chat = null, RecordingHandler? handler = null)
     {
@@ -100,16 +100,6 @@ public class ChatBehaviorTests
     }
 
     [Fact]
-    public async Task ResultWhoseSynthesizedCallWasTrimmed_KeepsTheFunctionName()
-    {
-        var callId = $"get_weather_call_{Guid.NewGuid():N}";
-
-        var parts = await SentParts([new ChatMessage(ChatRole.Tool, [new FunctionResultContent(callId, "sunny")])], contentIndex: 0);
-
-        Assert.Equal("get_weather", parts[0].GetProperty("functionResponse").GetProperty("name").GetString());
-    }
-
-    [Fact]
     public async Task HostedFileContent_FailsInsteadOfBeingDropped()
     {
         using var handler = new RecordingHandler(OkResponse);
@@ -133,27 +123,7 @@ public class ChatBehaviorTests
                 new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", result)])
             ],
             contentIndex: 1,
-            CreateClient(handler, options).AsIChatClient(),
-            handler);
-
-        Assert.Equal("MARKER", parts[0].GetProperty("functionResponse").GetProperty("response").GetProperty("t").GetString());
-    }
-
-    [Fact]
-    public async Task DecoratedClient_ForwardingToolOptions_KeepsTheCallersOptions()
-    {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
-        options.Converters.Add(new MarkerDateConverter());
-        using var handler = new RecordingHandler(OkResponse);
-        IGeminiClient decorated = new ForwardingClient(CreateClient(handler, options));
-
-        var parts = await SentParts(
-            [
-                new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("c1", "f")]),
-                new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", new Dictionary<string, object?> { ["t"] = DateTime.UnixEpoch })])
-            ],
-            contentIndex: 1,
-            decorated.AsIChatClient(),
+            CreateClient(handler).AsIChatClient(toolSerializerOptions: options),
             handler);
 
         Assert.Equal("MARKER", parts[0].GetProperty("functionResponse").GetProperty("response").GetProperty("t").GetString());
@@ -186,7 +156,6 @@ public class ChatBehaviorTests
 
         public string? DefaultModel => inner.DefaultModel;
 
-        public JsonSerializerOptions? ToolSerializerOptions => inner.ToolSerializerOptions;
 
         public Task<GenerateContentResponse> GenerateContentAsync(GenerateContentRequest request, string? model = null, CancellationToken cancellationToken = default) =>
             inner.GenerateContentAsync(request, model, cancellationToken);

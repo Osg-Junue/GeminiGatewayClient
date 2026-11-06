@@ -43,26 +43,6 @@ public sealed class ThinkingConfig
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    /// <summary>
-    /// Validates that <see cref="ThinkingBudget"/> and <see cref="ThinkingLevel"/> are not both set.
-    /// </summary>
-    /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
-    /// <exception cref="ArgumentException">Both members are set.</exception>
-    internal void Validate(string paramName = "request")
-    {
-        if (ThinkingBudget is not null && ThinkingLevel is not null)
-        {
-            throw new ArgumentException(
-                "ThinkingConfig.ThinkingBudget and ThinkingConfig.ThinkingLevel are mutually exclusive and cannot both be set.",
-                paramName);
-        }
-
-        if (ThinkingLevel == Models.ThinkingLevel.Unknown)
-        {
-            throw new ArgumentException("ThinkingConfig.ThinkingLevel cannot be ThinkingLevel.Unknown.", paramName);
-        }
-    }
 }
 
 /// <summary>

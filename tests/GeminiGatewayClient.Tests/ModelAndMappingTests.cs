@@ -59,7 +59,7 @@ public class ModelAndMappingTests
         };
 
         var request = new GenerateContentRequest();
-        ChatOptionsMapper.Apply(request, functionsOnlyOptions, "gemini-2.5-flash");
+        ChatOptionsMapper.Apply(request, functionsOnlyOptions);
 
         var tools = Assert.IsAssignableFrom<IList<Tool>>(request.Tools);
         Assert.Single(tools);
@@ -79,7 +79,7 @@ public class ModelAndMappingTests
         };
 
         var mixedRequest = new GenerateContentRequest();
-        ChatOptionsMapper.Apply(mixedRequest, mixedOptions, "gemini-2.5-flash");
+        ChatOptionsMapper.Apply(mixedRequest, mixedOptions);
 
         var mixedTools = Assert.IsAssignableFrom<IList<Tool>>(mixedRequest.Tools);
         Assert.Equal(2, mixedTools.Count);
@@ -102,7 +102,7 @@ public class ModelAndMappingTests
             new(ChatRole.User, "Turn 5")
         ];
 
-        var request = ChatRequestMapper.ToRequest(messages, options: null, chatClient, "gemini-2.5-flash", AIJsonUtilities.DefaultOptions);
+        var request = ChatRequestMapper.ToRequest(messages, options: null, chatClient, AIJsonUtilities.DefaultOptions);
 
         Assert.Null(request.SystemInstruction);
         var contents = Assert.IsAssignableFrom<IList<Content>>(request.Contents);
@@ -131,7 +131,7 @@ public class ModelAndMappingTests
         ];
 
         var options = new ChatOptions { Instructions = "System message 1" };
-        var request = ChatRequestMapper.ToRequest(messages, options, chatClient, "gemini-2.5-flash", AIJsonUtilities.DefaultOptions);
+        var request = ChatRequestMapper.ToRequest(messages, options, chatClient, AIJsonUtilities.DefaultOptions);
 
         Assert.NotNull(request.SystemInstruction);
         var systemParts = Assert.IsAssignableFrom<IList<Part>>(request.SystemInstruction!.Parts);

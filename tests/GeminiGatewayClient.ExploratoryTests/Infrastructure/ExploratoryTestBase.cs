@@ -26,7 +26,6 @@ public abstract class ExploratoryTestBase(ExploratoryTestFixture fixture, ITestO
             ApiKey = ExploratoryTestSettings.GetRequiredApiKey(),
             Model = DefaultModel,
             EmbeddingModel = DefaultEmbeddingModel,
-            Timeout = TimeSpan.FromSeconds(60),
             StreamIdleTimeout = TimeSpan.FromSeconds(30)
         };
         configure?.Invoke(options);

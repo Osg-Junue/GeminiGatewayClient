@@ -111,7 +111,6 @@ public sealed class ChatMappingEdgeCaseTests
             messages,
             options: null,
             chatClient,
-            DefaultModel,
             JsonSerializerOptions.Default);
 
         // Turn 0: User ("Hello", "World")
@@ -180,7 +179,6 @@ public sealed class ChatMappingEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -235,7 +233,6 @@ public sealed class ChatMappingEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -280,7 +277,6 @@ public sealed class ChatMappingEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -317,7 +313,6 @@ public sealed class ChatMappingEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -356,7 +351,6 @@ public sealed class ChatMappingEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -448,7 +442,6 @@ public sealed class ChatMappingEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;

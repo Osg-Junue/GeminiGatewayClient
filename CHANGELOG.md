@@ -7,9 +7,8 @@ All notable changes to this project are documented in this file.
 The library is now much smaller: it favors plain code and the base class library over hand-written infrastructure and allocation tuning.
 
 ### Changed (Breaking)
-- **`ReasoningEffort` sends the value closest to the request on every model, with no per-model adjustment.** `None` sends `thinkingBudget: 0` on Gemini 2.5 and `thinkingLevel: MINIMAL` elsewhere, including Pro models (which used to get a budget of `128` or `LOW`) and aliases. `Medium` sends `MEDIUM` on `gemini-3-pro*` too, instead of `HIGH`. A model that rejects the value, such as Gemini 2.5 Pro with a budget of `0` or `gemini-flash-latest` with `MINIMAL`, now fails with `GeminiApiException` (HTTP 400) instead of thinking more than asked. Set `ThinkingConfig` through `RawRepresentationFactory` to choose another value.
-- **Aliases such as `gemini-flash-latest` and `gemini-pro-latest` use `thinkingLevel` instead of `thinkingBudget`**, because they resolve to current models, and some of those reject a budget of `0`. Only model IDs starting with `gemini-2.5` use `thinkingBudget`.
-- **`GeminiClientOptions.StreamingFormat` and `GeminiStreamingFormat` are removed**: streaming always uses Server-Sent Events.
+- **`ChatOptions.Reasoning` throws `NotSupportedException`**, and nothing maps an effort to a model anymore. Set `ThinkingConfig` through `RawRepresentationFactory`.
+- **`GeminiClientOptions.StreamingFormat` and `GeminiStreamingFormat` are removed**: streaming asks for Server-Sent Events unless `UseServerSentEvents` is `false`.
 - **`ChatOptions.AdditionalProperties` are no longer read**: `ChatOptions.RawRepresentationFactory` is the one way to set Gemini-specific options. Its result is now modified, as its contract allows, so it must return a new instance on each call.
 - **Citations on a streamed response or on a response with several texts arrive on an annotation-only `AIContent`**, with regions counted from the start of the response text. Updates already delivered are no longer changed. `segment.partIndex` is ignored: the API omits it and counts offsets across the response.
 - **Sent parts are always rebuilt from `AIContent`**, so a change to the content takes effect. A `FunctionResultContent` no longer takes anything from an attached `RawRepresentation`.
@@ -19,44 +18,57 @@ The library is now much smaller: it favors plain code and the base class library
 - **Tool values go through System.Text.Json one by one**: dictionaries and sequences are walked element by element, so custom converters and `NumberHandling` now apply to what they hold. `TimeOnly` uses the System.Text.Json format, a `List<KeyValuePair<string, int>>` becomes an array of key/value objects, and a key/value sequence that is neither a dictionary nor described by metadata throws `InvalidOperationException`.
 - **`HostedFileContent` in a chat message throws `NotSupportedException`** instead of being dropped. Use `UriContent` with the uploaded file's URI and media type.
 - **`MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL`, and `TOO_MANY_TOOL_CALLS` no longer map to `ChatFinishReason.ToolCalls`**, even when the response carries function calls: `FinishReason` is `null`, and the original value stays on `RawRepresentation`.
-- **Non-streaming calls are covered by `Timeout` alone**: `StreamIdleTimeout` applies only to streams, so a stalled body ends with `TaskCanceledException`, not `TimeoutException`. Bodies over 64 MiB fail with `HttpRequestException`, and a caller-supplied `HttpClient` keeps its own limit.
+- **Non-streaming calls are covered by `HttpClient.Timeout` alone**: `StreamIdleTimeout` applies only to streams, so a stalled body ends with `TaskCanceledException`, not `TimeoutException`.
 - **`UsageDetails` always follow Gemini's definition**: input adds the tool prompt and output adds thoughts. The guess for gateways that report otherwise is gone.
 - **`GeminiApiException.StatusCode` for an error sent with a 2xx status comes from the HTTP-style `code`**, or is 500. gRPC numbers and `status` names are no longer translated, and `ErrorStatus` still reports the name.
-- **`GeminiApiException.IsTransient` is `false` for an RPC status that blames the request**, such as `INVALID_ARGUMENT`, whatever the HTTP status.
+- **`GeminiApiException.IsTransient` is removed.** Decide on retries from `StatusCode` and `ErrorStatus`.
 - **An error status on a stream reports `ErrorContent` as `null` when its body cannot be read in time or completely**, instead of failing with `TimeoutException` or keeping a partial body.
-- **A single SSE event, and a stream as a whole, have no size limit anymore.** A stream answered with a single body starting with `{`, `[`, or `<` is read whole, so it keeps the limit of non-streaming bodies: `HttpClient.MaxResponseContentBufferSize` (64 MiB on clients this library creates), past which it fails with `HttpRequestException`.
-- **Whether a stream response is an event stream is decided by its body, not its `Content-Type`.** An SSE body with a wrong type now works, and a body starting with `{`, `[`, or `<` is read as one complete response, which fails with `GeminiApiException` unless it is a single JSON object. An error in such a body keeps its details.
+- **A stream and a single SSE event have no size limit anymore**, and clients this library creates no longer lower `HttpClient.MaxResponseContentBufferSize`, which limits non-streaming bodies only.
+- **Whether a stream response is an event stream is decided by its body, not its `Content-Type`.** An SSE body with a wrong type now works. A body starting with `[` is read element by element, as the JSON array Gemini sends when `alt=sse` does not reach it. A body starting with `{` or `<` is read as one complete response, which fails with `GeminiApiException` unless it is a single JSON object. An error in such a body keeps its details.
 - **A connection lost while reading a non-streaming body surfaces as `HttpRequestException` without `StatusCode`**, even for an error status, because the body is read as part of the request.
 - **A message is no longer merged into the last content of a `RawRepresentationFactory` template** with the same role; it starts a new content.
-- **`GeminiClientOptions.StreamIdleTimeout` rejects values of about 49.7 days or more**, which used to fail on the first read.
 - **Error bodies are always read as UTF-8**, whatever charset the response declares.
 - **`retryDelay` is read only in the seconds form Google uses**, such as `"37s"`.
 - **`VideoOffset` reads only the `"10.5s"` wire format**, not `{"seconds", "nanos"}` objects.
 - **`GeminiClientOptions.ToString` hides the whole query string** of the endpoint.
-- **API key and header values must be printable ASCII.** This now fails when the client is created, not on the first request.
+- **Requests are no longer checked before sending.** `Validate` and its rules are gone: an invalid request is sent, and the API or gateway answers it with an error status. The same goes for a batch that mixes models, and for a model or endpoint containing an operation such as `:generateContent`.
+- **`GeminiClientOptions.Timeout` is removed.** Clients this library creates use 5 minutes. Set `HttpClient.Timeout` on your own client, or use `.ConfigureHttpClient` on the builder `AddGeminiClient` returns. A `Gemini:Timeout` configuration key is now ignored.
+- **`GeminiClientOptions.ToolSerializerOptions` and `IGeminiClient.ToolSerializerOptions` are removed.** Pass the options to `AsIChatClient`.
+- **Option setters no longer check their values.** A value that cannot work fails where it is used, such as a negative `StreamIdleTimeout` on the first read.
+- **A header value with a line break or NUL throws `ArgumentException`**, because .NET would send it as it is, and so do a header name .NET refuses, the same header set twice, and an empty key from `ApiKeyProvider`. Other header checks are gone: non-ASCII values fail when sent.
+- **`ChatOptions.Seed` outside the 32-bit range throws `OverflowException`.**
 - **A stream with only comments, a `[DONE]` marker, or events with empty `data` throws `GeminiApiException`** like an empty body.
+- **An `error` event with data on a stream throws `GeminiApiException`**, also when its data is not in Google's shape. It used to read as an empty chunk.
+- **A `FunctionResultContent` without its call throws `ArgumentException`**, because its function name is unknown. The call ID used to be sent as the function name. Synthesized call IDs no longer carry the function name.
+- **`GeminiChatClient` and `GeminiEmbeddingGenerator` are internal.** `AsIChatClient` and `AsIEmbeddingGenerator` are the one way to create them.
+- **`IGeminiClient.Endpoint` and `ProviderUri` in the chat and embedding metadata leave out the query string and user info**, which may hold credentials. The query string is still sent.
+- **`Part.FromBytes(byte[], string)` is removed.** The `ReadOnlySpan<byte>` overload accepts a `byte[]` and copies it. A `null` array now gives an empty part.
+- **Request bodies use the default JSON encoder**, which writes non-ASCII text as `\uXXXX` escapes. The content is the same, but Japanese text takes about twice the bytes.
 
 ### Added
-- `IGeminiClient.ToolSerializerOptions`, so a decorator can forward the caller's tool serializer options.
+- `GeminiClientOptions.UseServerSentEvents`, for a gateway that rejects `alt=sse`. With `false`, the client sends what version 1.0.3 sent and reads the JSON array Gemini answers with.
+- `GeminiClient.CreateDefaultHandler()` is public, so a caller-supplied `HttpClient` can follow no redirects and store no cookies, like the clients this library creates.
 - `GeminiChatPropertyNames.SignatureCompanion`, which marks a signature that belongs to the preceding streamed text.
 - A Native AOT smoke test that CI publishes with warnings as errors and runs as a native binary.
 
 ### Fixed
-- A Google error sent with a 2xx status keeps its status, retry delay, and `IsTransient` when wrapped in an array, or when sent as plain JSON after keep-alive comments.
+- Streaming works when a gateway does not forward `alt=sse`, as in version 1.0.3, which read the JSON array Gemini sends in that case.
+- The handler this library creates no longer stores cookies, which one caller's gateway session could pass to the next caller.
+- A function schema without top-level `properties`, such as `additionalProperties` or `allOf` alone, is no longer dropped.
+- An embedding model name with a reserved character, such as `@`, is no longer percent-encoded in the request body.
+- A Google error sent with a 2xx status keeps its status and retry delay when wrapped in an array, or when sent as plain JSON after keep-alive comments.
 - A streamed 2xx body without events, such as plain text from a gateway, is kept in `ErrorContent`.
 - A byte order mark split across reads no longer hides a JSON error on a stream.
 - `ToModelContent`, `ToModelContentAsync`, and `TryGetModelContent` drop empty text next to other data on a part, which Gemini rejects when resent.
 - A `Tool` inside a `RawRepresentationFactory` template is no longer changed when `ChatOptions.Tools` adds functions, so a shared instance does not collect them across calls.
-- The error body of a stream is read only up to 64 MiB, like a non-streaming body. A longer one leaves `ErrorContent` as `null` and keeps the status.
+- The error body of a stream is read only up to 64 KB. A longer one leaves `ErrorContent` as `null` and keeps the status.
 - A tool result that is a custom read-only dictionary is written as a JSON object when type metadata describes it, instead of a list of key/value pairs.
 - `citationMetadata` from the Gemini Developer API is no longer lost: `citationSources` is read as well as Vertex AI's `citations`.
 - Streaming reports `ChatFinishReason.ToolCalls` when a later chunk carries `STOP` after a function call, matching non-streaming responses.
 - A part with an unparsable MIME type no longer fails the whole response; its content uses `application/octet-stream`.
-- A function result whose synthesized call was trimmed from the history keeps its function name.
 - Request bodies are sent with `Content-Length` instead of chunked encoding, which some gateways reject.
 - Two functions with the same name in `ChatOptions.Tools` are declared once, keeping the first, instead of being sent twice.
-- A `null` entry in `ChatOptions.Tools` throws `ArgumentException` before anything is sent, like a `null` in a `RawRepresentationFactory` template, instead of `NullReferenceException`.
-- An invalid API key, key prefix, or key header name is reported with `ArgumentException.ParamName` set to `ApiKey`, `ApiKeyPrefix`, or `ApiKeyHeader` respectively, instead of always `ApiKeyHeader`.
+- A `null` entry in `ChatOptions.Tools` throws `ArgumentException` before anything is sent, instead of `NullReferenceException`.
 
 ### Removed
 - Allocation-focused code, allocation assertions, and the benchmark project.
@@ -93,6 +105,7 @@ The library is now much smaller: it favors plain code and the base class library
 ## [2.1.0] - 2026-11-04
 
 ### Added
+- `GeminiClientOptions.UseServerSentEvents`, for a gateway that rejects `alt=sse`. With `false`, the client sends what version 1.0.3 sent and reads the JSON array Gemini answers with.
 - **Google Search grounding & URL context support (#10)**:
   - Added strongly-typed `GroundingMetadata` (`WebSearchQueries`, `SearchEntryPoint`, `GroundingChunks`, `GroundingSupports`, `GroundingSegment`) and `UrlContextMetadata` (`UrlMetadata`, `UrlRetrievalStatus`) on `Candidate`, plus `UrlContextTool` (`Tool.UrlContext`).
   - Mapped `CitationMetadata` and `GroundingMetadata` onto `Microsoft.Extensions.AI` `TextContent.Annotations` (`CitationAnnotation` with UTF-8 byte -> UTF-16 `char` span conversion across streaming and non-streaming responses) and exposed `WebSearchQueries` in `ChatResponse.AdditionalProperties[GeminiChatPropertyNames.WebSearchQueries]`.
@@ -136,6 +149,7 @@ The library is now much smaller: it favors plain code and the base class library
 ## [2.0.0] - 2026-11-02
 
 ### Added
+- `GeminiClientOptions.UseServerSentEvents`, for a gateway that rejects `alt=sse`. With `false`, the client sends what version 1.0.3 sent and reads the JSON array Gemini answers with.
 - **Unified `GeminiClient` & `IGeminiClient` architecture**:
   - Added `IGeminiClient` for unit testing and dependency injection (`Endpoint`, `DefaultModel`, `GenerateContentAsync`, `StreamGenerateContentAsync`).
   - Added `GeminiClient` with convenience constructor `new GeminiClient(apiKey, model)` and full options constructor `new GeminiClient(GeminiClientOptions, HttpClient?)`.

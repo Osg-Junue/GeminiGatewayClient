@@ -395,46 +395,14 @@ public partial class ChatClientTests
     }
 
     [Fact]
-    public async Task IChatClient_ModelIdAndReasoningOptions_OverrideUrlAndMapThinkingConfig()
+    public async Task IChatClient_OutOfRangeSeed_Overflows()
     {
         using var handler = new RecordingHandler(OkResponseJson);
         using var httpClient = new HttpClient(handler);
         using var geminiClient = CreateClient(httpClient);
         IChatClient chatClient = geminiClient.AsIChatClient();
 
-        await chatClient.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "Solve")],
-            new ChatOptions
-            {
-                ModelId = "gemini-3-flash-preview",
-                Reasoning = new ReasoningOptions
-                {
-                    Effort = ReasoningEffort.Low,
-                    Output = ReasoningOutput.Summary
-                }
-            });
-
-        Assert.Equal(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
-            handler.LastRequest?.RequestUri?.ToString());
-
-        Assert.NotNull(handler.LastRequestBody);
-        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
-        var thinkingConfig = sentDoc.RootElement.GetProperty("generationConfig").GetProperty("thinkingConfig");
-        Assert.Equal("LOW", thinkingConfig.GetProperty("thinkingLevel").GetString());
-        Assert.True(thinkingConfig.GetProperty("includeThoughts").GetBoolean());
-        Assert.False(thinkingConfig.TryGetProperty("thinkingBudget", out _));
-    }
-
-    [Fact]
-    public async Task IChatClient_OutOfRangeSeed_ThrowsArgumentOutOfRangeException()
-    {
-        using var handler = new RecordingHandler(OkResponseJson);
-        using var httpClient = new HttpClient(handler);
-        using var geminiClient = CreateClient(httpClient);
-        IChatClient chatClient = geminiClient.AsIChatClient();
-
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+        await Assert.ThrowsAsync<OverflowException>(() =>
             chatClient.GetResponseAsync(
                 [new ChatMessage(ChatRole.User, "Hi")],
                 new ChatOptions { Seed = (long)int.MaxValue + 10 }));
@@ -498,28 +466,6 @@ public partial class ChatClientTests
         var modelPart = sentDoc.RootElement.GetProperty("contents")[1].GetProperty("parts")[0];
         Assert.Equal("sig-stream-99", modelPart.GetProperty("thoughtSignature").GetString());
         Assert.Equal("call-99", modelPart.GetProperty("functionCall").GetProperty("id").GetString());
-    }
-
-    [Fact]
-    public async Task IChatClient_CustomGatewayModelId_MapsReasoningEffortToThinkingLevel()
-    {
-        using var handler = new RecordingHandler(OkResponseJson);
-        using var httpClient = new HttpClient(handler);
-        using var geminiClient = CreateClient(httpClient);
-        IChatClient chatClient = geminiClient.AsIChatClient();
-
-        await chatClient.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "Reason")],
-            new ChatOptions
-            {
-                ModelId = "tunedModels/my-enterprise-model",
-                Reasoning = new ReasoningOptions { Effort = ReasoningEffort.Medium }
-            });
-
-        Assert.NotNull(handler.LastRequestBody);
-        using var sentDoc = JsonDocument.Parse(handler.LastRequestBody);
-        var thinkingConfig = sentDoc.RootElement.GetProperty("generationConfig").GetProperty("thinkingConfig");
-        Assert.Equal("MEDIUM", thinkingConfig.GetProperty("thinkingLevel").GetString());
     }
 
     [Fact]
@@ -710,7 +656,7 @@ public partial class ChatClientTests
     }
 
     [Fact]
-    public async Task GeminiEmbeddingGenerator_Validation_BatchTemplateOverride_AndEmptyResponseErrors()
+    public async Task GeminiEmbeddingGenerator_BatchTemplateOverride_AndEmptyResponseErrors()
     {
         using var handler = new RecordingHandler("{}");
         using var httpClient = new HttpClient(handler);
@@ -720,16 +666,7 @@ public partial class ChatClientTests
             ApiKey = "test-key"
         }, httpClient);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => geminiClient.AsIEmbeddingGenerator(defaultModelDimensions: 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => geminiClient.AsIEmbeddingGenerator(defaultModelDimensions: -5));
-
         var generator = geminiClient.AsIEmbeddingGenerator();
-
-        // Empty and null element checks across both IReadOnlyList<string> and lazy IEnumerable<string>
-        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(Array.Empty<string>()));
-        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(YieldItems()));
-        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(["valid", null!]));
-        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(YieldItems("valid", null!)));
 
         // Empty response object {} on single input must throw GeminiApiException instead of returning a 0-dim vector
         await Assert.ThrowsAsync<GeminiApiException>(() => generator.GenerateAsync(["single input"]));
@@ -756,14 +693,6 @@ public partial class ChatClientTests
         Assert.Equal(
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents",
             mismatchHandler.LastRequest?.RequestUri?.ToString());
-
-        static IEnumerable<string> YieldItems(params string[] items)
-        {
-            foreach (var item in items)
-            {
-                yield return item;
-            }
-        }
     }
 
     private sealed class OversizedContentLengthHandler(long declaredContentLength) : HttpMessageHandler

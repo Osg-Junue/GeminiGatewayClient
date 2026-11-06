@@ -88,7 +88,7 @@ internal static class GeminiErrorParser
         try
         {
             // Gemini speaks UTF-8; a gateway's charset parameter may be wrong or unknown to .NET.
-            await content.LoadIntoBufferAsync(GeminiClient.MaxResponseBytes, timeout.Token).ConfigureAwait(false);
+            await content.LoadIntoBufferAsync(MaxErrorBodyChars, timeout.Token).ConfigureAwait(false);
             var bytes = await content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
             return Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
         }

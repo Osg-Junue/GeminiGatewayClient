@@ -49,9 +49,9 @@ flowchart LR
 flowchart TB
     App(["利用側アプリ"])
     Entry["<b>公開の入口</b><br/>GeminiServiceCollectionExtensions<br/>GeminiClientExtensions"]
-    Chat["<b>Chat</b>: Microsoft.Extensions.AI のアダプター<br/>GeminiChatClient / GeminiEmbeddingGenerator<br/>ChatRequestMapper / ChatOptionsMapper / ReasoningEffortMapper<br/>ChatResponseMapper / ChatStreamMapper / CitationAnnotator<br/>ToolJsonConverter / SynthesizedCallId"]
+    Chat["<b>Chat</b>: Microsoft.Extensions.AI のアダプター<br/>GeminiChatClient / GeminiEmbeddingGenerator<br/>ChatRequestMapper / ChatOptionsMapper<br/>ChatResponseMapper / ChatStreamMapper / CitationAnnotator<br/>ToolJsonConverter"]
     Contract{{"<b>IGeminiClient</b>"}}
-    Core["<b>GeminiClient</b><br/>検証とリクエストの組み立て"]
+    Core["<b>GeminiClient</b><br/>リクエストの組み立て"]
     Http["<b>Http</b>: 通信の部品<br/>GeminiClientSettings / GeminiEndpoint / GeminiRequestHeaders<br/>GeminiResponseReader / ResponseBodyStream / GeminiErrorParser"]
     Models["<b>Models</b>: API の型"]
     Serial["<b>Serialization</b>: ソース生成 JSON"]
@@ -88,7 +88,6 @@ classDiagram
         +Uri Endpoint
         +string? DefaultModel
         +string? DefaultEmbeddingModel
-        +JsonSerializerOptions? ToolSerializerOptions
         +GenerateContentAsync(request, model, ct)
         +StreamGenerateContentAsync(request, model, ct)
         +EmbedContentAsync(request, model, ct)
@@ -114,29 +113,28 @@ classDiagram
         +string ApiKeyHeader
         +string? ApiKeyPrefix
         +IDictionary AdditionalHeaders
-        +TimeSpan Timeout
         +TimeSpan? StreamIdleTimeout
+        +bool UseServerSentEvents
         +bool AllowInsecureHttp
-        +JsonSerializerOptions? ToolSerializerOptions
     }
 
     class GeminiClientSettings {
         <<internal>>
         +GeminiEndpoint Endpoint
         +GeminiRequestHeaders Headers
-        +TimeSpan Timeout
         +TimeSpan? StreamIdleTimeout
+        +bool UseServerSentEvents
         +Create(options)$
     }
 
     class GeminiEndpoint {
         <<internal>>
-        +Uri BaseUri
+        +Uri Address
         +string? DefaultModel
         +string? DefaultEmbeddingModel
         +GetOperationUri(model, operation, serverSentEvents)
-        +GetEmbeddingOperationUri(model, operation, resourcePath)
-        +ToResourcePath(model)$
+        +GetEmbeddingOperationUri(model, operation, resourceName)
+        +ToResourceName(model)$
     }
 
     class GeminiRequestHeaders {
@@ -151,7 +149,7 @@ classDiagram
     class GeminiResponseReader {
         <<internal static>>
         +Parse(utf8Json, typeInfo, selector, status)$
-        +ReadChunksAsync(body, status, maxBufferSize, ct)$
+        +ReadChunksAsync(body, status, ct)$
     }
 
     class ResponseBodyStream {
@@ -173,12 +171,11 @@ classDiagram
         +string? ErrorStatus
         +string? ErrorMessage
         +TimeSpan? RetryAfter
-        +bool IsTransient
     }
 
     IGeminiClient <|.. GeminiClient
     GeminiClient --> GeminiClientSettings
-    GeminiClientOptions ..> GeminiClientSettings : 検証して固定
+    GeminiClientOptions ..> GeminiClientSettings : 固定
     GeminiClientSettings *-- GeminiEndpoint
     GeminiClientSettings *-- GeminiRequestHeaders
     GeminiClient ..> GeminiResponseReader
@@ -190,7 +187,7 @@ classDiagram
     GeminiResponseReader ..> GeminiApiException : 生成
 ```
 
-`GeminiClientSettings` は検証済みの不変スナップショットです。`GeminiClientOptions` を後から変更しても、作成済みのクライアントには影響しません。
+`GeminiClientSettings` は不変スナップショットです。`GeminiClientOptions` を後から変更しても、作成済みのクライアントには影響しません。
 
 ### 3.2 Microsoft.Extensions.AI アダプター
 
@@ -210,6 +207,7 @@ classDiagram
     }
 
     class GeminiChatClient {
+        <<internal>>
         -IGeminiClient _client
         -JsonSerializerOptions _toolSerializerOptions
         +GetResponseAsync(messages, options, ct)
@@ -218,6 +216,7 @@ classDiagram
     }
 
     class GeminiEmbeddingGenerator {
+        <<internal>>
         -IGeminiClient _client
         +GenerateAsync(values, options, ct)
     }
@@ -225,19 +224,14 @@ classDiagram
     class ChatRequestMapper {
         <<internal>>
         -Dictionary _functionCalls
-        +ToRequest(messages, options, client, modelId, toolOptions)$
+        +ToRequest(messages, options, client, toolOptions)$
         -AppendMessages(request, messages, instructions)
         -AppendContent(parts, item)
     }
 
     class ChatOptionsMapper {
         <<internal static>>
-        +Apply(request, options, modelId)$
-    }
-
-    class ReasoningEffortMapper {
-        <<internal static>>
-        +Apply(thinking, effort, modelId)$
+        +Apply(request, options)$
     }
 
     class ChatResponseMapper {
@@ -270,22 +264,13 @@ classDiagram
         +ToDictionary(arguments)$
     }
 
-    class SynthesizedCallId {
-        <<internal static>>
-        +Create(functionName)$
-        +GetFunctionName(callId)$
-    }
-
     IChatClient <|.. GeminiChatClient
     IEmbeddingGenerator <|.. GeminiEmbeddingGenerator
     GeminiChatClient ..> ChatRequestMapper
     GeminiChatClient ..> ChatResponseMapper
     GeminiChatClient ..> ChatStreamMapper : 1 ストリームに 1 個
     ChatRequestMapper ..> ChatOptionsMapper
-    ChatOptionsMapper ..> ReasoningEffortMapper
     ChatRequestMapper ..> ToolJsonConverter
-    ChatRequestMapper ..> SynthesizedCallId
-    ChatResponseMapper ..> SynthesizedCallId
     ChatResponseMapper ..> ToolJsonConverter
     ChatResponseMapper ..> CitationAnnotator
     ChatStreamMapper ..> ChatResponseMapper
@@ -373,7 +358,6 @@ sequenceDiagram
     participant Reader as GeminiResponseReader
 
     App->>Client: GenerateContentAsync(request, model)
-    Client->>Client: request.Validate()
     Client->>Client: Endpoint.GetOperationUri()
     Client->>Client: JSON を UTF-8 に直列化(Content-Length 付き)
     Client->>Headers: ApplyAsync(message)
@@ -382,7 +366,7 @@ sequenceDiagram
     end
     Client->>Http: SendAsync(ResponseContentRead)
     Http->>GW: POST .../models/{model}:generateContent
-    GW-->>Http: 応答(Timeout が全体を監視)
+    GW-->>Http: 応答(HttpClient.Timeout が全体を監視)
     alt 2xx 以外
         Client-->>App: GeminiApiException
     else 2xx
@@ -410,10 +394,10 @@ sequenceDiagram
     participant Sse as SseParser
 
     App->>Client: StreamGenerateContentAsync(request, model)
-    Client->>Client: 検証は呼び出し時に実行
+    Client->>Client: URI の組み立ては呼び出し時に実行
     Client-->>App: IAsyncEnumerable(まだ通信しない)
     App->>Client: 列挙を開始
-    Client->>Http: SendAsync(ResponseHeadersRead, ?alt=sse)
+    Client->>Http: SendAsync(ResponseHeadersRead, 既定で ?alt=sse)
     Http-->>Client: ヘッダー受信
     alt 2xx 以外
         Client-->>App: GeminiApiException
@@ -421,9 +405,12 @@ sequenceDiagram
         Client->>Body: ボディをラップ
         Client->>Reader: ReadChunksAsync(body)
         Reader->>Body: PeekAsync()
-        alt 先頭が { [ <
+        alt 先頭が { <
             Reader->>Body: 本文を全部読む
             Reader-->>App: 1 チャンク、または GeminiApiException
+        else 先頭が [ (alt=sse を送らない、または届かなかった応答)
+            Reader->>Body: 配列の要素を 1 つずつ読む
+            Reader-->>App: 要素ごとにチャンク、または GeminiApiException
         else イベントストリーム
             Reader->>Sse: EnumerateAsync()
             loop イベントごと
@@ -434,7 +421,7 @@ sequenceDiagram
                     Body-->>App: HttpRequestException
                 else データ受信
                     Sse-->>Reader: data 行
-                    alt error オブジェクト、または不正な JSON
+                    alt error オブジェクト、error イベント、または不正な JSON
                         Reader-->>App: GeminiApiException
                     else 正常
                         Reader-->>App: GenerateContentResponse
@@ -442,14 +429,14 @@ sequenceDiagram
                 end
             end
             Note over Body: 終端に空行を補い、最後のイベントを失わない
-            opt イベントが 1 件もない
-                Reader-->>App: GeminiApiException
-            end
+        end
+        opt チャンクが 1 件もない
+            Reader-->>App: GeminiApiException
         end
     end
 ```
 
-アイドルタイマーは読み取りの間だけ動きます。利用側の処理が遅くても、サーバーの無通信とは扱いません。
+アイドルタイマーは読み取りの間だけ動きます。利用側の処理が遅くても、サーバーの無通信とは扱いません。ゲートウェイのキープアライブのコメントも受信データなので、タイマーを止めます。
 
 ### 4.3 IChatClient(ストリームなし)
 
@@ -471,7 +458,7 @@ sequenceDiagram
         Req->>App: GenerateContentRequest を取得
     end
     Req->>Req: AIContent から Part を組み立てる
-    Req->>Options: Apply(request, options, modelId)
+    Req->>Options: Apply(request, options)
     Req-->>Chat: GenerateContentRequest
     Chat->>Client: GenerateContentAsync(request, model)
     Client-->>Chat: GenerateContentResponse
@@ -531,7 +518,7 @@ sequenceDiagram
     Chat->>API: functionDeclarations 付きで送信
     API-->>Chat: functionCall + thoughtSignature
     Chat->>Res: ToChatResponse
-    Note over Res: id がなければ SynthesizedCallId.Create<br/>署名は AdditionalProperties に保存
+    Note over Res: id がなければ CallId を生成<br/>署名は AdditionalProperties に保存
     Res-->>App: FunctionCallContent
     App->>App: 関数を実行し、履歴に結果を追加
     App->>Chat: GetResponseAsync(履歴 + FunctionResultContent)
@@ -601,8 +588,8 @@ flowchart TD
     Static --> HasProvider{"ApiKeyProvider あり?"}
     HasProvider -- いいえ --> Done(["完了"])
     HasProvider -- はい --> Call["プロバイダーからキーを取得"]
-    Call --> Valid{"空白のみ、または<br/>非 ASCII?"}
-    Valid -- はい --> Fail["InvalidOperationException<br/>(送信しない)"]
+    Call --> Valid{"改行または NUL を含む?"}
+    Valid -- はい --> Fail["ArgumentException<br/>(送信しない)"]
     Valid -- いいえ --> Add["ApiKeyHeader に<br/>ApiKeyPrefix + キーを追加"]
     Add --> Done
 ```
@@ -613,12 +600,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Call(["API 呼び出し"]) --> Arg{"リクエストや<br/>設定が不正?"}
+    Call(["API 呼び出し"]) --> Arg{"引数が null、<br/>またはモデルがない?"}
     Arg -- はい --> E1["ArgumentException<br/>InvalidOperationException"]
     Arg -- 未対応の内容 --> E6["NotSupportedException"]
     Arg -- いいえ --> Net{"応答を受け取れた?"}
     Net -- 接続失敗 --> E2["HttpRequestException"]
-    Net -- Timeout 超過 --> E3["TaskCanceledException"]
+    Net -- HttpClient.Timeout 超過 --> E3["TaskCanceledException"]
     Net -- 受信 --> Status{"2xx?"}
     Status -- いいえ --> E4["GeminiApiException"]
     Status -- はい --> Mode{"ストリーム?"}
@@ -644,4 +631,4 @@ flowchart TD
     Empty -- いいえ --> Ok(["成功"])
 ```
 
-再試行の判断には `GeminiApiException.IsTransient` を使います。`INVALID_ARGUMENT` のようにリクエスト側に原因があるステータスでは `false` です。
+リクエストの内容は送信前に検査しません。不正な内容は API の HTTP 400 として `GeminiApiException` になります。再試行の判断は `StatusCode` と `ErrorStatus` を見て利用側で行います。

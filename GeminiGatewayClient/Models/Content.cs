@@ -58,35 +58,4 @@ public sealed class Content
 
         return new Content { Role = role, Parts = list };
     }
-
-    /// <summary>
-    /// Returns why this content is invalid as a message suffix for the caller's path, or <c>null</c> when it is valid.
-    /// </summary>
-    internal string? GetValidationError()
-    {
-        if (Role is { } role && (role == Models.Role.Unknown || !Enum.IsDefined(role)))
-        {
-            return ".Role cannot be Role.Unknown.";
-        }
-
-        if (Parts is not { Count: > 0 } parts)
-        {
-            return ExtensionData is { Count: > 0 } ? null : ".Parts must contain at least one Part item.";
-        }
-
-        for (var i = 0; i < parts.Count; i++)
-        {
-            if (parts[i] is not { } part)
-            {
-                return $".Parts[{i}] cannot be null.";
-            }
-
-            if (part.GetValidationError() is { } error)
-            {
-                return $".Parts[{i}]{error}";
-            }
-        }
-
-        return null;
-    }
 }
