@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
 
@@ -9,7 +8,7 @@ namespace GeminiGatewayClient.Chat;
 /// Converts <c>Microsoft.Extensions.AI</c> chat messages and options into a <see cref="GenerateContentRequest"/>.
 /// One instance builds one request, because a function result needs the name of the call made earlier in the history.
 /// </summary>
-internal sealed partial class ChatRequestMapper(JsonSerializerOptions toolSerializerOptions)
+internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOptions)
 {
     private readonly Dictionary<string, (string Name, string? ApiId)> _functionCalls = new(StringComparer.Ordinal);
 
@@ -36,14 +35,6 @@ internal sealed partial class ChatRequestMapper(JsonSerializerOptions toolSerial
 
         return request;
     }
-
-    /// <summary>
-    /// Creates the id of a function call the model sent without one.
-    /// </summary>
-    public static string CreateCallId(string name) => $"{name}_call_{Guid.NewGuid():N}";
-
-    [GeneratedRegex("^(.+)_call_[0-9a-f]{32}$")]
-    private static partial Regex CreatedCallId();
 
     private static string? GetString(AdditionalPropertiesDictionary? properties, string key) =>
         properties is not null && properties.TryGetValue(key, out var value)
@@ -235,10 +226,9 @@ internal sealed partial class ChatRequestMapper(JsonSerializerOptions toolSerial
 
     private Part ToFunctionResponsePart(FunctionResultContent result)
     {
-        // A call trimmed from the history no longer names the function, but an id created here still does.
         var (name, id) = _functionCalls.TryGetValue(result.CallId, out var call)
             ? call
-            : (CreatedCallId().Match(result.CallId) is { Success: true } match ? match.Groups[1].Value : result.CallId, null);
+            : (SynthesizedCallId.GetFunctionName(result.CallId) ?? result.CallId, null);
 
         return new Part
         {

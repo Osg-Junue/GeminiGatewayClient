@@ -178,6 +178,7 @@ Core behavior is covered by deterministic unit tests ([`tests/GeminiGatewayClien
 ## Documentation
 
 - 📘 **[Usage Guide & Recipes (`docs/USAGE.md`)](docs/USAGE.md)** — Full code examples for DI & resilience handlers, streaming, structured JSON output, thinking/reasoning, multimodal inputs, `IChatClient` tool chains, grounding citations, embeddings (`IEmbeddingGenerator`), database chat persistence, and `GeminiClientOptions`.
+- 🧭 **[Architecture Diagrams (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md)** — Use cases, class structure, and sequence diagrams of the implementation.
 - 📊 **[Gemini API Compatibility Matrix (`docs/API_COMPATIBILITY.md`)](docs/API_COMPATIBILITY.md)** — Complete field-by-field mapping against the official Google Gemini REST API specification and `Microsoft.Extensions.AI`.
 - 📝 **[Changelog (`CHANGELOG.md`)](CHANGELOG.md)** — Release history and v2 migration notes.
 

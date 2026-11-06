@@ -187,6 +187,20 @@ public class TransportTests
     }
 
     [Fact]
+    public async Task Generate_LongErrorBody_CutInsideASurrogatePair_KeepsTheDetails()
+    {
+        var padding = new string('x', (64 * 1024) - 60);
+        var body = "{\"error\":{\"code\":503,\"status\":\"UNAVAILABLE\",\"message\":\"" + padding + "🌸🌸🌸🌸\"}}";
+        using var client = CreateClient(Body(body, "application/json", HttpStatusCode.ServiceUnavailable));
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync(Request()));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, error.StatusCode);
+        Assert.Equal("UNAVAILABLE", error.ErrorStatus);
+        Assert.Equal(64 * 1024, error.ErrorContent?.Length);
+    }
+
+    [Fact]
     public async Task Stream_ErrorEventWithATextCode_IsReportedAsAFailure()
     {
         const string body = """data: {"error":{"code":"quota","message":"m"}}""";

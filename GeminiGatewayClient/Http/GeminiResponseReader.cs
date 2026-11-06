@@ -14,7 +14,7 @@ namespace GeminiGatewayClient.Http;
 /// </summary>
 internal static class GeminiResponseReader
 {
-        /// <summary>
+    /// <summary>
     /// Parses a complete JSON body.
     /// </summary>
     public static TResponse Parse<TResponse>(

@@ -197,7 +197,7 @@ internal static class ChatResponseMapper
     private static FunctionCallContent ToFunctionCallContent(Part part, FunctionCall call)
     {
         var synthesized = string.IsNullOrEmpty(call.Id);
-        var callId = synthesized ? ChatRequestMapper.CreateCallId(call.Name) : call.Id!;
+        var callId = synthesized ? SynthesizedCallId.Create(call.Name) : call.Id!;
         var content = new FunctionCallContent(callId, call.Name, ToolJsonConverter.ToDictionary(call.Args)) { RawRepresentation = part };
         if (synthesized)
         {

@@ -120,7 +120,7 @@ public interface IGeminiClient
     /// <c>models/{model}</c> on the wire without mutating <paramref name="request"/>.
     /// </summary>
     /// <param name="request">The batch embedding request to send.</param>
-    /// <param name="model">The embedding model to call, or <c>null</c> to use <see cref="DefaultEmbeddingModel"/>.</param>
+    /// <param name="model">The embedding model to call, or <c>null</c> to use the first item's model, then <see cref="DefaultEmbeddingModel"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed batch embedding response.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>

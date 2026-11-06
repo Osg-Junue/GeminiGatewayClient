@@ -27,7 +27,7 @@ internal static class GeminiErrorParser
         return new GeminiApiException(
             "API request failed",
             response.StatusCode,
-            body,
+            body?.Length > MaxErrorBodyChars ? body[..MaxErrorBodyChars] : body,
             details.Status,
             details.Message,
             details.RetryDelay ?? GetRetryAfterHeader(response),
@@ -68,8 +68,7 @@ internal static class GeminiErrorParser
         {
             // Gemini speaks UTF-8; a gateway's charset parameter may be wrong or unknown to .NET.
             var bytes = await content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
-            var body = Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
-            return body.Length > MaxErrorBodyChars ? body[..MaxErrorBodyChars] : body;
+            return Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
         }
         catch (Exception ex) when (ex is IOException or HttpRequestException ||
                                    (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
