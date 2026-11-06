@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [4.0.0] - 2026-11-06
 
 The library is now much smaller: it favors plain code and the base class library over hand-written infrastructure and allocation tuning.
 
@@ -32,7 +32,7 @@ The library is now much smaller: it favors plain code and the base class library
 - **`VideoOffset` reads only the `"10.5s"` wire format**, not `{"seconds", "nanos"}` objects.
 - **`GeminiClientOptions.ToString` hides the whole query string** of the endpoint.
 - **Requests are no longer checked before sending.** `Validate` and its rules are gone: an invalid request is sent, and the API or gateway answers it with an error status. The same goes for a batch that mixes models, and for a model or endpoint containing an operation such as `:generateContent`.
-- **`GeminiClientOptions.Timeout` is removed.** Clients this library creates use 5 minutes. Set `HttpClient.Timeout` on your own client, or use `.ConfigureHttpClient` on the builder `AddGeminiClient` returns. A `Gemini:Timeout` configuration key is now ignored.
+- **`GeminiClientOptions.Timeout` and `DefaultTimeout` are removed.** Clients this library creates use 5 minutes. Set `HttpClient.Timeout` on your own client, or use `.ConfigureHttpClient` on the builder `AddGeminiClient` returns. A `Gemini:Timeout` configuration key is now ignored.
 - **`GeminiClientOptions.ToolSerializerOptions` and `IGeminiClient.ToolSerializerOptions` are removed.** Pass the options to `AsIChatClient`.
 - **Option setters no longer check their values.** A value that cannot work fails where it is used, such as a negative `StreamIdleTimeout` on the first read.
 - **A header value with a line break or NUL throws `ArgumentException`**, because .NET would send it as it is, and so do a header name .NET refuses, the same header set twice, and an empty key from `ApiKeyProvider`. Other header checks are gone: non-ASCII values fail when sent.
