@@ -1,8 +1,7 @@
-using System.Diagnostics.CodeAnalysis;
-using System.Text;
-using System.Text.Json;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
+using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
 
 namespace GeminiGatewayClient;
 

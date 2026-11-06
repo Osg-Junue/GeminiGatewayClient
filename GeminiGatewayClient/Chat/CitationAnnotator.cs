@@ -1,6 +1,6 @@
-using System.Text;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
+using System.Text;
 
 namespace GeminiGatewayClient.Chat;
 

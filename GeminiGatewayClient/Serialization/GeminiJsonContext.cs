@@ -1,8 +1,8 @@
+using GeminiGatewayClient.Models;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Unicode;
-using GeminiGatewayClient.Models;
 
 namespace GeminiGatewayClient.Serialization;
 

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using GeminiGatewayClient.Models;
 
 namespace GeminiGatewayClient;

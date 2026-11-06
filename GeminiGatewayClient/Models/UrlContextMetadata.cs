@@ -1,6 +1,6 @@
+using GeminiGatewayClient.Serialization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using GeminiGatewayClient.Serialization;
 
 namespace GeminiGatewayClient.Models;
 

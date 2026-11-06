@@ -1,6 +1,6 @@
-using System.Net.Http.Headers;
 using GeminiGatewayClient.Models;
 using Microsoft.Extensions.AI;
+using System.Net.Http.Headers;
 
 namespace GeminiGatewayClient.Chat;
 
