@@ -1,8 +1,8 @@
 namespace GeminiGatewayClient.Http;
 
 /// <summary>
-/// Validated set of request headers (credential header plus additional gateway headers) that is applied to every
-/// <see cref="HttpRequestMessage"/>. Headers are attached per request so a shared <see cref="HttpClient"/> is never mutated.
+/// Request headers (credential header plus additional gateway headers) applied to every <see cref="HttpRequestMessage"/>.
+/// Headers are attached per request so a shared <see cref="HttpClient"/> is never mutated.
 /// </summary>
 internal sealed class GeminiRequestHeaders
 {
@@ -24,127 +24,64 @@ internal sealed class GeminiRequestHeaders
     }
 
     /// <summary>
-    /// Validates the credential and additional headers configured on <paramref name="options"/>.
+    /// Captures the headers configured on <paramref name="options"/>. A header that cannot be sent fails here, not on the first request.
     /// </summary>
-    /// <exception cref="ArgumentException">A header name or value is invalid, duplicated, or conflicting.</exception>
+    /// <exception cref="ArgumentException">A header cannot be sent, or both a key and a key provider are set.</exception>
     public static GeminiRequestHeaders Create(GeminiClientOptions options)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.ApiKeyHeader, nameof(GeminiClientOptions.ApiKeyHeader));
-
-        if (options.ApiKey is { Length: > 0 } && string.IsNullOrWhiteSpace(options.ApiKey))
-        {
-            throw new ArgumentException(
-                "GeminiClientOptions.ApiKey cannot be whitespace-only. Leave it null or empty when no key header should be sent.",
-                nameof(GeminiClientOptions.ApiKey));
-        }
-
-        var hasStaticKey = !string.IsNullOrWhiteSpace(options.ApiKey);
-        var hasDynamicKeyProvider = options.ApiKeyProvider is not null;
-        if (hasStaticKey && hasDynamicKeyProvider)
+        var hasStaticKey = !string.IsNullOrEmpty(options.ApiKey);
+        if (hasStaticKey && options.ApiKeyProvider is not null)
         {
             throw new ArgumentException(
                 "GeminiClientOptions.ApiKey and GeminiClientOptions.ApiKeyProvider are mutually exclusive.",
                 nameof(GeminiClientOptions.ApiKeyProvider));
         }
 
-        var headers = new List<KeyValuePair<string, string>>();
-        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        KeyValuePair<string, string>[] credential = hasStaticKey ? [new(options.ApiKeyHeader, $"{options.ApiKeyPrefix}{options.ApiKey}")] : [];
+        var headers = new GeminiRequestHeaders([.. credential, .. options.AdditionalHeaders], options.ApiKeyHeader, options.ApiKeyPrefix, options.ApiKeyProvider);
+
         using var probe = new HttpRequestMessage();
-
-        if (hasStaticKey || hasDynamicKeyProvider)
+        headers.AddStaticHeaders(probe);
+        if (options.ApiKeyProvider is not null)
         {
-            // The key from ApiKeyProvider is resolved and checked per client call.
-            ValidateName(probe, options.ApiKeyHeader, nameof(GeminiClientOptions.ApiKeyHeader));
-            ValidateValue(options.ApiKeyHeader, options.ApiKeyPrefix, nameof(GeminiClientOptions.ApiKeyPrefix));
-            seenNames.Add(options.ApiKeyHeader);
+            Add(probe, options.ApiKeyHeader, options.ApiKeyPrefix ?? string.Empty);
         }
 
-        if (hasStaticKey)
-        {
-            ValidateValue(options.ApiKeyHeader, options.ApiKey, nameof(GeminiClientOptions.ApiKey));
-            headers.Add(new KeyValuePair<string, string>(options.ApiKeyHeader, $"{options.ApiKeyPrefix}{options.ApiKey}"));
-        }
-
-        if (options.AdditionalHeaders is { } additionalHeaders)
-        {
-            foreach (var (name, rawValue) in additionalHeaders)
-            {
-                ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(GeminiClientOptions.AdditionalHeaders));
-                var value = rawValue ?? string.Empty;
-
-                if (!seenNames.Add(name))
-                {
-                    throw new ArgumentException(
-                        $"Duplicate header '{name}' in AdditionalHeaders (conflicts with ApiKeyHeader or another additional header).",
-                        nameof(GeminiClientOptions.AdditionalHeaders));
-                }
-
-                ValidateName(probe, name, nameof(GeminiClientOptions.AdditionalHeaders));
-                ValidateValue(name, value, nameof(GeminiClientOptions.AdditionalHeaders));
-                headers.Add(new KeyValuePair<string, string>(name, value));
-            }
-        }
-
-        return new GeminiRequestHeaders([.. headers], options.ApiKeyHeader, options.ApiKeyPrefix, options.ApiKeyProvider);
+        return headers;
     }
 
     /// <summary>
     /// Adds all headers to <paramref name="message"/>, resolving the API key from the provider when one is configured.
     /// </summary>
-    /// <exception cref="InvalidOperationException">The API key provider returned an empty or invalid value.</exception>
+    /// <exception cref="ArgumentException">The API key provider returned nothing, or a value that cannot be sent.</exception>
     public async ValueTask ApplyAsync(HttpRequestMessage message, CancellationToken cancellationToken)
+    {
+        AddStaticHeaders(message);
+        if (_apiKeyProvider is not null)
+        {
+            var key = await _apiKeyProvider(cancellationToken).ConfigureAwait(false);
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            Add(message, _apiKeyHeader, $"{_apiKeyPrefix}{key}");
+        }
+    }
+
+    private void AddStaticHeaders(HttpRequestMessage message)
     {
         foreach (var (name, value) in _staticHeaders)
         {
-            message.Headers.TryAddWithoutValidation(name, value);
-        }
-
-        if (_apiKeyProvider is null)
-        {
-            return;
-        }
-
-        var key = await _apiKeyProvider(cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(key) || IsInvalidHeaderText(key, allowHorizontalTab: true))
-        {
-            throw new InvalidOperationException("GeminiClientOptions.ApiKeyProvider returned an empty, whitespace-only, or non-ASCII value.");
-        }
-
-        if (!message.Headers.TryAddWithoutValidation(_apiKeyHeader, $"{_apiKeyPrefix}{key}"))
-        {
-            throw new InvalidOperationException($"Failed to apply credential header '{_apiKeyHeader}'.");
-        }
-    }
-
-    private static void ValidateName(HttpRequestMessage probe, string name, string paramName)
-    {
-        if (IsInvalidHeaderText(name, allowHorizontalTab: false))
-        {
-            throw new ArgumentException($"Header name '{name}' must contain only printable ASCII characters.", paramName);
-        }
-
-        if (!probe.Headers.TryAddWithoutValidation(name, string.Empty))
-        {
-            throw new ArgumentException(
-                $"Header '{name}' is not a valid request header (content headers such as 'Content-Type' cannot be set via AdditionalHeaders or ApiKeyHeader).",
-                paramName);
+            Add(message, name, value);
         }
     }
 
     /// <summary>
-    /// Checks one piece of a header value. The text is left out of the message, because it may be a credential.
+    /// .NET would send a line break or NUL as it is, which injects a header, and would join two values of one header, which
+    /// hides a credential conflict. The value stays out of the message, because it may be a credential.
     /// </summary>
-    private static void ValidateValue(string name, string? value, string paramName)
+    private static void Add(HttpRequestMessage message, string name, string value)
     {
-        if (value is not null && IsInvalidHeaderText(value, allowHorizontalTab: true))
+        if (value.AsSpan().ContainsAny('\r', '\n', '\0') || message.Headers.TryGetValues(name, out _) || !message.Headers.TryAddWithoutValidation(name, value))
         {
-            throw new ArgumentException($"The value of header '{name}' must contain only printable ASCII characters.", paramName);
+            throw new ArgumentException($"Header '{name}' cannot be sent.", nameof(name));
         }
     }
-
-    /// <summary>
-    /// HTTP header text must be printable ASCII; anything else would only fail later, on the first request.
-    /// </summary>
-    private static bool IsInvalidHeaderText(string value, bool allowHorizontalTab) =>
-        value.Any(c => c is < ' ' or > '~' && !(allowHorizontalTab && c == '\t'));
 }

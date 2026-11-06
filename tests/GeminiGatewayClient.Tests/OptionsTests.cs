@@ -60,23 +60,6 @@ public class OptionsTests
     }
 
     [Fact]
-    public void AdditionalHeaders_DuplicatingApiKeyHeaderCaseInsensitive_ThrowsArgumentExceptionInConstructor()
-    {
-        var options = new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key",
-            ApiKeyHeader = "x-goog-api-key",
-            AdditionalHeaders = new Dictionary<string, string>
-            {
-                ["X-GOOG-API-KEY"] = "second-key"
-            }
-        };
-
-        Assert.Throws<ArgumentException>(() => new GeminiClient(options));
-    }
-
-    [Fact]
     public void AdditionalHeaders_WithCrLfInjection_ThrowsArgumentExceptionInConstructor()
     {
         var options = new GeminiClientOptions
@@ -119,12 +102,6 @@ public class OptionsTests
     }
 
     [Fact]
-    public void StreamIdleTimeout_RejectsAValueTimersCannotHandle()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new GeminiClientOptions { StreamIdleTimeout = TimeSpan.FromDays(60) });
-    }
-
-    [Fact]
     public async Task Endpoint_WithQueryParameters_PreservesQueryAfterAppendingModelAndOperation()
     {
         const string okJson = """{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"ok"}]}}]}""";
@@ -152,7 +129,7 @@ public class OptionsTests
     }
 
     [Fact]
-    public void InternalHttpClient_UsesDefaultFiveMinuteTimeout_OrConfiguredTimeout()
+    public void InternalHttpClient_UsesDefaultFiveMinuteTimeout()
     {
         using var defaultClient = new GeminiClient(new GeminiClientOptions
         {
@@ -160,14 +137,6 @@ public class OptionsTests
             ApiKey = "key"
         });
         Assert.Equal(TimeSpan.FromMinutes(5), defaultClient.HttpClientTimeout);
-
-        using var customClient = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key",
-            Timeout = TimeSpan.FromMinutes(10)
-        });
-        Assert.Equal(TimeSpan.FromMinutes(10), customClient.HttpClientTimeout);
     }
 
     [Fact]
@@ -182,7 +151,6 @@ public class OptionsTests
             options.Model = DefaultModel;
             options.ApiKey = "di-key";
             options.ApiKeyHeader = "Ocp-Apim-Subscription-Key";
-            options.Timeout = TimeSpan.FromMinutes(8);
         }).ConfigurePrimaryHttpMessageHandler(() => handler);
 
         await using var provider = services.BuildServiceProvider();
@@ -190,7 +158,7 @@ public class OptionsTests
         var iGeminiClient = provider.GetRequiredService<IGeminiClient>();
         var chatClient = provider.GetRequiredService<IChatClient>();
 
-        Assert.Equal(TimeSpan.FromMinutes(8), geminiClient.HttpClientTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(5), geminiClient.HttpClientTimeout);
 
         var directResponse = await iGeminiClient.GenerateContentAsync("Hi");
         Assert.Equal("From DI!", directResponse.Text);
@@ -247,7 +215,6 @@ public class OptionsTests
         });
         services.AddGeminiClient(options =>
         {
-            options.Timeout = TimeSpan.FromMinutes(3);
         });
 
         // Unrelated named GeminiClientOptions instance should not trigger default validator failure
@@ -256,72 +223,10 @@ public class OptionsTests
 
         using var provider = services.BuildServiceProvider();
         var client = provider.GetRequiredService<GeminiClient>();
-        Assert.Equal(TimeSpan.FromMinutes(3), client.HttpClientTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(5), client.HttpClientTimeout);
 
         var named = provider.GetRequiredService<IOptionsSnapshot<GeminiClientOptions>>().Get("unrelated-named");
         Assert.Equal(new Uri("http://remote-insecure-host.example.com/v1beta"), named.Endpoint);
-    }
-
-    [Fact]
-    public void GeminiClientOptions_WhitespaceOnlyApiKey_ThrowsArgumentException_AndEmptyStringIsAllowed()
-    {
-        var whitespaceOptions = new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "   "
-        };
-
-        Assert.Throws<ArgumentException>(() => new GeminiClient(whitespaceOptions));
-        Assert.Contains("ApiKey = <none>", whitespaceOptions.ToString());
-
-        using var emptyKeyClient = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = string.Empty
-        });
-        Assert.Equal(DefaultModel, emptyKeyClient.DefaultModel);
-    }
-
-    [Fact]
-    public async Task ApiKeyProvider_ReturningWhitespaceOnly_ThrowsInvalidOperationException()
-    {
-        const string okJson = """{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"ok"}]}}]}""";
-        using var handler = new RecordingHandler(okJson);
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKeyHeader = "Authorization",
-            ApiKeyPrefix = "Bearer ",
-            ApiKeyProvider = _ => ValueTask.FromResult("   ")
-        }, httpClient);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GenerateContentAsync("Hi"));
-    }
-
-    [Fact]
-    public void AddGeminiClient_RegistersValidateOnStart_AndFailsFastViaStartupValidator()
-    {
-        var invalidServices = new ServiceCollection();
-        invalidServices.AddGeminiClient(options =>
-        {
-            options.Endpoint = new Uri("http://remote-insecure-host.example.com/v1beta");
-            options.Model = DefaultModel;
-        });
-
-        using var invalidProvider = invalidServices.BuildServiceProvider();
-        var startupValidator = invalidProvider.GetRequiredService<IStartupValidator>();
-        Assert.Throws<OptionsValidationException>(() => startupValidator.Validate());
-
-        var validServices = new ServiceCollection();
-        validServices.AddGeminiClient(options =>
-        {
-            options.Model = DefaultModel;
-            options.ApiKey = "valid-key";
-        });
-
-        using var validProvider = validServices.BuildServiceProvider();
-        validProvider.GetRequiredService<IStartupValidator>().Validate();
     }
 
     [Fact]
@@ -338,7 +243,6 @@ public class OptionsTests
                 ["Gemini:ApiKeyPrefix"] = "Bearer ",
                 ["Gemini:AdditionalHeaders:X-Tenant-Id"] = "tenant-42",
                 ["Gemini:AdditionalHeaders:X-Environment"] = "production",
-                ["Gemini:Timeout"] = "00:03:30",
                 ["Gemini:StreamIdleTimeout"] = "00:01:15",
                 ["Gemini:AllowInsecureHttp"] = "true"
             })
@@ -361,21 +265,25 @@ public class OptionsTests
         Assert.Equal("Bearer ", bound.ApiKeyPrefix);
         Assert.Equal("tenant-42", bound.AdditionalHeaders["X-Tenant-Id"]);
         Assert.Equal("production", bound.AdditionalHeaders["X-Environment"]);
-        Assert.Equal(TimeSpan.FromMinutes(3.5), bound.Timeout);
         Assert.Equal(TimeSpan.FromSeconds(75), bound.StreamIdleTimeout);
         Assert.True(bound.AllowInsecureHttp);
     }
 
     [Fact]
-    public void GeminiClientOptions_DefaultStreamIdleTimeout_IsTwoMinutes_AndSettersValidateEagerly()
+    public void AddGeminiClient_TimeoutCanBeChangedOnTheBuilder()
+    {
+        var services = new ServiceCollection();
+        services.AddGeminiClient(options => options.Model = DefaultModel)
+            .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromMinutes(9));
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Equal(TimeSpan.FromMinutes(9), provider.GetRequiredService<GeminiClient>().HttpClientTimeout);
+    }
+
+    [Fact]
+    public void GeminiClientOptions_DefaultStreamIdleTimeout_IsTwoMinutes()
     {
         var options = new GeminiClientOptions();
         Assert.Equal(TimeSpan.FromMinutes(2), options.StreamIdleTimeout);
-
-        Assert.Throws<ArgumentNullException>(() => options.Endpoint = null!);
-        Assert.Throws<ArgumentException>(() => options.ApiKeyHeader = "   ");
-        Assert.Throws<ArgumentNullException>(() => options.AdditionalHeaders = null!);
-        Assert.Throws<ArgumentOutOfRangeException>(() => options.Timeout = TimeSpan.Zero);
-        Assert.Throws<ArgumentOutOfRangeException>(() => options.StreamIdleTimeout = TimeSpan.FromSeconds(-2));
     }
 }

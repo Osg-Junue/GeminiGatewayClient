@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using System.Text.Json;
 
 namespace GeminiGatewayClient;
 
@@ -13,7 +12,7 @@ namespace GeminiGatewayClient;
 /// <para>
 /// All members are settable so the type can be bound from configuration
 /// (<c>services.AddOptions&lt;GeminiClientOptions&gt;().BindConfiguration("Gemini")</c>).
-/// <see cref="GeminiClient"/> takes an immutable, validated snapshot when it is constructed, so later changes do not affect existing clients.
+/// <see cref="GeminiClient"/> takes an immutable snapshot when it is constructed, so later changes do not affect existing clients.
 /// </para>
 /// </summary>
 [DebuggerDisplay("Endpoint = {RedactedEndpoint}, Model = {Model}, EmbeddingModel = {EmbeddingModel}, ApiKeyHeader = {ApiKeyHeader}")]
@@ -30,16 +29,9 @@ public sealed class GeminiClientOptions
     public static Uri DefaultEndpoint { get; } = new("https://generativelanguage.googleapis.com/v1beta");
 
     /// <summary>
-    /// The default request timeout (5 minutes), sized for long-running thinking models.
-    /// </summary>
-    public static TimeSpan DefaultTimeout { get; } = TimeSpan.FromMinutes(5);
-
-    /// <summary>
-    /// The default streaming idle timeout (2 minutes) between chunks.
+    /// The default streaming idle timeout (2 minutes).
     /// </summary>
     public static TimeSpan DefaultStreamIdleTimeout { get; } = TimeSpan.FromMinutes(2);
-
-    private static TimeSpan MaxStreamIdleTimeout { get; } = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
 
     /// <summary>
     /// Base URI that model resources are resolved against. Requests are sent to
@@ -51,11 +43,7 @@ public sealed class GeminiClientOptions
     /// <c>https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google</c> (Vertex AI).
     /// </para>
     /// </summary>
-    public Uri Endpoint
-    {
-        get;
-        set => field = value ?? throw new ArgumentNullException(nameof(value));
-    } = DefaultEndpoint;
+    public Uri Endpoint { get; set; } = DefaultEndpoint;
 
     /// <summary>
     /// Default model used when a call does not specify one, for example <c>gemini-flash-latest</c>.
@@ -92,13 +80,7 @@ public sealed class GeminiClientOptions
     /// Examples: <c>Ocp-Apim-Subscription-Key</c> (Azure API Management), <c>Authorization</c> (bearer-token proxies).
     /// </para>
     /// </summary>
-    public string ApiKeyHeader
-    {
-        get;
-        set => field = !string.IsNullOrWhiteSpace(value)
-            ? value
-            : throw new ArgumentException("ApiKeyHeader cannot be null or whitespace.", nameof(value));
-    } = DefaultApiKeyHeader;
+    public string ApiKeyHeader { get; set; } = DefaultApiKeyHeader;
 
     /// <summary>
     /// Text prepended to the credential in the header value, for example <c>"Bearer "</c>.
@@ -107,54 +89,29 @@ public sealed class GeminiClientOptions
 
     /// <summary>
     /// Extra request headers sent with every call (for example gateway authentication, routing, or tracing headers).
-    /// Must not duplicate <see cref="ApiKeyHeader"/> (when a credential is configured) or contain content headers such as <c>Content-Type</c>.
+    /// Content headers such as <c>Content-Type</c> cannot be set here.
     /// </summary>
-    public IDictionary<string, string> AdditionalHeaders
-    {
-        get;
-        set => field = value ?? throw new ArgumentNullException(nameof(value));
-    } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public IDictionary<string, string> AdditionalHeaders { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Time allowed for a complete response, or for the response headers of a streaming call. Applied to the
-    /// <see cref="HttpClient"/> created internally and to clients created by <c>AddGeminiClient</c>; ignored when you pass
-    /// your own <see cref="HttpClient"/>.
-    /// Must be positive or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>. Defaults to <see cref="DefaultTimeout"/>.
-    /// </summary>
-    public TimeSpan Timeout
-    {
-        get;
-        set => field = value > TimeSpan.Zero || value == System.Threading.Timeout.InfiniteTimeSpan
-            ? value
-            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.Timeout must be positive or Timeout.InfiniteTimeSpan.");
-    } = DefaultTimeout;
-
-    /// <summary>
-    /// Maximum time to wait for the next chunk of a streaming response before failing with <see cref="TimeoutException"/>.
+    /// Maximum time to wait for more data on a streaming response before failing with <see cref="TimeoutException"/>.
+    /// Any received data resets it, including keep-alive comments from a gateway.
     /// Defaults to <see cref="DefaultStreamIdleTimeout"/> (2 minutes). Set to <c>null</c> or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to disable.
-    /// Must be positive and below about 49.7 days, or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>, when set.
     /// </summary>
-    public TimeSpan? StreamIdleTimeout
-    {
-        get;
-        set => field = value is null || (value > TimeSpan.Zero && value <= MaxStreamIdleTimeout) || value == System.Threading.Timeout.InfiniteTimeSpan
-            ? value
-            : throw new ArgumentOutOfRangeException(nameof(value), value, "GeminiClientOptions.StreamIdleTimeout must be positive and below about 49.7 days, or Timeout.InfiniteTimeSpan.");
-    } = DefaultStreamIdleTimeout;
+    public TimeSpan? StreamIdleTimeout { get; set; } = DefaultStreamIdleTimeout;
+
+    /// <summary>
+    /// Whether streaming calls ask for Server-Sent Events with <c>alt=sse</c>. Defaults to <c>true</c>. Set to <c>false</c> for a
+    /// gateway that rejects the query string: Gemini then answers with a JSON array, which is read as it arrives, though a complete
+    /// chunk may wait for the data after it.
+    /// </summary>
+    public bool UseServerSentEvents { get; set; } = true;
 
     /// <summary>
     /// When <c>false</c> (default), <c>http://</c> endpoints are only permitted for loopback hosts (<c>localhost</c>, <c>127.0.0.1</c>, <c>::1</c>)
     /// to prevent accidentally transmitting credentials in cleartext. Set to <c>true</c> to allow plain HTTP to non-loopback hosts.
     /// </summary>
     public bool AllowInsecureHttp { get; set; }
-
-    /// <summary>
-    /// Optional <see cref="JsonSerializerOptions"/> used by the <c>IChatClient</c> adapter when serializing custom
-    /// tool/function return values that are not covered by the built-in primitive types.
-    /// The options need a <see cref="JsonSerializerOptions.TypeInfoResolver"/> for those types, also outside Native AOT;
-    /// a source-generated <see cref="System.Text.Json.Serialization.JsonSerializerContext"/> works everywhere.
-    /// </summary>
-    public JsonSerializerOptions? ToolSerializerOptions { get; set; }
 
     internal string RedactedEndpoint => FormatEndpoint(Endpoint);
 
@@ -174,7 +131,7 @@ public sealed class GeminiClientOptions
 
         builder.Append(", ApiKeyHeader = ").Append(ApiKeyHeader);
         builder.Append(", ApiKey = ").Append(
-            !string.IsNullOrWhiteSpace(ApiKey) ? "***" : ApiKeyProvider is not null ? "<provider>" : "<none>");
+            !string.IsNullOrEmpty(ApiKey) ? "***" : ApiKeyProvider is not null ? "<provider>" : "<none>");
         builder.Append(", ApiKeyPrefix = ").Append(ApiKeyPrefix);
         builder.Append(", AdditionalHeaders = [");
         if (AdditionalHeaders is { Count: > 0 })
@@ -183,7 +140,6 @@ public sealed class GeminiClientOptions
         }
 
         builder.Append("] (values redacted)");
-        builder.Append(", Timeout = ").Append(Timeout);
         builder.Append(", StreamIdleTimeout = ").Append(StreamIdleTimeout?.ToString() ?? "<none>");
         builder.Append(", AllowInsecureHttp = ").Append(AllowInsecureHttp);
         return builder.Append(" }").ToString();

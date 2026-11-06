@@ -138,10 +138,9 @@ public sealed class LongConversationExploratoryTests(ExploratoryTestFixture fixt
             var response = await chatClient.GetResponseAsync(history, new ChatOptions
             {
                 Temperature = 0.0f,
-                Reasoning = new ReasoningOptions
+                RawRepresentationFactory = _ => new GenerateContentRequest
                 {
-                    Effort = ReasoningEffort.Low,
-                    Output = ReasoningOutput.Summary
+                    GenerationConfig = new GenerationConfig { ThinkingConfig = new ThinkingConfig { ThinkingLevel = ThinkingLevel.Low, IncludeThoughts = true } }
                 }
             });
             sw.Stop();
@@ -198,10 +197,9 @@ public sealed class LongConversationExploratoryTests(ExploratoryTestFixture fixt
             await foreach (var update in chatClient.GetStreamingResponseAsync(history, new ChatOptions
             {
                 Temperature = 0.0f,
-                Reasoning = new ReasoningOptions
+                RawRepresentationFactory = _ => new GenerateContentRequest
                 {
-                    Effort = ReasoningEffort.Low,
-                    Output = ReasoningOutput.Summary
+                    GenerationConfig = new GenerationConfig { ThinkingConfig = new ThinkingConfig { ThinkingLevel = ThinkingLevel.Low, IncludeThoughts = true } }
                 }
             }))
             {

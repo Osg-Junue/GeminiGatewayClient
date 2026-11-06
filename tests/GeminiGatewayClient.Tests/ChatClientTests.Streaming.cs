@@ -150,7 +150,6 @@ public partial class ChatClientTests
             messages,
             options: null,
             chatClient,
-            DefaultModel,
             AIJsonUtilities.DefaultOptions);
 
         Assert.Equal(4, request.Contents.Count);
@@ -197,36 +196,6 @@ public partial class ChatClientTests
         await Assert.ThrowsAsync<ArgumentException>(() => chatClient.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "Hi")],
             new ChatOptions { ModelId = maliciousModel }));
-    }
-
-    [Fact]
-    public async Task RequestHeaders_NullCharOrControlCharInStaticOrDynamicKey_ThrowsException()
-    {
-        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "bad\0key"
-        }));
-
-        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKey = "key",
-            AdditionalHeaders = new Dictionary<string, string>
-            {
-                ["x-custom"] = "val\u0007bell"
-            }
-        }));
-
-        using var handler = new RecordingHandler(OkResponseJson);
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = DefaultModel,
-            ApiKeyProvider = _ => ValueTask.FromResult("token-with-\0-null")
-        }, httpClient);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GenerateContentAsync("Hi"));
     }
 
     [Fact]
@@ -360,105 +329,6 @@ public partial class ChatClientTests
     }
 
     [Fact]
-    public void Validate_OutboundRequests_RejectsUnknownEnumsAndInvalidJsonElements_WhileAllowingCodeExecutionUnknowns()
-    {
-        // Role.Unknown rejected
-        var badRoleReq = new GenerateContentRequest
-        {
-            Contents = [new Content { Role = Role.Unknown, Parts = [Part.FromText("Hi")] }]
-        };
-        Assert.Throws<ArgumentException>(() => badRoleReq.Validate());
-
-        // SchemaType.Unknown rejected (including nested)
-        var badSchemaReq = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            GenerationConfig = new GenerationConfig
-            {
-                ResponseSchema = new Schema
-                {
-                    Type = SchemaType.Object,
-                    Properties = new Dictionary<string, Schema>
-                    {
-                        ["nested"] = new Schema { Type = SchemaType.Unknown }
-                    }
-                }
-            }
-        };
-        Assert.Throws<ArgumentException>(() => badSchemaReq.Validate());
-
-        // Schema.Default with Undefined JsonElement rejected
-        var badSchemaDefaultReq = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            GenerationConfig = new GenerationConfig
-            {
-                ResponseSchema = new Schema
-                {
-                    Type = SchemaType.String,
-                    Default = default(JsonElement)
-                }
-            }
-        };
-        Assert.Throws<ArgumentException>(() => badSchemaDefaultReq.Validate());
-
-        // FunctionResponse non-Object rejected in factory and Validate
-        Assert.Throws<ArgumentException>(() => Part.FromFunctionResponse("fn", default));
-        using var arrayDoc = JsonDocument.Parse("[1, 2]");
-        Assert.Throws<ArgumentException>(() => Part.FromFunctionResponse("fn", arrayDoc.RootElement));
-        var badFuncRespPart = new Part
-        {
-            FunctionResponse = new FunctionResponse { Name = "fn", Response = arrayDoc.RootElement }
-        };
-        Assert.Throws<ArgumentException>(() => new GenerateContentRequest
-        {
-            Contents = [new Content { Role = Role.User, Parts = [badFuncRespPart] }]
-        }.Validate());
-
-        // FunctionCall.Args with default(JsonElement) rejected
-        var badFuncCallPart = new Part
-        {
-            FunctionCall = new FunctionCall { Name = "fn", Args = default(JsonElement) }
-        };
-        Assert.Throws<ArgumentException>(() => new GenerateContentRequest
-        {
-            Contents = [new Content { Role = Role.Model, Parts = [badFuncCallPart] }]
-        }.Validate());
-
-        // FunctionDeclaration.ParametersJsonSchema / ResponseJsonSchema / GenerationConfig.ResponseJsonSchema with default(JsonElement) rejected
-        Assert.Throws<ArgumentException>(() => new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            Tools = [new Tool { FunctionDeclarations = [new FunctionDeclaration { Name = "fn", ParametersJsonSchema = default(JsonElement) }] }]
-        }.Validate());
-
-        Assert.Throws<ArgumentException>(() => new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            GenerationConfig = new GenerationConfig { ResponseJsonSchema = default(JsonElement) }
-        }.Validate());
-
-        // CodeExecutionLanguage.Unknown and CodeExecutionOutcome.Unknown MUST be allowed for multi-turn forward compatibility
-        var codeExecReq = new GenerateContentRequest
-        {
-            Contents =
-            [
-                Content.FromText("Compute"),
-                new Content
-                {
-                    Role = Role.Model,
-                    Parts =
-                    [
-                        new Part { ExecutableCode = new ExecutableCode { Language = CodeExecutionLanguage.Unknown, Code = "1+1" } },
-                        new Part { CodeExecutionResult = new CodeExecutionResult { Outcome = CodeExecutionOutcome.Unknown, Output = "2" } }
-                    ]
-                }
-            ]
-        };
-        codeExecReq.Validate();
-    }
-
-    [Fact]
     public async Task GeminiEmbeddingGenerator_RawRepresentationFactoryOutputDimensionality_TakesPrecedenceOverDefaultModelDimensions()
     {
         const string singleEmbedJson = """{"embeddings":[{"values":[0.1,0.2]}]}""";
@@ -519,25 +389,6 @@ public partial class ChatClientTests
         Assert.True(sentTools[0].TryGetProperty("urlContext", out _));
         Assert.Equal("get_weather", sentTools[1].GetProperty("functionDeclarations")[0].GetProperty("name").GetString());
         Assert.True(sentTools[2].TryGetProperty("googleSearch", out _));
-    }
-
-    [Theory]
-    [InlineData("/")]
-    [InlineData("///")]
-    [InlineData(" / ")]
-    public async Task GeminiEndpoint_SlashOnlyModelName_ThrowsArgumentException(string slashModel)
-    {
-        using var handler = new RecordingHandler(OkResponseJson);
-        using var httpClient = new HttpClient(handler);
-
-        Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions
-        {
-            Model = slashModel,
-            ApiKey = "key"
-        }, httpClient));
-
-        using var client = CreateClient(httpClient);
-        await Assert.ThrowsAsync<ArgumentException>(() => client.GenerateContentAsync("Hi", model: slashModel));
     }
 
     [Fact]
@@ -846,7 +697,6 @@ public partial class ChatClientTests
             [new ChatMessage(ChatRole.User, "Weather?"), assistantMsg, resultMsg],
             options: null,
             client: null!,
-            modelId: "gemini-2.5-flash",
             System.Text.Json.JsonSerializerOptions.Default);
 
         var replayedCall = reqUnmodified.Contents[1].Parts[0].FunctionCall!;
@@ -864,7 +714,6 @@ public partial class ChatClientTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: "gemini-2.5-flash",
             System.Text.Json.JsonSerializerOptions.Default);
         Assert.True(System.Text.Json.JsonElement.DeepEquals(rawArgs, reqReordered.Contents[0].Parts[0].FunctionCall!.Args!.Value));
 
@@ -874,7 +723,6 @@ public partial class ChatClientTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: "gemini-2.5-flash",
             System.Text.Json.JsonSerializerOptions.Default);
         Assert.Equal("Osaka", reqMutatedValue.Contents[0].Parts[0].FunctionCall!.Args!.Value.GetProperty("city").GetString());
 
@@ -885,7 +733,6 @@ public partial class ChatClientTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: "gemini-2.5-flash",
             System.Text.Json.JsonSerializerOptions.Default);
         Assert.Equal("C", reqAddedKey.Contents[0].Parts[0].FunctionCall!.Args!.Value.GetProperty("unit").GetString());
 
@@ -896,7 +743,6 @@ public partial class ChatClientTests
             [assistantMsg],
             options: null,
             client: null!,
-            modelId: "gemini-2.5-flash",
             System.Text.Json.JsonSerializerOptions.Default);
         Assert.False(reqRemovedKey.Contents[0].Parts[0].FunctionCall!.Args!.Value.TryGetProperty("days", out _));
 
@@ -923,11 +769,10 @@ public partial class ChatClientTests
             [dupChatMsg],
             options: null,
             client: null!,
-            modelId: "gemini-2.5-flash",
             System.Text.Json.JsonSerializerOptions.Default);
         Assert.Equal("celsius", reqDupMutated.Contents[0].Parts[0].FunctionCall!.Args!.Value.GetProperty("unit").GetString());
 
-        // 7. Undefined or Null the raw arguments with null Arguments normalizes FunctionCall.Args to null and passes Validate()
+        // 7. Undefined or Null the raw arguments with null Arguments normalizes FunctionCall.Args to null()
         using var nullDoc = System.Text.Json.JsonDocument.Parse("null");
         var undefinedAndNullResponse = new GenerateContentResponse
         {
@@ -952,9 +797,7 @@ public partial class ChatClientTests
             [undefNullMsg],
             options: null,
             client: null!,
-            modelId: "gemini-2.5-flash",
             System.Text.Json.JsonSerializerOptions.Default);
-        reqUndefNull.Validate();
         Assert.Null(reqUndefNull.Contents[0].Parts[0].FunctionCall!.Args);
         Assert.Null(reqUndefNull.Contents[0].Parts[1].FunctionCall!.Args);
     }

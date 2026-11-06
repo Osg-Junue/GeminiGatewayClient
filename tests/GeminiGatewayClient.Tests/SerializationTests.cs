@@ -67,32 +67,6 @@ public class SerializationTests
     }
 
     [Fact]
-    public async Task ThinkingConfig_SettingBothBudgetAndLevel_ThrowsArgumentExceptionBeforeSending()
-    {
-        using var handler = new RecordingHandler("{}");
-        using var httpClient = new HttpClient(handler);
-        using var client = new GeminiClient(new GeminiClientOptions
-        {
-            Model = "gemini-2.5-flash",
-            ApiKey = "key"
-        }, httpClient);
-
-        var badRequest = GenerateContentRequest.FromPrompt(
-            "Hi",
-            generationConfig: new GenerationConfig
-            {
-                ThinkingConfig = new ThinkingConfig
-                {
-                    ThinkingBudget = 1024,
-                    ThinkingLevel = ThinkingLevel.High
-                }
-            });
-
-        await Assert.ThrowsAsync<ArgumentException>(() => client.GenerateContentAsync(badRequest));
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
     public void ConvenienceProperties_EmptyCandidatesOrParts_ReturnSafeDefaults()
     {
         var emptyCandidates = new GenerateContentResponse { Candidates = [] };
@@ -272,28 +246,6 @@ public class SerializationTests
     }
 
     [Fact]
-    public void Validate_RejectsEmptyPartsOrNullElements()
-    {
-        var emptyPartsRequest = new GenerateContentRequest
-        {
-            Contents = [new Content { Role = Role.User, Parts = [] }]
-        };
-        Assert.Throws<ArgumentException>(() => emptyPartsRequest.Validate());
-
-        var nullContentRequest = new GenerateContentRequest
-        {
-            Contents = [null!]
-        };
-        Assert.Throws<ArgumentException>(() => nullContentRequest.Validate());
-
-        var nullPartRequest = new GenerateContentRequest
-        {
-            Contents = [new Content { Role = Role.User, Parts = [null!] }]
-        };
-        Assert.Throws<ArgumentException>(() => nullPartRequest.Validate());
-    }
-
-    [Fact]
     public void VideoOffset_SerializesAsProtobufDurationString_AndDeserializesBothStringAndObjectFormats()
     {
         var request = new GenerateContentRequest
@@ -382,58 +334,6 @@ public class SerializationTests
     }
 
     [Fact]
-    public void Validate_RejectsEmptyPartSystemInstructionNullToolsSafetySettingsAndUnknownRequestEnums()
-    {
-        var emptyPartObj = new GenerateContentRequest
-        {
-            Contents = [new Content { Role = Role.User, Parts = [new Part()] }]
-        };
-        Assert.Throws<ArgumentException>(() => emptyPartObj.Validate());
-
-        var emptySystemInstruction = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            SystemInstruction = new Content { Parts = [] }
-        };
-        Assert.Throws<ArgumentException>(() => emptySystemInstruction.Validate());
-
-        var nullToolElement = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            Tools = [null!]
-        };
-        Assert.Throws<ArgumentException>(() => nullToolElement.Validate());
-
-        var nullSafetyElement = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            SafetySettings = [null!]
-        };
-        Assert.Throws<ArgumentException>(() => nullSafetyElement.Validate());
-
-        var unknownSafetyCategory = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            SafetySettings = [new SafetySetting { Category = HarmCategory.Unknown, Threshold = HarmBlockThreshold.BlockNone }]
-        };
-        Assert.Throws<ArgumentException>(() => unknownSafetyCategory.Validate());
-
-        var unknownThinkingLevel = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            GenerationConfig = new GenerationConfig { ThinkingConfig = new ThinkingConfig { ThinkingLevel = ThinkingLevel.Unknown } }
-        };
-        Assert.Throws<ArgumentException>(() => unknownThinkingLevel.Validate());
-
-        var unknownFunctionCallingMode = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            ToolConfig = new ToolConfig { FunctionCallingConfig = new FunctionCallingConfig { Mode = FunctionCallingMode.Unknown } }
-        };
-        Assert.Throws<ArgumentException>(() => unknownFunctionCallingMode.Validate());
-    }
-
-    [Fact]
     public void NullPropertiesInRequiredAndNonNullableModelFields_NormalizeToNonNullDefaults()
     {
         const string jsonWithNulls = """
@@ -467,76 +367,6 @@ public class SerializationTests
         Assert.Equal("", parts[2].FunctionCall!.Name);
         Assert.Equal("", parts[3].FunctionResponse!.Name);
         Assert.Equal("", response.Candidates[0].LogprobsResult!.ChosenCandidates![0].Token);
-    }
-
-    [Fact]
-    public void Validate_RejectsMultiplePartDataFields_EmptyBlob_EmptyFileUri_AndEmptyFunctionDeclarationName()
-    {
-        var multipleDataFields = new GenerateContentRequest
-        {
-            Contents =
-            [
-                new Content
-                {
-                    Role = Role.User,
-                    Parts =
-                    [
-                        new Part
-                        {
-                            Text = "hello",
-                            InlineData = new Blob { MimeType = "image/png", Data = [1, 2, 3] }
-                        }
-                    ]
-                }
-            ]
-        };
-        Assert.Throws<ArgumentException>(() => multipleDataFields.Validate());
-
-        var emptyBlobData = new GenerateContentRequest
-        {
-            Contents =
-            [
-                new Content
-                {
-                    Role = Role.User,
-                    Parts = [new Part { InlineData = new Blob { MimeType = "image/png", Data = [] } }]
-                }
-            ]
-        };
-        Assert.Throws<ArgumentException>(() => emptyBlobData.Validate());
-
-        var emptyFileUri = new GenerateContentRequest
-        {
-            Contents =
-            [
-                new Content
-                {
-                    Role = Role.User,
-                    Parts = [new Part { FileData = new FileData { FileUri = "   " } }]
-                }
-            ]
-        };
-        Assert.Throws<ArgumentException>(() => emptyFileUri.Validate());
-
-        var nullFunctionResponsePayload = new GenerateContentRequest
-        {
-            Contents =
-            [
-                new Content
-                {
-                    Role = Role.User,
-                    Parts = [new Part { FunctionResponse = new FunctionResponse { Name = "fn", Response = null } }]
-                }
-            ]
-        };
-        Assert.Throws<ArgumentException>(() => nullFunctionResponsePayload.Validate());
-
-        var emptyFunctionDeclName = new GenerateContentRequest
-        {
-            Contents = [Content.FromText("Hi")],
-            Tools = [new Tool { FunctionDeclarations = [new FunctionDeclaration { Name = "  " }] }]
-        };
-        Assert.Throws<ArgumentException>(() => emptyFunctionDeclName.Validate());
     }
 
     [Fact]
@@ -744,90 +574,6 @@ public class SerializationTests
         Assert.Equal(UrlRetrievalStatus.Success, urlContext.UrlMetadata[0].UrlRetrievalStatus);
         Assert.Equal(UrlRetrievalStatus.Paywall, urlContext.UrlMetadata[1].UrlRetrievalStatus);
         Assert.Equal(UrlRetrievalStatus.Unknown, urlContext.UrlMetadata[2].UrlRetrievalStatus);
-    }
-
-    [Fact]
-    public void EmbedContent_AndBatchEmbedContents_SerializeDeserializeAndValidate()
-    {
-        var single = EmbedContentRequest.FromText(
-            "What is the meaning of life?",
-            TaskType.RetrievalDocument,
-            title: "Philosophy FAQ",
-            outputDimensionality: 256);
-
-        var singleJson = JsonSerializer.Serialize(single, GeminiJsonContext.Default.EmbedContentRequest);
-        using var singleDoc = JsonDocument.Parse(singleJson);
-        Assert.Equal("RETRIEVAL_DOCUMENT", singleDoc.RootElement.GetProperty("taskType").GetString());
-        Assert.Equal("Philosophy FAQ", singleDoc.RootElement.GetProperty("title").GetString());
-        Assert.Equal(256, singleDoc.RootElement.GetProperty("outputDimensionality").GetInt32());
-
-        const string embedResponseJson = """
-            {
-              "embedding": {
-                "values": [0.125, -0.5, 0.875]
-              }
-            }
-            """;
-        var embedResponse = JsonSerializer.Deserialize(embedResponseJson, GeminiJsonContext.Default.EmbedContentResponse);
-        Assert.NotNull(embedResponse?.Embedding);
-        Assert.Equal([0.125f, -0.5f, 0.875f], embedResponse.Embedding.Values);
-
-        // Validation checks
-        var invalidTaskType = EmbedContentRequest.FromText("hi", TaskType.Unknown);
-        Assert.Throws<ArgumentException>(() => invalidTaskType.Validate());
-
-        var invalidTitleWithQuery = EmbedContentRequest.FromText("hi", TaskType.RetrievalQuery, title: "Not a document");
-        Assert.Throws<ArgumentException>(() => invalidTitleWithQuery.Validate());
-
-        var invalidDimensions = EmbedContentRequest.FromText("hi", outputDimensionality: 0);
-        Assert.Throws<ArgumentOutOfRangeException>(() => invalidDimensions.Validate());
-
-        var emptyBatch = new BatchEmbedContentsRequest();
-        Assert.Throws<ArgumentException>(() => emptyBatch.Validate());
-    }
-
-    [Fact]
-    public void Validate_RejectsPartWithExecutableCodeAndTextOrCodeExecutionResult()
-    {
-        var textAndExecCode = new GenerateContentRequest
-        {
-            Contents =
-            [
-                new Content
-                {
-                    Role = Role.Model,
-                    Parts =
-                    [
-                        new Part
-                        {
-                            Text = "running code",
-                            ExecutableCode = new ExecutableCode { Language = CodeExecutionLanguage.Python, Code = "print(1)" }
-                        }
-                    ]
-                }
-            ]
-        };
-        Assert.Throws<ArgumentException>(() => textAndExecCode.Validate());
-
-        var execCodeAndResult = new GenerateContentRequest
-        {
-            Contents =
-            [
-                new Content
-                {
-                    Role = Role.Model,
-                    Parts =
-                    [
-                        new Part
-                        {
-                            ExecutableCode = new ExecutableCode { Language = CodeExecutionLanguage.Python, Code = "print(1)" },
-                            CodeExecutionResult = new CodeExecutionResult { Outcome = CodeExecutionOutcome.Ok, Output = "1" }
-                        }
-                    ]
-                }
-            ]
-        };
-        Assert.Throws<ArgumentException>(() => execCodeAndResult.Validate());
     }
 
     [Fact]

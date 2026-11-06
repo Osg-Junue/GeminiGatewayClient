@@ -35,11 +35,11 @@ internal static class GeminiErrorParser
     }
 
     /// <summary>
-    /// Builds an exception from an <c>"error"</c> object sent with a 2xx status.
+    /// Builds an exception from an <c>"error"</c> value sent with a 2xx status. A gateway may send plain text instead of Google's object.
     /// </summary>
     public static GeminiApiException FromErrorElement(JsonElement error, string rawBody, HttpStatusCode httpStatusCode)
     {
-        var details = ParseErrorObject(error);
+        var details = error.ValueKind == JsonValueKind.Object ? ParseErrorObject(error) : new ErrorDetails(null, null, error.ToString(), null);
 
         // The HTTP status of such a response says nothing about the failure, and a 2xx status must never be reported as one.
         var statusCode = details.Code is >= 400 and <= 599 ? (HttpStatusCode)details.Code.Value
@@ -88,7 +88,7 @@ internal static class GeminiErrorParser
         try
         {
             // Gemini speaks UTF-8; a gateway's charset parameter may be wrong or unknown to .NET.
-            await content.LoadIntoBufferAsync(GeminiClient.MaxResponseBytes, timeout.Token).ConfigureAwait(false);
+            await content.LoadIntoBufferAsync(MaxErrorBodyChars, timeout.Token).ConfigureAwait(false);
             var bytes = await content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
             return Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
         }

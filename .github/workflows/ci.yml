@@ -37,6 +37,12 @@ jobs:
       - name: Run Native AOT smoke test
         run: artifacts/aot-smoke/GeminiGatewayClient.AotSmoke
 
+      - name: Publish Native AOT smoke test with the library trimmed, as in a real application
+        run: dotnet publish tests/GeminiGatewayClient.AotSmoke -c Release -r linux-x64 -p:RootLibrary=false -o artifacts/aot-smoke-trimmed
+
+      - name: Run trimmed Native AOT smoke test
+        run: artifacts/aot-smoke-trimmed/GeminiGatewayClient.AotSmoke
+
       - name: Pack NuGet package
         run: dotnet pack GeminiGatewayClient/GeminiGatewayClient.csproj --no-build -c Release -o artifacts
 

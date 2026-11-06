@@ -213,18 +213,18 @@ IChatClient client = new ChatClientBuilder(geminiChatClient)
   1. **多段ミドルウェアの連鎖実行**:
      リクエストとレスポンスをインターセプトするカスタムデリゲーティングクライアントを挿入し、ツール呼び出しの各ラウンド（ユーザー発話時、ツール実行結果送信時、最終回答受信時）で適切にフックが実行され、内部カウントやログが記録されること。
   2. **`GetService<T>` の透過性 (Service Provider Transparency)**:
-     最外層のラッパーから `client.GetService<GeminiChatClient>()` や `client.GetService<IGeminiClient>()`、`client.GetService<ChatClientMetadata>()` を呼び出した際に、パイプラインを透過して下位のターゲットインスタンスが正しく取得できること。
+     最外層のラッパーから `client.GetService<IGeminiClient>()` や `client.GetService<ChatClientMetadata>()` を呼び出した際に、パイプラインを透過して下位のターゲットインスタンスが正しく取得できること。
 
 ---
 
-### 2.4 構造化出力・マルチモーダル・ReasoningOptions（Thinking）とのツール併用
+### 2.4 構造化出力・マルチモーダル・ThinkingConfig（Thinking）とのツール併用
 
 1. **構造化出力 (`ChatResponseFormat.ForJsonSchema`)**:
    `IChatClient` レイヤーから `ChatOptions.ResponseFormat` に JSON スキーマを指定した場合、`ChatOptionsMapper` が `GenerationConfig.ResponseJsonSchema` にマッピングし、モデルが指定した JSON スキーマ通りの出力を返すこと。
 2. **マルチモーダル入力 (`DataContent`)**:
    `ChatMessage` にテキストだけでなく `DataContent`（インライン画像や PDF、音声のバイト列）を含めて `IChatClient.GetResponseAsync` を呼び出した際、`ChatRequestMapper` が適切に `Part.FromBytes` に変換して実 API が内容を解析できること。
-3. **ReasoningOptions (Thinking) とファンクションコールの併用**:
-   - `gemini-3-flash-preview` 等の推論モデルで `ChatOptions.Reasoning`（`ReasoningEffort.Low` 等）を指定し、かつ `UseFunctionInvocation()` を有効化。
+3. **ThinkingConfig (Thinking) とファンクションコールの併用**:
+   - `gemini-3-flash-preview` 等の推論モデルで `RawRepresentationFactory` で `ThinkingConfig`（`ThinkingLevel.Low` 等）を指定し、かつ `UseFunctionInvocation()` を有効化。
    - モデルがツール呼び出し前に推論（Thinking）を行い、ツール結果受信後にも推論を行って最終回答を導出するフローを検証。
    - **Thought Signature の保持**:
      Gemini は推論過程の改ざんを防止するため、推論を含むメッセージに `thoughtSignature` を付与します。`FunctionInvokingChatClient` が複数ターンを往復する際、この署名が維持され、Google サーバーから「署名が無効または欠落している」というエラー（HTTP 400）が発生しないことを実証。
@@ -347,8 +347,6 @@ Gemini は、モデル自身が Python コードを記述し、Google が管理�
   - 実 API がこのネイティブスキーマ定義を正常に受理し、HTTP 400 を返さないこと。
   - レスポンステキストが厳格にこのスキーマに適合する JSON 文字列として生成されること。
   - C# の厳格なモデルクラスへ `JsonSerializer.Deserialize<T>` で例外なくマッピングできること。
-- **相互排他性バリデーション**:
-  `ResponseSchema` と `ResponseJsonSchema` (`JsonElement`) を同時に設定した場合、リクエスト送信前の `GenerationConfig.Validate()` で `ArgumentException` がスローされること。
 
 ---
 
@@ -426,7 +424,7 @@ Gemini は、ヘイトスピーチ、ハラスメント、危険なコンテン�
 | 5 | MEAI | **ツール内部エラーとモデルのリカバリ** | `IChatClient` | ❌ 未作成 | ❌ 実 API 未検証 | **Missing** | **GAP-MEAI-03** |
 | 6 | MEAI | **ChatClientBuilder 多段ミドルウェア構築** | `IChatClient` | ❌ 未作成 | ❌ 単一 `UseFunctionInvocation` のみ | **Missing** | **GAP-MEAI-04** |
 | 7 | MEAI | **引数なし関数の自動呼び出し (空スキーマ回避)** | `IChatClient` | ✅ 網羅 | ❌ 実 API 未検証 | **Missing** | **GAP-MEAI-05** |
-| 8 | MEAI | **Thinking (ReasoningOptions) とツールの併用** | `IChatClient` | ✅ 網羅 | ❌ ツールなしの推論のみ検証 | **Missing** | **GAP-MEAI-06** |
+| 8 | MEAI | **Thinking (ThinkingConfig) とツールの併用** | `IChatClient` | ✅ 網羅 | ❌ ツールなしの推論のみ検証 | **Missing** | **GAP-MEAI-06** |
 | 9 | MEAI | 構造化出力 (`ChatResponseFormat.ForJsonSchema`) | `IChatClient` | ✅ 網羅 | ❌ ネイティブのみで MEAI 未検証 | **Missing** | **GAP-MEAI-07** |
 | 10 | MEAI | マルチモーダル入力 (`DataContent`) | `IChatClient` | ✅ 網羅 | ❌ ネイティブのみで MEAI 未検証 | **Missing** | **GAP-MEAI-08** |
 | 11 | Native | テキスト生成 & 基本パラメータ | `IGeminiClient` | ✅ 網羅 | ✅ 検証済 (`BasicGenerationExploratoryTests`) | Covered | - |
@@ -505,10 +503,10 @@ Milestone 2 において `tests/GeminiGatewayClient.ExploratoryTests` に実装�
   - パイプライン構成: `new ChatClientBuilder(geminiChatClient).Use(auditor).UseFunctionInvocation().Build()`
 - **期待される振る舞い・アサーション**:
   1. ツール呼び出しを伴うリクエストにおいて、ミドルウェアが内部ターンを含む全往復を傍受し、カウントが 2 回以上記録されること。
-  2. `pipeline.GetService<GeminiChatClient>()` が `null` でなく、基盤のクライアントインスタンスが取得できること。
+  2. `pipeline.GetService<ChatClientMetadata>()` と `pipeline.GetService<IGeminiClient>()` が `null` でなく、基盤のクライアントインスタンスが取得できること。
 
 #### TC-MEAI-05: 引数なし関数の自動呼び出し検証 (空スキーマの抑制)
-- **テストメソッド名**: `IChatClient_UseFunctionInvocation_ParameterlessFunction_ExecutesWithoutError`
+- **テストメソッド名**: `IChatClient_UseFunctionInvocation_ParameterlessFunction_ExecutesWithoutSchemaRejection`
 - **対象機能**: パラメータなし関数定義で `parametersJsonSchema == null` が適用され、HTTP 400 を回避できること (GAP-MEAI-05)
 - **前提条件**:
   - `[Description("現在稼働中のゲートウェイサーバーのシステム稼働状況を取得します。")] object GetSystemStatus()`
@@ -518,11 +516,11 @@ Milestone 2 において `tests/GeminiGatewayClient.ExploratoryTests` に実装�
   1. HTTP 400 Bad Request を発生させずに API 呼び出しが成功すること。
   2. `GetSystemStatus` が実行され、その結果（稼働率やステータス）が回答に含まれること。
 
-#### TC-MEAI-06: 推論モデル (ReasoningOptions) とファンクションコールの併用検証
-- **テストメソッド名**: `IChatClient_UseFunctionInvocation_WithReasoningOptions_PreservesThoughtSignaturesAcrossTurns`
+#### TC-MEAI-06: 推論モデル (ThinkingConfig) とファンクションコールの併用検証
+- **テストメソッド名**: `IChatClient_UseFunctionInvocation_CombinedWithThinking_PreservesThoughtSignatures`
 - **対象機能**: 推論プロセスを伴うマルチターンツール呼び出しでの Thought Signature 整合性 (GAP-MEAI-06)
 - **前提条件**:
-  - `ChatOptions.Reasoning = new() { Effort = ReasoningEffort.Low }`
+  - `RawRepresentationFactory` で `ThinkingConfig { ThinkingLevel = ThinkingLevel.Low, IncludeThoughts = true }` を指定
   - ツール関数と `UseFunctionInvocation()` を設定。
 - **入力プロンプト**:
   論理的推論と数値計算を要するプロンプト。

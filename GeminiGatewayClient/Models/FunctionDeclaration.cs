@@ -24,7 +24,6 @@ public sealed class FunctionDeclaration
     /// Optional. Brief description of what the function does, used by the model to decide when to call it.
     /// </summary>
     [JsonPropertyName("description")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Description { get; set; }
 
     /// <summary>
@@ -32,7 +31,6 @@ public sealed class FunctionDeclaration
     /// Mutually exclusive with <see cref="ParametersJsonSchema"/>.
     /// </summary>
     [JsonPropertyName("parameters")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Schema? Parameters { get; set; }
 
     /// <summary>
@@ -41,7 +39,6 @@ public sealed class FunctionDeclaration
     /// Mutually exclusive with <see cref="Parameters"/>.
     /// </summary>
     [JsonPropertyName("parametersJsonSchema")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? ParametersJsonSchema { get; set; }
 
     /// <summary>
@@ -49,7 +46,6 @@ public sealed class FunctionDeclaration
     /// Mutually exclusive with <see cref="ResponseJsonSchema"/>.
     /// </summary>
     [JsonPropertyName("response")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Schema? Response { get; set; }
 
     /// <summary>
@@ -57,7 +53,6 @@ public sealed class FunctionDeclaration
     /// Mutually exclusive with <see cref="Response"/>.
     /// </summary>
     [JsonPropertyName("responseJsonSchema")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? ResponseJsonSchema { get; set; }
 
     /// <summary>
@@ -65,47 +60,4 @@ public sealed class FunctionDeclaration
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    /// <summary>
-    /// Validates required and mutually exclusive schema members.
-    /// </summary>
-    /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
-    /// <exception cref="ArgumentException">The declaration is invalid or mutually exclusive members are both set.</exception>
-    internal void Validate(string paramName = "request")
-    {
-        if (string.IsNullOrWhiteSpace(Name))
-        {
-            throw new ArgumentException("FunctionDeclaration.Name cannot be null or whitespace.", paramName);
-        }
-
-        if (Parameters is not null && ParametersJsonSchema is not null)
-        {
-            throw new ArgumentException($"FunctionDeclaration '{Name}' cannot set both Parameters and ParametersJsonSchema.", paramName);
-        }
-
-        if (Response is not null && ResponseJsonSchema is not null)
-        {
-            throw new ArgumentException($"FunctionDeclaration '{Name}' cannot set both Response and ResponseJsonSchema.", paramName);
-        }
-
-        if (ParametersJsonSchema is { ValueKind: JsonValueKind.Undefined })
-        {
-            throw new ArgumentException($"FunctionDeclaration '{Name}' ParametersJsonSchema cannot be JsonValueKind.Undefined.", paramName);
-        }
-
-        if (ResponseJsonSchema is { ValueKind: JsonValueKind.Undefined })
-        {
-            throw new ArgumentException($"FunctionDeclaration '{Name}' ResponseJsonSchema cannot be JsonValueKind.Undefined.", paramName);
-        }
-
-        if (Parameters?.GetValidationError() is { } parametersError)
-        {
-            throw new ArgumentException($"FunctionDeclaration('{Name}').Parameters{parametersError}", paramName);
-        }
-
-        if (Response?.GetValidationError() is { } responseError)
-        {
-            throw new ArgumentException($"FunctionDeclaration('{Name}').Response{responseError}", paramName);
-        }
-    }
 }

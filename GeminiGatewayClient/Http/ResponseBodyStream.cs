@@ -18,12 +18,7 @@ internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, Ht
     /// <summary>
     /// The start of the body as received, without a byte order mark. It shows what a response without events really was.
     /// </summary>
-    public string Head => Encoding.UTF8.GetString(_head.GetBuffer(), 0, (int)_head.Length).TrimStart('﻿').TrimEnd();
-
-    /// <summary>
-    /// The number of body bytes received so far, without the blank line added at the end.
-    /// </summary>
-    public long BytesReceived { get; private set; }
+    public string Head => Encoding.UTF8.GetString(_head.GetBuffer(), 0, (int)_head.Length).TrimStart('\uFEFF').TrimEnd();
 
     public override bool CanRead => true;
 
@@ -102,7 +97,6 @@ internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, Ht
         try
         {
             var read = await inner.ReadAsync(buffer, idle.Token).ConfigureAwait(false);
-            BytesReceived += read;
             _head.Write(buffer.Span[..Math.Min(read, GeminiErrorParser.MaxErrorBodyChars - (int)_head.Length)]);
             return read;
         }

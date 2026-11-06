@@ -14,7 +14,6 @@ public sealed class FunctionCall
     /// corresponding <see cref="FunctionResponse.Id"/> so parallel calls to the same function can be correlated.
     /// </summary>
     [JsonPropertyName("id")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Id { get; set; }
 
     /// <summary>
@@ -31,7 +30,6 @@ public sealed class FunctionCall
     /// Optional. Function parameters and values represented as a JSON object.
     /// </summary>
     [JsonPropertyName("args")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? Args { get; set; }
 
     /// <summary>

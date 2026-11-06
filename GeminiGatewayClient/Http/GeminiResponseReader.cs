@@ -32,9 +32,7 @@ internal static class GeminiResponseReader
             var response = JsonSerializer.Deserialize(utf8Json, typeInfo)
                            ?? throw new GeminiApiException("The Gemini API returned an empty (null) response.", statusCode);
 
-            if (extensionDataSelector(response) is { } extensionData &&
-                extensionData.TryGetValue("error", out var error) &&
-                error.ValueKind == JsonValueKind.Object)
+            if (FindError(extensionDataSelector(response)) is { } error)
             {
                 throw GeminiErrorParser.FromErrorElement(error, ToBoundedString(utf8Json), statusCode);
             }
@@ -48,32 +46,32 @@ internal static class GeminiResponseReader
     }
 
     /// <summary>
-    /// Reads the chunks of a <c>:streamGenerateContent</c> response. A gateway may answer with a JSON error or an HTML page
-    /// whatever its <c>Content-Type</c> says, so the body itself shows whether it is an event stream. Such a body is read
-    /// whole, so it is limited to <paramref name="maxBufferSize"/> bytes like the body of a non-streaming call.
+    /// Reads the chunks of a <c>:streamGenerateContent</c> response. The body itself shows its format, whatever its
+    /// <c>Content-Type</c> says: an event stream, the JSON array Gemini sends when <c>alt=sse</c> did not reach it, or a single
+    /// JSON error or HTML page from a gateway, which is read whole.
     /// </summary>
     public static async IAsyncEnumerable<GenerateContentResponse> ReadChunksAsync(
         ResponseBodyStream body,
         HttpStatusCode statusCode,
-        long maxBufferSize,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        if (await body.PeekAsync(cancellationToken).ConfigureAwait(false) is (byte)'{' or (byte)'[' or (byte)'<')
+        var first = await body.PeekAsync(cancellationToken).ConfigureAwait(false);
+        if (first is (byte)'{' or (byte)'<')
         {
-            using var buffer = await ReadToEndAsync(body, maxBufferSize, cancellationToken).ConfigureAwait(false);
+            using var buffer = new MemoryStream();
+            await body.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
             yield return ParseChunk(buffer.GetBuffer().AsSpan(0, (int)buffer.Length), statusCode);
             yield break;
         }
 
-        var parser = SseParser.Create(body, (_, data) => data.IsEmpty || data.SequenceEqual("[DONE]"u8) ? null : ParseChunk(data, statusCode));
+        var chunks = first == (byte)'['
+            ? ReadJsonArrayAsync(body, statusCode, cancellationToken)
+            : ReadEventsAsync(body, statusCode, cancellationToken);
         var isEmpty = true;
-        await foreach (var item in parser.EnumerateAsync(cancellationToken).ConfigureAwait(false))
+        await foreach (var chunk in chunks.ConfigureAwait(false))
         {
-            if (item.Data is { } chunk)
-            {
-                isEmpty = false;
-                yield return chunk;
-            }
+            isEmpty = false;
+            yield return chunk;
         }
 
         if (isEmpty)
@@ -82,37 +80,78 @@ internal static class GeminiResponseReader
         }
     }
 
-    /// <summary>
-    /// Copies <paramref name="body"/> into memory, failing like <see cref="HttpClient"/> does for a buffered body once more
-    /// than <paramref name="maxBufferSize"/> bytes have been received.
-    /// </summary>
-    private static async Task<MemoryStream> ReadToEndAsync(ResponseBodyStream body, long maxBufferSize, CancellationToken cancellationToken)
+    private static async IAsyncEnumerable<GenerateContentResponse> ReadEventsAsync(
+        ResponseBodyStream body,
+        HttpStatusCode statusCode,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var buffer = new MemoryStream();
-        try
+        var parser = SseParser.Create(body, (type, data) => ParseEvent(type, data, statusCode));
+        await foreach (var item in parser.EnumerateAsync(cancellationToken).ConfigureAwait(false))
         {
-            var chunk = new byte[16 * 1024];
-            int read;
-            while ((read = await body.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+            if (item.Data is { } chunk)
             {
-                if (body.BytesReceived > maxBufferSize)
-                {
-                    throw new HttpRequestException(
-                        HttpRequestError.ConfigurationLimitExceeded,
-                        $"Cannot write more bytes to the buffer than the configured maximum buffer size: {maxBufferSize}.");
-                }
-
-                buffer.Write(chunk, 0, read);
+                yield return chunk;
             }
-
-            return buffer;
-        }
-        catch
-        {
-            await buffer.DisposeAsync().ConfigureAwait(false);
-            throw;
         }
     }
+
+    private static async IAsyncEnumerable<GenerateContentResponse> ReadJsonArrayAsync(
+        ResponseBodyStream body,
+        HttpStatusCode statusCode,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var chunks = JsonSerializer.DeserializeAsyncEnumerable(body, GeminiJsonContext.Default.GenerateContentResponse, cancellationToken);
+        var enumerator = chunks.GetAsyncEnumerator(cancellationToken);
+        await using (enumerator.ConfigureAwait(false))
+        {
+            while (true)
+            {
+                try
+                {
+                    if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                    {
+                        yield break;
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    throw GeminiErrorParser.FromUnusableBody("Failed to deserialize the Gemini API response.", body.Head, statusCode, ex);
+                }
+
+                if (enumerator.Current is not { } chunk)
+                {
+                    continue;
+                }
+
+                if (FindError(chunk.ExtensionData) is { } error)
+                {
+                    throw GeminiErrorParser.FromErrorElement(error, error.GetRawText(), statusCode);
+                }
+
+                yield return chunk;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A gateway may report a failure as an <c>error</c> event in a shape of its own, which would otherwise parse as an empty chunk.
+    /// </summary>
+    private static GenerateContentResponse? ParseEvent(string eventType, ReadOnlySpan<byte> data, HttpStatusCode statusCode)
+    {
+        if (eventType == "error")
+        {
+            throw GeminiErrorParser.FromUnusableBody("The stream reported an error event.", ToBoundedString(data), statusCode);
+        }
+
+        return data.IsEmpty || data.SequenceEqual("[DONE]"u8) ? null : ParseChunk(data, statusCode);
+    }
+
+    private static JsonElement? FindError(IDictionary<string, JsonElement>? extensionData) =>
+        extensionData is not null &&
+        extensionData.TryGetValue("error", out var error) &&
+        error.ValueKind != JsonValueKind.Null
+            ? error
+            : null;
 
     /// <summary>
     /// An event stream ignores what is not an event, such as a plain JSON error sent after keep-alive comments, so the

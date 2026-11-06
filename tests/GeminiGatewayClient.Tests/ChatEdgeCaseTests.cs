@@ -305,7 +305,7 @@ public sealed class ChatEdgeCaseTests
         };
 
         // Must not throw NotSupportedException when request.Tools is read-only
-        ChatOptionsMapper.Apply(request, options, DefaultModel);
+        ChatOptionsMapper.Apply(request, options);
 
         Assert.NotNull(request.Tools);
         Assert.NotSame(readOnlyTools, request.Tools);
@@ -332,7 +332,7 @@ public sealed class ChatEdgeCaseTests
         };
 
         // Tool[] has IsReadOnly == true; must not throw when appending
-        ChatOptionsMapper.Apply(request, options, DefaultModel);
+        ChatOptionsMapper.Apply(request, options);
 
         Assert.NotNull(request.Tools);
         Assert.NotSame(toolArray, request.Tools);
@@ -358,7 +358,7 @@ public sealed class ChatEdgeCaseTests
             Tools = [AIFunctionFactory.Create(() => "res2", "fn_two")]
         };
 
-        ChatOptionsMapper.Apply(request, options, DefaultModel);
+        ChatOptionsMapper.Apply(request, options);
 
         Assert.Equal(["fn_one", "fn_two"], Assert.Single(request.Tools!).FunctionDeclarations!.Select(d => d.Name));
         Assert.Same(readOnlyDecls, existingTool.FunctionDeclarations);
@@ -381,7 +381,7 @@ public sealed class ChatEdgeCaseTests
             Tools = [AIFunctionFactory.Create(() => "res2", "fn_two")]
         };
 
-        ChatOptionsMapper.Apply(request, options, DefaultModel);
+        ChatOptionsMapper.Apply(request, options);
 
         Assert.Equal(["fn_one", "fn_two"], Assert.Single(request.Tools!).FunctionDeclarations!.Select(d => d.Name));
         Assert.Same(declArray, existingTool.FunctionDeclarations);
@@ -396,7 +396,7 @@ public sealed class ChatEdgeCaseTests
         {
             var request = new GenerateContentRequest { Tools = [shared] };
 
-            ChatOptionsMapper.Apply(request, new ChatOptions { Tools = [AIFunctionFactory.Create(() => "res", name)] }, DefaultModel);
+            ChatOptionsMapper.Apply(request, new ChatOptions { Tools = [AIFunctionFactory.Create(() => "res", name)] });
 
             var sent = Assert.Single(request.Tools!);
             Assert.Equal(["fn_shared", name], sent.FunctionDeclarations!.Select(d => d.Name));
@@ -419,7 +419,7 @@ public sealed class ChatEdgeCaseTests
         };
 
         var request = new GenerateContentRequest();
-        ChatOptionsMapper.Apply(request, options, DefaultModel);
+        ChatOptionsMapper.Apply(request, options);
 
         Assert.NotNull(request.Tools);
         Assert.Equal(2, request.Tools.Count);
@@ -440,7 +440,7 @@ public sealed class ChatEdgeCaseTests
         };
 
         var request = new GenerateContentRequest();
-        ChatOptionsMapper.Apply(request, options, DefaultModel);
+        ChatOptionsMapper.Apply(request, options);
 
         Assert.NotNull(request.Tools);
         Assert.Equal(2, request.Tools.Count);
@@ -458,7 +458,7 @@ public sealed class ChatEdgeCaseTests
         };
 
         var request = new GenerateContentRequest();
-        ChatOptionsMapper.Apply(request, options, DefaultModel);
+        ChatOptionsMapper.Apply(request, options);
 
         var declarations = Assert.Single(request.Tools!).FunctionDeclarations!;
         Assert.Equal(["fn_dup", "fn_other"], declarations.Select(d => d.Name));
@@ -474,7 +474,7 @@ public sealed class ChatEdgeCaseTests
             Tools = [AIFunctionFactory.Create(() => "a", "fn_dup"), AIFunctionFactory.Create(() => "b", "fn_dup"), AIFunctionFactory.Create(() => "c", "fn_template")]
         };
 
-        ChatOptionsMapper.Apply(request, options, DefaultModel);
+        ChatOptionsMapper.Apply(request, options);
 
         Assert.Equal(["fn_template", "fn_dup"], Assert.Single(request.Tools!).FunctionDeclarations!.Select(d => d.Name));
     }
@@ -484,7 +484,7 @@ public sealed class ChatEdgeCaseTests
     {
         var options = new ChatOptions { Tools = [AIFunctionFactory.Create(() => "a", "fn_ok"), null!] };
 
-        var ex = Assert.Throws<ArgumentException>(() => ChatOptionsMapper.Apply(new GenerateContentRequest(), options, DefaultModel));
+        var ex = Assert.Throws<ArgumentException>(() => ChatOptionsMapper.Apply(new GenerateContentRequest(), options));
 
         Assert.Equal("options", ex.ParamName);
         Assert.Contains("Tools[1]", ex.Message, StringComparison.Ordinal);
@@ -512,7 +512,7 @@ public sealed class ChatEdgeCaseTests
         ]);
 
         var message = new ChatMessage(ChatRole.User, customContents);
-        var request = ChatRequestMapper.ToRequest([message], options: null, client: null!, DefaultModel, JsonSerializerOptions.Default);
+        var request = ChatRequestMapper.ToRequest([message], options: null, client: null!, JsonSerializerOptions.Default);
 
         Assert.Single(request.Contents);
         var parts = request.Contents[0].Parts;
@@ -534,7 +534,7 @@ public sealed class ChatEdgeCaseTests
         var msg1 = new ChatMessage(ChatRole.User, msg1Contents);
         var msg2 = new ChatMessage(ChatRole.User, msg2Contents);
 
-        var request = ChatRequestMapper.ToRequest([msg1, msg2], options: null, client: null!, DefaultModel, JsonSerializerOptions.Default);
+        var request = ChatRequestMapper.ToRequest([msg1, msg2], options: null, client: null!, JsonSerializerOptions.Default);
 
         // Consecutive User messages should be merged into a single Content object
         Assert.Single(request.Contents);
@@ -554,7 +554,7 @@ public sealed class ChatEdgeCaseTests
             yield return new ChatMessage(ChatRole.User, "User prompt 2");
         }
 
-        var request = ChatRequestMapper.ToRequest(CreateLazyMessages(), options: null, client: null!, DefaultModel, JsonSerializerOptions.Default);
+        var request = ChatRequestMapper.ToRequest(CreateLazyMessages(), options: null, client: null!, JsonSerializerOptions.Default);
 
         Assert.Equal(3, request.Contents.Count);
         Assert.Equal(Role.User, request.Contents[0].Role);
@@ -615,7 +615,6 @@ public sealed class ChatEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -669,7 +668,6 @@ public sealed class ChatEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -724,7 +722,6 @@ public sealed class ChatEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -778,7 +775,6 @@ public sealed class ChatEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -828,7 +824,6 @@ public sealed class ChatEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -878,7 +873,6 @@ public sealed class ChatEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;
@@ -927,7 +921,6 @@ public sealed class ChatEdgeCaseTests
             [assistantMsg],
             options: null,
             client: null!,
-            DefaultModel,
             JsonSerializerOptions.Default);
 
         var replayedCall = request.Contents[0].Parts[0].FunctionCall!;

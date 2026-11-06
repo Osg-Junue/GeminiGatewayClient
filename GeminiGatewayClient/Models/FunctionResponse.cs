@@ -13,7 +13,6 @@ public sealed class FunctionResponse
     /// Optional. Identifier of the corresponding <see cref="FunctionCall.Id"/> when provided by the model.
     /// </summary>
     [JsonPropertyName("id")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Id { get; set; }
 
     /// <summary>
@@ -30,7 +29,6 @@ public sealed class FunctionResponse
     /// Required. Function output structured as a JSON object.
     /// </summary>
     [JsonPropertyName("response")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? Response { get; set; }
 
     /// <summary>

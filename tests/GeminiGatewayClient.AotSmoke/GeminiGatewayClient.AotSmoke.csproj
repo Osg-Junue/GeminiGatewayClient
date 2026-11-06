@@ -13,8 +13,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\GeminiGatewayClient\GeminiGatewayClient.csproj" />
-    <!-- Analyzes the whole library, not only the code this program happens to reach. -->
-    <TrimmerRootAssembly Include="GeminiGatewayClient" />
+    <!-- Analyzes the whole library, not only the code this program happens to reach. CI also publishes with
+         RootLibrary=false, because a real application trims the library and only that shows what it loses at run time. -->
+    <TrimmerRootAssembly Include="GeminiGatewayClient" Condition="'$(RootLibrary)' != 'false'" />
   </ItemGroup>
 
 </Project>

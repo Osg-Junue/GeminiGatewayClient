@@ -11,27 +11,24 @@ namespace GeminiGatewayClient.Chat;
 /// </summary>
 internal static class ChatOptionsMapper
 {
-    public static void Apply(GenerateContentRequest request, ChatOptions options, string? modelId)
+    public static void Apply(GenerateContentRequest request, ChatOptions options)
     {
-        ApplyGenerationConfig(request, options, modelId);
+        if (options.Reasoning is not null)
+        {
+            throw new NotSupportedException("ChatOptions.Reasoning is not supported. Set ThinkingConfig through ChatOptions.RawRepresentationFactory.");
+        }
+
+        ApplyGenerationConfig(request, options);
         ApplyTools(request, options);
         ApplyToolMode(request, options);
     }
 
-    private static void ApplyGenerationConfig(GenerateContentRequest request, ChatOptions options, string? modelId)
+    private static void ApplyGenerationConfig(GenerateContentRequest request, ChatOptions options)
     {
-        if (options.Seed is < int.MinValue or > int.MaxValue)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(options),
-                options.Seed,
-                $"ChatOptions.Seed ({options.Seed}) exceeds the 32-bit signed integer range supported by Gemini GenerationConfig.Seed.");
-        }
-
         if (options is
             {
                 Temperature: null, TopP: null, TopK: null, MaxOutputTokens: null, PresencePenalty: null,
-                FrequencyPenalty: null, Seed: null, ResponseFormat: null, Reasoning: null
+                FrequencyPenalty: null, Seed: null, ResponseFormat: null
             } &&
             options.StopSequences is not { Count: > 0 })
         {
@@ -45,18 +42,13 @@ internal static class ChatOptionsMapper
         config.MaxOutputTokens ??= options.MaxOutputTokens;
         config.PresencePenalty ??= options.PresencePenalty;
         config.FrequencyPenalty ??= options.FrequencyPenalty;
-        config.Seed ??= (int?)options.Seed;
+        config.Seed ??= checked((int?)options.Seed);
         if (options.StopSequences is { Count: > 0 } stopSequences)
         {
             config.StopSequences ??= [.. stopSequences];
         }
 
         ApplyResponseFormat(config, options.ResponseFormat);
-
-        if (options.Reasoning is { } reasoning)
-        {
-            ApplyReasoning(config, reasoning, modelId);
-        }
     }
 
     private static void ApplyResponseFormat(GenerationConfig config, ChatResponseFormat? format)
@@ -81,28 +73,6 @@ internal static class ChatOptionsMapper
             case ChatResponseFormatText:
                 config.ResponseMimeType = MimeTypes.TextPlain;
                 break;
-        }
-    }
-
-    private static void ApplyReasoning(GenerationConfig config, ReasoningOptions reasoning, string? modelId)
-    {
-        var thinking = config.ThinkingConfig ?? new ThinkingConfig();
-
-        if (thinking is { ThinkingLevel: null, ThinkingBudget: null } && reasoning.Effort is { } effort)
-        {
-            ReasoningEffortMapper.Apply(thinking, effort, modelId);
-        }
-
-        thinking.IncludeThoughts ??= reasoning.Output switch
-        {
-            ReasoningOutput.None => false,
-            ReasoningOutput.Summary or ReasoningOutput.Full => true,
-            _ => null
-        };
-
-        if (thinking is not { ThinkingLevel: null, ThinkingBudget: null, IncludeThoughts: null, ExtensionData: null })
-        {
-            config.ThinkingConfig = thinking;
         }
     }
 
@@ -179,33 +149,29 @@ internal static class ChatOptionsMapper
         Name = function.Name,
         Description = string.IsNullOrEmpty(function.Description) ? null : function.Description,
         ParametersJsonSchema = ToParametersSchema(function.JsonSchema),
-        ResponseJsonSchema = function.ReturnJsonSchema is { ValueKind: JsonValueKind.Object } schema && schema.EnumerateObject().Any() ? schema : null
+        ResponseJsonSchema = ToSchema(function.ReturnJsonSchema)
     };
 
     /// <summary>
-    /// Returns the JSON schema of a function's parameters, or <c>null</c> for parameterless functions.
+    /// A schema with empty <c>properties</c> describes a parameterless function, and Gemini has rejected one with HTTP 400.
     /// </summary>
-    private static JsonElement? ToParametersSchema(JsonElement schema)
-    {
-        if (schema.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
+    private static JsonElement? ToParametersSchema(JsonElement schema) =>
+        schema.ValueKind == JsonValueKind.Object &&
+        schema.TryGetProperty("properties", out var properties) &&
+        properties.ValueKind == JsonValueKind.Object &&
+        !properties.EnumerateObject().Any()
+            ? null
+            : ToSchema(schema);
 
-        if (schema.TryGetProperty("properties", out var properties))
-        {
-            return properties.ValueKind == JsonValueKind.Object && properties.EnumerateObject().Any() ? schema : null;
-        }
-
-        // Non-trivial schema without top-level "properties" (for example $ref / anyOf / oneOf).
-        return schema.TryGetProperty("$ref", out _) || schema.TryGetProperty("anyOf", out _) || schema.TryGetProperty("oneOf", out _)
-            ? schema
-            : null;
-    }
+    /// <summary>
+    /// Any object schema goes as it is, except the empty one that stands for "not specified".
+    /// </summary>
+    private static JsonElement? ToSchema(JsonElement? schema) =>
+        schema is { ValueKind: JsonValueKind.Object } element && element.EnumerateObject().Any() ? element : null;
 
     private static void ApplyToolMode(GenerateContentRequest request, ChatOptions options)
     {
-        if (request.ToolConfig is not null)
+        if (request.ToolConfig?.FunctionCallingConfig is not null)
         {
             return;
         }
@@ -224,7 +190,7 @@ internal static class ChatOptionsMapper
 
         if (callingConfig is not null)
         {
-            request.ToolConfig = new ToolConfig { FunctionCallingConfig = callingConfig };
+            (request.ToolConfig ??= new ToolConfig()).FunctionCallingConfig = callingConfig;
         }
     }
 }

@@ -21,7 +21,6 @@ public sealed class FunctionCallingConfig
     /// Only applicable when <see cref="Mode"/> is <see cref="FunctionCallingMode.Any"/> or <see cref="FunctionCallingMode.Validated"/>.
     /// </summary>
     [JsonPropertyName("allowedFunctionNames")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IList<string>? AllowedFunctionNames { get; set; }
 
     /// <summary>

@@ -130,7 +130,8 @@ internal static class ChatResponseMapper
                 contents.Add(ToFunctionCallContent(part, call));
                 break;
 
-            case { Thought: true }:
+            // A thought with data of its own, even data this client does not model, is handled below.
+            case { Thought: true, HasNonTextData: false } when part is not { Text: null, ExtensionData.Count: > 0 }:
                 if (!string.IsNullOrEmpty(part.Text) || !string.IsNullOrEmpty(part.ThoughtSignature))
                 {
                     contents.Add(ToReasoningContent(part));
@@ -168,9 +169,8 @@ internal static class ChatResponseMapper
                 contents.Add(WithSignature(ToCodeExecutionContent(part), part));
                 break;
 
-            // Part kinds without a chat mapping (for example toolCall) still have to reach the next turn,
-            // unless the part could not be resent, which would break every later turn of the conversation.
-            case { ExtensionData.Count: > 0 } when part.GetValidationError() is null:
+            // Part kinds without a chat mapping (for example toolCall) still have to reach the next turn.
+            case { ExtensionData.Count: > 0 }:
                 contents.Add(new AIContent { RawRepresentation = part });
                 break;
         }
@@ -203,7 +203,7 @@ internal static class ChatResponseMapper
     private static FunctionCallContent ToFunctionCallContent(Part part, FunctionCall call)
     {
         var synthesized = string.IsNullOrEmpty(call.Id);
-        var callId = synthesized ? SynthesizedCallId.Create(call.Name) : call.Id!;
+        var callId = synthesized ? $"call_{Guid.NewGuid():N}" : call.Id!;
         var content = new FunctionCallContent(callId, call.Name, ToolJsonConverter.ToDictionary(call.Args)) { RawRepresentation = part };
         if (synthesized)
         {

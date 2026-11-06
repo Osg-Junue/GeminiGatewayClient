@@ -14,7 +14,6 @@ public sealed class GenerateContentRequest
     /// Format: <c>cachedContents/{cachedContent}</c> or <c>projects/{project}/locations/{location}/cachedContents/{cachedContent}</c>.
     /// </summary>
     [JsonPropertyName("cachedContent")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CachedContent { get; set; }
 
     /// <summary>
@@ -29,14 +28,12 @@ public sealed class GenerateContentRequest
     /// <see cref="Content.Role"/> is ignored by the API.
     /// </summary>
     [JsonPropertyName("systemInstruction")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Content? SystemInstruction { get; set; }
 
     /// <summary>
     /// Optional. Configuration parameters that control generation behavior (temperature, token limits, structured output, etc.).
     /// </summary>
     [JsonPropertyName("generationConfig")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public GenerationConfig? GenerationConfig { get; set; }
 
     /// <summary>
@@ -44,28 +41,24 @@ public sealed class GenerateContentRequest
     /// See <see href="https://ai.google.dev/gemini-api/docs/function-calling"/>.
     /// </summary>
     [JsonPropertyName("tools")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IList<Tool>? Tools { get; set; }
 
     /// <summary>
     /// Optional. Configuration controlling how the model uses declared <see cref="Tools"/>.
     /// </summary>
     [JsonPropertyName("toolConfig")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ToolConfig? ToolConfig { get; set; }
 
     /// <summary>
     /// Optional. Per-category safety blocking thresholds applied to responses.
     /// </summary>
     [JsonPropertyName("safetySettings")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IList<SafetySetting>? SafetySettings { get; set; }
 
     /// <summary>
     /// Optional. Controls whether the request and response are stored by the service when conversation logging is supported.
     /// </summary>
     [JsonPropertyName("store")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Store { get; set; }
 
     /// <summary>
@@ -73,7 +66,6 @@ public sealed class GenerateContentRequest
     /// User-defined key/value metadata labels for billing and filtering on Vertex AI endpoints.
     /// </summary>
     [JsonPropertyName("labels")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IDictionary<string, string>? Labels { get; set; }
 
     /// <summary>
@@ -100,97 +92,5 @@ public sealed class GenerateContentRequest
             SystemInstruction = string.IsNullOrEmpty(systemInstruction) ? null : new Content { Parts = [Part.FromText(systemInstruction)] },
             GenerationConfig = generationConfig
         };
-    }
-
-    /// <summary>
-    /// Validates client-side invariants that the API would otherwise reject with HTTP 400.
-    /// </summary>
-    /// <param name="paramName">The parameter name to report in thrown <see cref="ArgumentException"/> instances.</param>
-    /// <exception cref="ArgumentException">The request is invalid.</exception>
-    internal void Validate(string paramName = "request")
-    {
-        var contents = Contents;
-        if (contents is null || contents.Count == 0)
-        {
-            throw new ArgumentException("GenerateContentRequest.Contents must contain at least one Content item.", paramName);
-        }
-
-        for (var i = 0; i < contents.Count; i++)
-        {
-            var content = contents[i];
-            if (content is null)
-            {
-                throw new ArgumentException($"GenerateContentRequest.Contents[{i}] cannot be null.", paramName);
-            }
-
-            if (content.GetValidationError() is { } error)
-            {
-                throw new ArgumentException($"GenerateContentRequest.Contents[{i}]{error}", paramName);
-            }
-        }
-
-        if (SystemInstruction?.GetValidationError() is { } systemError)
-        {
-            throw new ArgumentException($"GenerateContentRequest.SystemInstruction{systemError}", paramName);
-        }
-
-        GenerationConfig?.Validate(paramName);
-        ToolConfig?.Validate(paramName);
-
-        if (SafetySettings is not null)
-        {
-            for (var i = 0; i < SafetySettings.Count; i++)
-            {
-                var setting = SafetySettings[i];
-                if (setting is null)
-                {
-                    throw new ArgumentException($"GenerateContentRequest.SafetySettings[{i}] cannot be null.", paramName);
-                }
-
-                if (setting.Category == HarmCategory.Unknown)
-                {
-                    throw new ArgumentException($"GenerateContentRequest.SafetySettings[{i}].Category cannot be HarmCategory.Unknown.", paramName);
-                }
-
-                if (setting.Threshold == HarmBlockThreshold.Unknown)
-                {
-                    throw new ArgumentException($"GenerateContentRequest.SafetySettings[{i}].Threshold cannot be HarmBlockThreshold.Unknown.", paramName);
-                }
-
-                if (setting.Method == HarmBlockMethod.Unknown)
-                {
-                    throw new ArgumentException($"GenerateContentRequest.SafetySettings[{i}].Method cannot be HarmBlockMethod.Unknown.", paramName);
-                }
-            }
-        }
-
-        if (Tools is null)
-        {
-            return;
-        }
-
-        for (var i = 0; i < Tools.Count; i++)
-        {
-            var tool = Tools[i];
-            if (tool is null)
-            {
-                throw new ArgumentException($"GenerateContentRequest.Tools[{i}] cannot be null.", paramName);
-            }
-
-            if (tool.FunctionDeclarations is null)
-            {
-                continue;
-            }
-
-            foreach (var declaration in tool.FunctionDeclarations)
-            {
-                if (declaration is null)
-                {
-                    throw new ArgumentException("Tool.FunctionDeclarations cannot contain null elements.", paramName);
-                }
-
-                declaration.Validate(paramName);
-            }
-        }
     }
 }

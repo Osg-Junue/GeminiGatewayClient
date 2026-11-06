@@ -1,7 +1,7 @@
 namespace GeminiGatewayClient;
 
 /// <summary>
-/// Keys used in <c>AdditionalProperties</c> dictionaries by <see cref="GeminiChatClient"/>.
+/// Keys used in <c>AdditionalProperties</c> dictionaries by the <c>IChatClient</c> adapter.
 /// </summary>
 public static class GeminiChatPropertyNames
 {

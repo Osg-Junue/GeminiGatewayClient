@@ -40,7 +40,7 @@ public sealed class GeminiApiException : Exception
     /// </summary>
     /// <param name="message">High-level error description.</param>
     /// <param name="statusCode">HTTP status code returned by the endpoint or gateway.</param>
-    /// <param name="errorContent">Raw response body returned by the server (truncated to 64 KB), if available.</param>
+    /// <param name="errorContent">Raw response body returned by the server (truncated to 64 KB; <c>null</c> on a stream when it is longer), if available.</param>
     /// <param name="innerException">Underlying exception, if any.</param>
     public GeminiApiException(
         string message,
@@ -56,7 +56,7 @@ public sealed class GeminiApiException : Exception
     /// </summary>
     /// <param name="message">High-level error description.</param>
     /// <param name="statusCode">HTTP status code returned by the endpoint or gateway.</param>
-    /// <param name="errorContent">Raw response body returned by the server (truncated to 64 KB), if available.</param>
+    /// <param name="errorContent">Raw response body returned by the server (truncated to 64 KB; <c>null</c> on a stream when it is longer), if available.</param>
     /// <param name="errorStatus">Canonical Google RPC status string (e.g. <c>RESOURCE_EXHAUSTED</c>, <c>INVALID_ARGUMENT</c>), if present.</param>
     /// <param name="errorMessage">Parsed <c>error.message</c> from the JSON error payload, if present.</param>
     /// <param name="retryAfter">Suggested retry delay parsed from <c>RetryInfo.retryDelay</c> or the HTTP <c>Retry-After</c> header, if present.</param>
@@ -110,29 +110,6 @@ public sealed class GeminiApiException : Exception
     /// Recommended delay before retrying the request, extracted from <c>google.rpc.RetryInfo</c> or the HTTP <c>Retry-After</c> header when available.
     /// </summary>
     public TimeSpan? RetryAfter { get; }
-
-    /// <summary>
-    /// <c>true</c> when the failure is typically transient and the request may succeed if retried
-    /// (HTTP 408, 429, 500, 502, 503, or 504, or a transient Google RPC status such as <c>RESOURCE_EXHAUSTED</c>,
-    /// <c>UNAVAILABLE</c>, <c>DEADLINE_EXCEEDED</c>, or <c>INTERNAL</c>), unless the RPC status says the request itself is
-    /// at fault, such as <c>INVALID_ARGUMENT</c>. Honor <see cref="RetryAfter"/> when present.
-    /// </summary>
-    public bool IsTransient =>
-        !IsPermanentRpcStatus(ErrorStatus) &&
-        (StatusCode is HttpStatusCode.RequestTimeout
-            or HttpStatusCode.TooManyRequests
-            or HttpStatusCode.InternalServerError
-            or HttpStatusCode.BadGateway
-            or HttpStatusCode.ServiceUnavailable
-            or HttpStatusCode.GatewayTimeout
-         || IsTransientRpcStatus(ErrorStatus));
-
-    private static bool IsTransientRpcStatus(string? status) =>
-        status?.ToUpperInvariant() is "RESOURCE_EXHAUSTED" or "UNAVAILABLE" or "DEADLINE_EXCEEDED" or "INTERNAL";
-
-    private static bool IsPermanentRpcStatus(string? status) =>
-        status?.ToUpperInvariant() is "INVALID_ARGUMENT" or "FAILED_PRECONDITION" or "OUT_OF_RANGE" or "NOT_FOUND"
-            or "ALREADY_EXISTS" or "PERMISSION_DENIED" or "UNAUTHENTICATED" or "UNIMPLEMENTED";
 
     private static string FormatExceptionMessage(
         string message,

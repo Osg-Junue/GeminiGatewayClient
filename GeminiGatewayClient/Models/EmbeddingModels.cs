@@ -16,7 +16,6 @@ public sealed class EmbedContentRequest
     /// Resource name of the model (<c>models/{model}</c>).
     /// </summary>
     [JsonPropertyName("model")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Model { get; set; }
 
     /// <summary>
@@ -29,21 +28,18 @@ public sealed class EmbedContentRequest
     /// Optional. Downstream task type for which the embedding will be used.
     /// </summary>
     [JsonPropertyName("taskType")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TaskType? TaskType { get; set; }
 
     /// <summary>
     /// Optional. Title for the text. Only applicable when <see cref="TaskType"/> is <see cref="Models.TaskType.RetrievalDocument"/>.
     /// </summary>
     [JsonPropertyName("title")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Title { get; set; }
 
     /// <summary>
     /// Optional. Reduced dimension for the output embedding. When set, must be a positive integer supported by the model.
     /// </summary>
     [JsonPropertyName("outputDimensionality")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? OutputDimensionality { get; set; }
 
     /// <summary>
@@ -84,47 +80,6 @@ public sealed class EmbedContentRequest
         copy.Model = model;
         return copy;
     }
-
-    internal void Validate(string paramName = "request", int? batchIndex = null)
-    {
-        if (GetValidationError() is { } error)
-        {
-            throw new ArgumentException($"{FormatPath(batchIndex)}{error}", paramName);
-        }
-
-        if (OutputDimensionality is <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                paramName,
-                OutputDimensionality,
-                $"{FormatPath(batchIndex)}.OutputDimensionality must be greater than zero.");
-        }
-    }
-
-    private string? GetValidationError()
-    {
-        if (Content is null)
-        {
-            return ".Content cannot be null.";
-        }
-
-        if (Content.GetValidationError() is { } contentError)
-        {
-            return $".Content{contentError}";
-        }
-
-        if (TaskType == Models.TaskType.Unknown)
-        {
-            return ".TaskType cannot be TaskType.Unknown.";
-        }
-
-        return !string.IsNullOrEmpty(Title) && TaskType is not null and not Models.TaskType.RetrievalDocument
-            ? ".Title can only be specified when TaskType is TaskType.RetrievalDocument."
-            : null;
-    }
-
-    private static string FormatPath(int? batchIndex) =>
-        batchIndex is { } index ? $"BatchEmbedContentsRequest.Requests[{index}]" : "EmbedContentRequest";
 }
 
 /// <summary>
@@ -144,25 +99,6 @@ public sealed class BatchEmbedContentsRequest
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    internal void Validate(string paramName = "request")
-    {
-        if (Requests is null || Requests.Count == 0)
-        {
-            throw new ArgumentException("BatchEmbedContentsRequest.Requests must contain at least one EmbedContentRequest item.", paramName);
-        }
-
-        for (var i = 0; i < Requests.Count; i++)
-        {
-            var item = Requests[i];
-            if (item is null)
-            {
-                throw new ArgumentException($"BatchEmbedContentsRequest.Requests[{i}] cannot be null.", paramName);
-            }
-
-            item.Validate(paramName, i);
-        }
-    }
 }
 
 /// <summary>

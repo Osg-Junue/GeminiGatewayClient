@@ -26,7 +26,6 @@ public sealed class SafetySetting
     /// Optional. Method used to evaluate the threshold (probability or severity, where supported).
     /// </summary>
     [JsonPropertyName("method")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public HarmBlockMethod? Method { get; set; }
 
     /// <summary>

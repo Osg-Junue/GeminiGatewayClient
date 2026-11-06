@@ -13,7 +13,7 @@ namespace GeminiGatewayClient;
 /// This type does not own the underlying <see cref="IGeminiClient"/>; disposing it is a no-op.
 /// </para>
 /// </summary>
-public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embedding<float>>
+internal sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embedding<float>>
 {
     private readonly IGeminiClient _client;
     private readonly EmbeddingGeneratorMetadata _metadata;
@@ -29,17 +29,9 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
     /// Optional default output dimensionality used when <see cref="EmbeddingGenerationOptions.Dimensions"/> is not set.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="defaultModelDimensions"/> is less than or equal to zero.</exception>
     public GeminiEmbeddingGenerator(IGeminiClient client, string? defaultModelId = null, int? defaultModelDimensions = null)
     {
         ArgumentNullException.ThrowIfNull(client);
-        if (defaultModelDimensions is <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(defaultModelDimensions),
-                defaultModelDimensions,
-                "defaultModelDimensions must be greater than zero.");
-        }
 
         _client = client;
         _metadata = new EmbeddingGeneratorMetadata(
@@ -58,16 +50,6 @@ public sealed class GeminiEmbeddingGenerator : IEmbeddingGenerator<string, Embed
         ArgumentNullException.ThrowIfNull(values);
 
         var inputs = values.ToList();
-        if (inputs.Count == 0)
-        {
-            throw new ArgumentException("values must contain at least one element.", nameof(values));
-        }
-
-        if (inputs.IndexOf(null!) is >= 0 and var nullIndex)
-        {
-            throw new ArgumentException($"values[{nullIndex}] cannot be null.", nameof(values));
-        }
-
         var template = options?.RawRepresentationFactory?.Invoke(this) as EmbedContentRequest;
         var dimensions = options?.Dimensions ?? template?.OutputDimensionality ?? _metadata.DefaultModelDimensions;
         var model = new[] { options?.ModelId, template?.Model, _metadata.DefaultModelId }.FirstOrDefault(id => !string.IsNullOrWhiteSpace(id))?.Trim();

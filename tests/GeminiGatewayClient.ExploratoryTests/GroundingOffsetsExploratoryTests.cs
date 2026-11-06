@@ -36,8 +36,9 @@ public sealed class GroundingOffsetsExploratoryTests(ExploratoryTestFixture fixt
 
         var response = await client.AsIChatClient().GetResponseAsync(Prompt, SearchOptions());
 
-        LogGrounding("response", Assert.IsType<GenerateContentResponse>(response.RawRepresentation));
-        AssertRegions(response.Messages.SelectMany(m => m.Contents).OfType<TextContent>().Select(t => (t.Text, (AIContent)t)));
+        var raw = Assert.IsType<GenerateContentResponse>(response.RawRepresentation);
+        LogGrounding("response", raw);
+        AssertRegions(response.Messages.SelectMany(m => m.Contents).OfType<TextContent>().Select(t => (t.Text, (AIContent)t)), [raw]);
     }
 
     [ExploratoryFact]
@@ -57,7 +58,8 @@ public sealed class GroundingOffsetsExploratoryTests(ExploratoryTestFixture fixt
         }
 
         var fullText = string.Concat(updates.SelectMany(u => u.Contents).OfType<TextContent>().Select(t => t.Text));
-        AssertRegions(updates.SelectMany(u => u.Contents).Where(c => c.Annotations is { Count: > 0 }).Select(c => (fullText, c)));
+        var chunks = updates.Select(u => u.RawRepresentation).OfType<GenerateContentResponse>();
+        AssertRegions(updates.SelectMany(u => u.Contents).Where(c => c.Annotations is { Count: > 0 }).Select(c => (fullText, c)), chunks);
     }
 
     [ExploratoryFact]
@@ -71,8 +73,12 @@ public sealed class GroundingOffsetsExploratoryTests(ExploratoryTestFixture fixt
         Assert.False(string.IsNullOrEmpty(response.Text));
     }
 
-    private void AssertRegions(IEnumerable<(string Text, AIContent Content)> targets)
+    private void AssertRegions(IEnumerable<(string Text, AIContent Content)> targets, IEnumerable<GenerateContentResponse> responses)
     {
+        var segments = responses
+            .SelectMany(r => r.Candidates.FirstOrDefault()?.GroundingMetadata?.GroundingSupports ?? [])
+            .Select(s => s.Segment?.Text)
+            .ToHashSet();
         var checkedRegions = 0;
         var mismatches = 0;
         foreach (var (text, content) in targets)
@@ -84,12 +90,13 @@ public sealed class GroundingOffsetsExploratoryTests(ExploratoryTestFixture fixt
                     var slice = text[region.StartIndex!.Value..region.EndIndex!.Value];
                     Output.WriteLine($"  region {region.StartIndex}..{region.EndIndex}: '{slice}'");
                     checkedRegions++;
-                    mismatches += string.IsNullOrWhiteSpace(slice) ? 1 : 0;
+                    mismatches += segments.Contains(slice) ? 0 : 1;
                 }
             }
         }
 
-        Output.WriteLine($"checked {checkedRegions} regions, {mismatches} empty");
+        Output.WriteLine($"checked {checkedRegions} regions, {mismatches} differ from every segment");
+        Assert.True(checkedRegions > 0, "The response carried no regions.");
         Assert.Equal(0, mismatches);
     }
 }

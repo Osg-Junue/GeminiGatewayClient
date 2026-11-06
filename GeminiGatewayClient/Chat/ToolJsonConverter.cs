@@ -127,7 +127,7 @@ internal static class ToolJsonConverter
                 break;
 
             // A read-only dictionary of value types cannot be walked without reflection, but its own metadata can write it.
-            case not null when TrySerializeDictionary(writer, value, options):
+            case not null when TrySerialize(writer, value, options, dictionaryOnly: true):
                 break;
 
             case IEnumerable sequence:
@@ -147,30 +147,22 @@ internal static class ToolJsonConverter
         }
     }
 
-    private static bool TrySerialize(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
+    private static bool TrySerialize(Utf8JsonWriter writer, object value, JsonSerializerOptions options, bool dictionaryOnly = false)
     {
-        if (options.TypeInfoResolver is null ||
-            !options.TryGetTypeInfo(value.GetType(), out var typeInfo) ||
-            (typeInfo.Kind is JsonTypeInfoKind.Enumerable or JsonTypeInfoKind.Dictionary && options.ReferenceHandler is null))
+        if (options.TypeInfoResolver is null || !options.TryGetTypeInfo(value.GetType(), out var typeInfo))
         {
             return false;
         }
 
-        JsonSerializer.Serialize(writer, value, typeInfo);
-        return true;
-    }
-
-    private static bool TrySerializeDictionary(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
-    {
-        if (options.TypeInfoResolver is null ||
-            !options.TryGetTypeInfo(value.GetType(), out var typeInfo) ||
-            typeInfo.Kind != JsonTypeInfoKind.Dictionary)
+        var accepted = dictionaryOnly
+            ? typeInfo.Kind == JsonTypeInfoKind.Dictionary
+            : typeInfo.Kind is not (JsonTypeInfoKind.Enumerable or JsonTypeInfoKind.Dictionary) || options.ReferenceHandler is not null;
+        if (accepted)
         {
-            return false;
+            JsonSerializer.Serialize(writer, value, typeInfo);
         }
 
-        JsonSerializer.Serialize(writer, value, typeInfo);
-        return true;
+        return accepted;
     }
 }
 

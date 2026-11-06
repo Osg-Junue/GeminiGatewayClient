@@ -8,14 +8,14 @@ namespace GeminiGatewayClient;
 
 /// <summary>
 /// <c>Microsoft.Extensions.AI</c> <see cref="IChatClient"/> implementation backed by an <see cref="IGeminiClient"/>.
-/// Supports multi-turn chat, streaming, tool calling (<c>FunctionInvokingChatClient</c>), structured output,
-/// per-request model overrides (<see cref="ChatOptions.ModelId"/>), and reasoning options (<see cref="ChatOptions.Reasoning"/>).
+/// Supports multi-turn chat, streaming, tool calling (<c>FunctionInvokingChatClient</c>), structured output, and
+/// per-request model overrides (<see cref="ChatOptions.ModelId"/>).
 /// <para>
 /// Create instances with <see cref="GeminiClientExtensions.AsIChatClient(IGeminiClient, string?, JsonSerializerOptions?)"/>.
 /// This type does not own the underlying <see cref="IGeminiClient"/>; disposing it is a no-op.
 /// </para>
 /// </summary>
-public sealed class GeminiChatClient : IChatClient
+internal sealed class GeminiChatClient : IChatClient
 {
     private readonly IGeminiClient _client;
     private readonly JsonSerializerOptions _toolSerializerOptions;
@@ -27,8 +27,7 @@ public sealed class GeminiChatClient : IChatClient
     /// <param name="client">The underlying Gemini client.</param>
     /// <param name="defaultModelId">The model used when <see cref="ChatOptions.ModelId"/> is not set; defaults to <see cref="IGeminiClient.DefaultModel"/>.</param>
     /// <param name="toolSerializerOptions">
-    /// Serializer options for function arguments and results; defaults to <see cref="IGeminiClient.ToolSerializerOptions"/>,
-    /// then <see cref="AIJsonUtilities.DefaultOptions"/>.
+    /// Serializer options for function arguments and results; defaults to <see cref="AIJsonUtilities.DefaultOptions"/>.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="client"/> is <c>null</c>.</exception>
     public GeminiChatClient(IGeminiClient client, string? defaultModelId = null, JsonSerializerOptions? toolSerializerOptions = null)
@@ -36,9 +35,7 @@ public sealed class GeminiChatClient : IChatClient
         ArgumentNullException.ThrowIfNull(client);
 
         _client = client;
-        _toolSerializerOptions = toolSerializerOptions
-            ?? client.ToolSerializerOptions
-            ?? AIJsonUtilities.DefaultOptions;
+        _toolSerializerOptions = toolSerializerOptions ?? AIJsonUtilities.DefaultOptions;
         _metadata = new ChatClientMetadata("gemini", client.Endpoint, string.IsNullOrWhiteSpace(defaultModelId) ? client.DefaultModel : defaultModelId);
     }
 
@@ -51,7 +48,7 @@ public sealed class GeminiChatClient : IChatClient
         ArgumentNullException.ThrowIfNull(messages);
 
         var model = ResolveModel(options);
-        var request = ChatRequestMapper.ToRequest(messages, options, this, model, _toolSerializerOptions);
+        var request = ChatRequestMapper.ToRequest(messages, options, this, _toolSerializerOptions);
         var response = await _client.GenerateContentAsync(request, model, cancellationToken).ConfigureAwait(false);
         return ChatResponseMapper.ToChatResponse(response, model);
     }
@@ -70,7 +67,7 @@ public sealed class GeminiChatClient : IChatClient
 
         // Map and validate eagerly so argument/option errors surface at call time rather than on first enumeration.
         var model = ResolveModel(options);
-        var request = ChatRequestMapper.ToRequest(messages, options, this, model, _toolSerializerOptions);
+        var request = ChatRequestMapper.ToRequest(messages, options, this, _toolSerializerOptions);
         var chunks = _client.StreamGenerateContentAsync(request, model, cancellationToken);
         return StreamCoreAsync(chunks, model);
     }

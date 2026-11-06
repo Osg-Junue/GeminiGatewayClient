@@ -13,7 +13,6 @@ public sealed class ToolConfig
     /// Optional. Configuration for function calling behavior.
     /// </summary>
     [JsonPropertyName("functionCallingConfig")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public FunctionCallingConfig? FunctionCallingConfig { get; set; }
 
     /// <summary>
@@ -21,12 +20,4 @@ public sealed class ToolConfig
     /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    internal void Validate(string paramName = "request")
-    {
-        if (FunctionCallingConfig is { } fcc && (fcc.Mode == FunctionCallingMode.Unknown || !Enum.IsDefined(fcc.Mode)))
-        {
-            throw new ArgumentException("FunctionCallingConfig.Mode cannot be FunctionCallingMode.Unknown.", paramName);
-        }
-    }
 }

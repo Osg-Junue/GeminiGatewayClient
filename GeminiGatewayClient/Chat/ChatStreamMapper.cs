@@ -48,7 +48,9 @@ internal sealed class ChatStreamMapper(string? modelId)
             ResponseId = chunk.ResponseId,
             MessageId = chunk.ResponseId,
             ModelId = chunk.ModelVersion ?? candidate?.ModelVersion ?? modelId,
-            FinishReason = ChatResponseMapper.ToFinishReason(candidate?.FinishReason, chunk.BlockReason, _sawFunctionCall),
+            FinishReason = candidate?.FinishReason is null && chunk.BlockReason is null
+                ? null
+                : ChatResponseMapper.ToFinishReason(candidate?.FinishReason, chunk.BlockReason, _sawFunctionCall),
             AdditionalProperties = ChatResponseMapper.ToResponseProperties(chunk.BlockReason, candidate?.GroundingMetadata)
         };
     }

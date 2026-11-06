@@ -1,4 +1,6 @@
 using System.Net;
+using GeminiGatewayClient.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace GeminiGatewayClient.Tests;
@@ -87,73 +89,62 @@ public class GatewayCredentialTests
         Assert.Equal("a", Header(request, "x-tenant"));
     }
 
-    [Theory]
-    [InlineData("鍵")]
-    [InlineData("café")]
-    [InlineData("line\nbreak")]
-    public void NonAsciiKey_FailsWhenTheClientIsCreated(string key)
-    {
-        var ex = Assert.Throws<ArgumentException>(() => new GeminiClient(new GeminiClientOptions { ApiKey = key, Model = "gemini-2.5-flash" }));
-
-        Assert.Equal(nameof(GeminiClientOptions.ApiKey), ex.ParamName);
-        Assert.DoesNotContain(key, ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void InvalidKeyHeaderName_IsReportedOnApiKeyHeader()
-    {
-        var ex = Assert.Throws<ArgumentException>(() =>
-            new GeminiClient(new GeminiClientOptions { ApiKey = "k", ApiKeyHeader = "bad header", Model = "gemini-2.5-flash" }));
-
-        Assert.Equal(nameof(GeminiClientOptions.ApiKeyHeader), ex.ParamName);
-    }
-
-    [Fact]
-    public void NonAsciiKeyHeaderName_IsReportedOnApiKeyHeader()
-    {
-        var ex = Assert.Throws<ArgumentException>(() =>
-            new GeminiClient(new GeminiClientOptions { ApiKey = "k", ApiKeyHeader = "x-鍵", Model = "gemini-2.5-flash" }));
-
-        Assert.Equal(nameof(GeminiClientOptions.ApiKeyHeader), ex.ParamName);
-    }
+    public static TheoryData<string> Operations => ["generate", "stream", "embed", "batch", "chat", "chat stream", "embedding generator"];
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void NonAsciiKeyPrefix_IsReportedOnApiKeyPrefix(bool useProvider)
+    [MemberData(nameof(Operations))]
+    public async Task EveryOperation_SendsTheKeyInTheConfiguredHeader(string operation)
     {
-        var options = new GeminiClientOptions { ApiKeyPrefix = "Bearér ", Model = "gemini-2.5-flash" };
-        if (useProvider)
+        using var handler = new RecordingHandler("""{"candidates":[],"embedding":{"values":[1]},"embeddings":[{"values":[1]}]}""");
+        using var client = new GeminiClient(
+            new GeminiClientOptions
+            {
+                ApiKeyHeader = "x-gateway-key",
+                ApiKeyPrefix = "Bearer ",
+                ApiKeyProvider = _ => ValueTask.FromResult("rotated"),
+                Model = "gemini-2.5-flash"
+            },
+            new HttpClient(handler));
+
+        switch (operation)
         {
-            options.ApiKeyProvider = _ => ValueTask.FromResult("k");
-        }
-        else
-        {
-            options.ApiKey = "k";
+            case "generate":
+                await client.GenerateContentAsync("hi");
+                break;
+            case "stream":
+                await foreach (var _ in client.StreamGenerateContentAsync("hi"))
+                {
+                }
+
+                break;
+            case "embed":
+                await client.EmbedContentAsync("hi");
+                break;
+            case "batch":
+                await client.BatchEmbedContentsAsync(new BatchEmbedContentsRequest { Requests = [EmbedContentRequest.FromText("hi")] });
+                break;
+            case "chat":
+                await client.AsIChatClient().GetResponseAsync("hi");
+                break;
+            case "chat stream":
+                await client.AsIChatClient().GetStreamingResponseAsync("hi").ToChatResponseAsync();
+                break;
+            default:
+                await client.AsIEmbeddingGenerator().GenerateAsync(["hi"]);
+                break;
         }
 
-        var ex = Assert.Throws<ArgumentException>(() => new GeminiClient(options));
-
-        Assert.Equal(nameof(GeminiClientOptions.ApiKeyPrefix), ex.ParamName);
+        Assert.Equal("Bearer rotated", Header(handler.LastRequest!, "x-gateway-key"));
+        Assert.Null(Header(handler.LastRequest!, GeminiClientOptions.DefaultApiKeyHeader));
     }
 
     [Fact]
-    public async Task NonAsciiKeyFromProvider_FailsBeforeAnythingIsSent()
-    {
-        var options = new GeminiClientOptions { Model = "gemini-2.5-flash", ApiKeyProvider = _ => ValueTask.FromResult("鍵") };
-        using var handler = new RecordingHandler(OkResponse);
-        using var client = new GeminiClient(options, new HttpClient(handler));
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GenerateContentAsync("hi"));
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
-    public void DefaultHandler_DoesNotFollowRedirects()
+    public void DefaultHandler_DoesNotFollowRedirectsOrKeepCookies()
     {
         using var handler = GeminiClient.CreateDefaultHandler();
 
         Assert.False(handler.AllowAutoRedirect);
+        Assert.False(handler.UseCookies);
     }
 
     [Fact]
