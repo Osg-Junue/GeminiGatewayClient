@@ -13,7 +13,7 @@ sequenceDiagram
     Gemini-->>App: Final text, or more functionCall parts
 ```
 
-There are two ways to do this.
+There are two ways to do this, and with `IChatClient` you can also [run the loop yourself](#running-the-loop-yourself).
 
 | | [`GeminiClient`](#building-function-calls-with-geminiclient) | [`IChatClient`](#automatic-function-calling-with-ichatclient) |
 |---|---|---|
@@ -33,7 +33,7 @@ A `FunctionDeclaration` tells the model what it can call. `Name` is required, an
 | `Description` | What it does and when to use it |
 | `ParametersJsonSchema` | Parameters as standard JSON Schema (`JsonElement`) |
 | `Parameters` | Parameters as a typed `Schema`. Do not set it together with `ParametersJsonSchema` |
-| `ResponseJsonSchema`, `Response` | Optional shape of the result |
+| `ResponseJsonSchema`, `Response` | Optional shape of the result. Do not set them together |
 
 **With JSON Schema**, which also allows keywords such as `$ref`:
 
@@ -139,14 +139,20 @@ Set it on `GenerateContentRequest.ToolConfig`. With `Any`, the model keeps calli
 | `FunctionCall` | Value |
 |---|---|
 | `Name` | Function to run |
-| `Args` | Arguments as a `JsonElement?`, `null` when there are none |
+| `Args` | Arguments as a `JsonElement?`, `null` when the model omits them, and possibly an empty object |
 | `Id` | Call ID when the model sends one, otherwise `null` |
 
 ```csharp
+using System.Text.Json;
+
 foreach (var call in response.FunctionCalls)
 {
-    var city = call.Args?.GetProperty("city").GetString();
-    Console.WriteLine($"{call.Name}({city})");
+    if (call.Args is { ValueKind: JsonValueKind.Object } arguments &&
+        arguments.TryGetProperty("city", out var city) &&
+        city.ValueKind == JsonValueKind.String)
+    {
+        Console.WriteLine($"{call.Name}({city.GetString()})");
+    }
 }
 ```
 
@@ -154,7 +160,7 @@ The model produces the arguments, so treat them as untrusted input. They may be 
 
 ### 5. Build the Response
 
-`Part.FromFunctionResponse` needs the function name and a JSON **object**. Pass the call's `Id` so the result pairs with its call. A number or string must be wrapped in an object, or it throws `ArgumentException`.
+`Part.FromFunctionResponse` needs the function name and a JSON **object**. Pass the call's `Id` so the result pairs with its call. Any other value, such as a number, string, or array, must be wrapped in an object, or it throws `ArgumentException`.
 
 ```csharp
 using System.Text.Json;
@@ -181,12 +187,12 @@ Under Native AOT, serialize with source-generated metadata. See [Native AOT](nat
 The next request must carry the history in this order:
 
 1. The earlier contents.
-2. The model's turn, unchanged. Use `TryGetModelContent`, which keeps the `thoughtSignature` that Gemini 3 models require on function calls.
+2. The model's turn. Use `TryGetModelContent` and do not edit the result: it keeps the `thoughtSignature` that Gemini 3 models require on function calls, and leaves out only empty placeholders.
 3. One `user` content holding **all** the function responses of that turn.
 
 ### The Complete Loop
 
-This runs until the model answers in text, with a limit so a model that keeps calling functions cannot loop forever:
+This runs until the model answers in text, with a limit so a model that keeps calling functions cannot loop forever. A block, a failed tool call, or an empty answer stops it with an exception:
 
 ```csharp
 using System.Text.Json;
@@ -230,10 +236,11 @@ for (var round = 0; round < maxRounds && answer is null; round++)
         Tools = [tool]
     });
 
-    // A failed tool call is reported through the finish reason, with no exception.
-    if (response.FinishReason is FinishReason.MalformedFunctionCall or FinishReason.UnexpectedToolCall or FinishReason.TooManyToolCalls)
+    // Blocks and failed tool calls are reported on the response, with no exception.
+    if (response.IsBlocked || response.FinishReason is FinishReason.MalformedFunctionCall or FinishReason.UnexpectedToolCall
+        or FinishReason.TooManyToolCalls or FinishReason.MissingThoughtSignature)
     {
-        throw new InvalidOperationException($"The model failed to call a tool: {response.FinishReason}");
+        throw new InvalidOperationException($"The model did not complete the turn: {response.BlockReason} {response.FinishReason}");
     }
 
     // Add the model's turn first, with its parts unchanged.
@@ -244,8 +251,9 @@ for (var round = 0; round < maxRounds && answer is null; round++)
 
     if (response.FunctionCalls.Count == 0)
     {
-        answer = response.Text ?? string.Empty;
-        break;
+        // Text is null when no answer was generated, for example at the output limit.
+        answer = response.Text ?? throw new InvalidOperationException($"No answer: {response.FinishReason}");
+        continue;
     }
 
     // Answer every call of this turn in a single user content.
@@ -260,12 +268,11 @@ for (var round = 0; round < maxRounds && answer is null; round++)
 
 Console.WriteLine(answer ?? "No answer within the round limit.");
 
-static JsonElement Run(FunctionCall call) => call.Name switch
-{
-    "get_weather" when call.Args?.TryGetProperty("city", out var city) == true =>
-        JsonSerializer.SerializeToElement(new Dictionary<string, string> { ["city"] = city.GetString() ?? "", ["sky"] = "Sunny" }),
-    _ => JsonSerializer.SerializeToElement(new Dictionary<string, string> { ["error"] = $"Cannot run {call.Name}" })
-};
+static JsonElement Run(FunctionCall call) =>
+    call is { Name: "get_weather", Args: { ValueKind: JsonValueKind.Object } args } &&
+    args.TryGetProperty("city", out var city) && city.ValueKind == JsonValueKind.String
+        ? JsonSerializer.SerializeToElement(new Dictionary<string, string> { ["city"] = city.GetString()!, ["sky"] = "Sunny" })
+        : JsonSerializer.SerializeToElement(new Dictionary<string, string> { ["error"] = $"Cannot run {call.Name}" });
 ```
 
 ### Parallel Calls
@@ -308,7 +315,9 @@ var modelContent = await client.StreamGenerateContentAsync(request).ToModelConte
 var calls = modelContent?.Parts.Select(part => part.FunctionCall).OfType<FunctionCall>().ToList() ?? [];
 ```
 
-Add `modelContent` to the history as in step 6.
+Add `modelContent` to the history as in step 6, unless it is `null`, which means there is nothing to add.
+
+`ToModelContentAsync` returns only the content, so it cannot show a failed finish reason. To check one as in the complete loop, gather the chunks in a `List<GenerateContentResponse>`, read their `FinishReason`, and then call `chunks.ToModelContent()`.
 
 ### What Can Go Wrong
 
@@ -318,14 +327,20 @@ Add `modelContent` to the history as in step 6.
 | `FinishReason.UnexpectedToolCall` | The model called a tool when none was enabled or expected | Check the declared tools and `ToolConfig` |
 | `FinishReason.TooManyToolCalls` | Too many calls in a row | Reduce the work per request |
 | `FinishReason.MissingThoughtSignature` | A signature did not come back | Resend the model's turn unchanged |
-| HTTP 400 on the next request, naming `thought_signature` | The model's turn was changed, and a function call lost its signature | Follow step 6 |
-| `ArgumentException` from `Part.FromFunctionResponse` | The result is not a JSON object | Wrap it in an object |
+| [`GeminiApiException`](errors.md) with HTTP 400 on the next request, naming `thought_signature` | The model's turn was changed, and a function call lost its signature | Follow step 6 |
+| `ArgumentException` from `Part.FromFunctionResponse` | The result is not a JSON object, or the name is empty | Wrap the result in an object, and pass the name |
 
 Treat a limit on rounds as required: the loop has no end of its own.
 
 ## Automatic Function Calling with `IChatClient`
 
-`AIFunctionFactory` builds the declaration from a C# method, and `UseFunctionInvocation()` runs the loop:
+`AIFunctionFactory` builds the declaration from a C# method, and `UseFunctionInvocation()` runs the loop. `ChatClientBuilder` and `UseFunctionInvocation()` are in a separate package:
+
+```bash
+dotnet add package Microsoft.Extensions.AI
+```
+
+Then:
 
 ```csharp
 using System.ComponentModel;
@@ -350,6 +365,17 @@ Console.WriteLine(response.Text);
 
 Streaming works the same way with `GetStreamingResponseAsync`.
 
+The loop stops after `MaximumIterationsPerRequest` rounds, 40 by default in version 10.11.0, with no exception. `Text` is then empty and `FinishReason` is `ToolCalls`. To change it:
+
+```csharp
+using GeminiGatewayClient;
+using Microsoft.Extensions.AI;
+
+IChatClient limited = new ChatClientBuilder(client.AsIChatClient())
+    .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = 5)
+    .Build();
+```
+
 `ChatOptions.ToolMode` maps to `ToolConfig`:
 
 | `ChatToolMode` | `FunctionCallingMode` |
@@ -358,6 +384,11 @@ Streaming works the same way with `GetStreamingResponseAsync`.
 | `None` | `None` |
 | `RequireAny` | `Any` |
 | `RequireSpecific(name)` | `Any` with `AllowedFunctionNames = [name]` |
+
+- With no `ToolMode`, no `toolConfig` is sent.
+- `FunctionCallingConfig` from `RawRepresentationFactory` wins. `Validated` can only be set that way.
+- With `UseFunctionInvocation()`, `RequireAny` applies to the first request only, so the loop can end in text.
+- `ChatOptions.AllowMultipleToolCalls` is not read.
 
 ### Running the Loop Yourself
 
@@ -385,15 +416,16 @@ var final = await chatClient.GetResponseAsync(history, options);
 
 Good to know:
 
-- A `FunctionResultContent` needs its `FunctionCallContent` in the same messages, because only the call holds the function name. Without it, the call throws `ArgumentException`. When you trim a history, remove them together.
+- A `FunctionResultContent` needs its `FunctionCallContent` earlier in the same messages, because only the call holds the function name. Without it, `GetResponseAsync` throws `ArgumentException`. When you trim a history, remove them together.
 - When Gemini sends no call ID, a local one is made for `CallId`, marked with `GeminiChatPropertyNames.SynthesizedCallId`, and never sent back.
-- A result that is not a JSON object is wrapped as `{"result": value}`.
-- `MalformedFunctionCall`, `UnexpectedToolCall`, and `TooManyToolCalls` give a `FinishReason` of `null`, even next to function calls. The original value stays on `RawRepresentation`.
+- A result that is not a JSON object is wrapped as `{"result": value}`. `AIFunctionFactory` also declares the return type as `responseJsonSchema`, which describes the value before wrapping. Gemini accepted this for an `int` result when checked on 2026-11-07.
+- `MalformedFunctionCall`, `UnexpectedToolCall`, and `TooManyToolCalls` give a `FinishReason` of `null`, even next to function calls. Read the original with `(response.RawRepresentation as GenerateContentResponse)?.FinishReason`. When streaming, read it from an update, because `ToChatResponse()` leaves `RawRepresentation` as `null`.
+- `UseFunctionInvocation()` runs any function call it receives, even next to such a finish reason. Only the last response stays in the result, so an earlier failure is not visible.
 - Custom result types under Native AOT need `toolSerializerOptions`. See [Native AOT](native-aot.md).
 
 ## Combining with Built-in Tools
 
-Gemini answers HTTP 400 when one request mixes functions with Google Search or code execution, unless it sets `toolConfig.includeServerSideToolInvocations`. Set that through `ExtensionData`:
+Gemini answers HTTP 400 when one request mixes functions with Google Search, URL Context, or code execution, unless it sets `toolConfig.includeServerSideToolInvocations`. Set that through `ExtensionData`:
 
 ```csharp
 using System.Text.Json;
@@ -403,7 +435,7 @@ var toolConfig = new ToolConfig
 {
     ExtensionData = new Dictionary<string, JsonElement>
     {
-        ["includeServerSideToolInvocations"] = JsonDocument.Parse("true").RootElement
+        ["includeServerSideToolInvocations"] = JsonElement.Parse("true")
     }
 };
 ```
@@ -424,7 +456,7 @@ var options = new ChatOptions
         {
             ExtensionData = new Dictionary<string, JsonElement>
             {
-                ["includeServerSideToolInvocations"] = JsonDocument.Parse("true").RootElement
+                ["includeServerSideToolInvocations"] = JsonElement.Parse("true")
             }
         }
     }

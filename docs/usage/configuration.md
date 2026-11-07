@@ -5,18 +5,18 @@
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `Endpoint` | `Uri` | `https://generativelanguage.googleapis.com/v1beta` | API root of Gemini or the gateway. Its query string is kept on every request. |
-| `Model` | `string?` | `null` | Default model, used when a call names none. |
+| `Model` | `string?` | `null` | Default model, used when a call names none. With neither, the call throws `InvalidOperationException`. |
 | `EmbeddingModel` | `string?` | `null` | Default embedding model. Falls back to `Model`. |
 | `ApiKey` | `string?` | `null` | Credential sent in `ApiKeyHeader`. When `null` or empty and there is no provider, no credential header is sent. |
-| `ApiKeyProvider` | `Func<CancellationToken, ValueTask<string>>?` | `null` | Supplies the credential for each client call. Cannot be combined with `ApiKey`. |
+| `ApiKeyProvider` | `Func<CancellationToken, ValueTask<string>>?` | `null` | Supplies the credential for each client call, and for each enumeration of a stream. Cannot be combined with `ApiKey`. |
 | `ApiKeyHeader` | `string` | `x-goog-api-key` | Header that carries the credential. |
 | `ApiKeyPrefix` | `string?` | `null` | Text before the credential, such as `"Bearer "`. |
 | `AdditionalHeaders` | `IDictionary<string, string>` | Empty | Extra headers on every call. Content headers such as `Content-Type` cannot be set here. |
-| `StreamIdleTimeout` | `TimeSpan?` | 2 minutes | Longest wait for more data on a stream. `null` or `Timeout.InfiniteTimeSpan` disables it. |
+| `StreamIdleTimeout` | `TimeSpan?` | 2 minutes | Longest wait for more data on a stream, after the response headers arrive. Exceeding it throws `TimeoutException`. `null` or `Timeout.InfiniteTimeSpan` disables it. |
 | `UseServerSentEvents` | `bool` | `true` | Whether streaming asks for `alt=sse`. See [Streaming Format](#streaming-format). |
 | `AllowInsecureHttp` | `bool` | `false` | Allows `http://` to hosts other than loopback. |
 
-`GeminiClient` takes a snapshot when it is created, so later changes to the options have no effect on it. `ToString()` hides the key, header values, and the endpoint's query string, so options can be logged.
+`GeminiClient` takes a snapshot when it is created, so later changes to the options have no effect on it. `ToString()` hides the key, header values, and the endpoint's query string, so options can be logged. `ApiKeyPrefix` and header names are shown.
 
 Option values are not range-checked. For example, a negative `StreamIdleTimeout` fails on the first read. See [what is checked](errors.md#when-the-client-is-created).
 
@@ -30,7 +30,7 @@ The client builds `{Endpoint}/{resource}:{operation}`, keeping any query string 
 | `models/gemini-flash-latest` | Used as it is |
 | `tunedModels/my-model` | Used as it is |
 
-A name containing `/` is used as it is. A `.` or `..` segment throws `ArgumentException`, because it would move the request and its credential to another path of the gateway.
+Surrounding whitespace and slashes are removed first, and a name that still contains `/` is used as it is. A `.` or `..` segment throws `ArgumentException`, because it would move the request and its credential to another path of the gateway.
 
 An alias such as `gemini-flash-latest` follows Google's current model. Use a version ID when the model must not change.
 
@@ -77,7 +77,7 @@ var options = new GeminiClientOptions
 
 ### Reverse Proxy with Short-Lived Tokens
 
-`ApiKeyProvider` runs once per client call, so cache tokens inside it. A retry inside an HTTP handler resends the same value:
+`ApiKeyProvider` runs once per client call, and for a stream once per enumeration, so cache tokens inside it. A retry inside an HTTP handler resends the same value. In the samples below, `tokenProvider` stands for your own token service:
 
 ```csharp
 var options = new GeminiClientOptions
@@ -123,7 +123,7 @@ var options = new GeminiClientOptions
 ### Header Rules
 
 - A value with a line break or NUL throws `ArgumentException`, because .NET would send it as it is.
-- The same header set twice throws `ArgumentException`, for example `ApiKeyHeader` also listed in `AdditionalHeaders`.
+- The same header set twice throws `ArgumentException`, for example `ApiKeyHeader` also listed in `AdditionalHeaders` when a credential is set.
 - A non-ASCII value is not checked here and fails with `HttpRequestException` when it is sent.
 
 ## Streaming Format
@@ -131,7 +131,7 @@ var options = new GeminiClientOptions
 By default, streaming asks for Server-Sent Events with `?alt=sse` and `Accept: text/event-stream`.
 
 - A gateway that drops the query string makes Gemini answer with a JSON array. The client reads that as well, though a complete chunk may wait for the data after it.
-- A gateway that rejects the query string fails with its own status. Set `UseServerSentEvents = false`, and neither is sent.
+- A gateway that rejects the query string fails with its own status. Set `UseServerSentEvents = false`, and the client adds neither.
 
 The body decides how a stream is read, not its `Content-Type`.
 
@@ -141,7 +141,7 @@ The body decides how a stream is read, not its `Content-Type`.
 
 ## Using Your Own `HttpClient`
 
-`new GeminiClient(options, httpClient)` neither changes nor disposes your client. Set `httpClient.Timeout` yourself.
+`new GeminiClient(options, httpClient)` neither changes nor disposes your client. Set `httpClient.Timeout` yourself: the .NET default of 100 seconds can be too short for thinking models.
 
 .NET keeps custom credential headers when it follows a redirect to another host, so build your client on `CreateDefaultHandler()`. It follows no redirects and stores no cookies:
 
@@ -160,7 +160,7 @@ A client the library creates itself has a 5-minute timeout and uses that same ha
 
 ## Dependency Injection
 
-`AddGeminiClient` registers `GeminiClient`, `IGeminiClient`, `IChatClient`, and `IEmbeddingGenerator<string, Embedding<float>>` as singletons, on a named `HttpClient` from `IHttpClientFactory`:
+`AddGeminiClient` registers `GeminiClient`, `IGeminiClient`, `IChatClient`, and `IEmbeddingGenerator<string, Embedding<float>>` as singletons, on a named `HttpClient` from `IHttpClientFactory`. Its name is `GeminiServiceCollectionExtensions.HttpClientName`:
 
 ```csharp
 using GeminiGatewayClient;
@@ -194,7 +194,7 @@ services.AddGeminiClient((serviceProvider, options) =>
 });
 ```
 
-Options can also be bound from configuration, with `Microsoft.Extensions.Options.ConfigurationExtensions`:
+Options can also be bound from configuration. This needs no extra package, but `IConfiguration` must be registered. A host does that for you. With a plain `ServiceCollection`, add it yourself:
 
 ```csharp
 services.AddOptions<GeminiClientOptions>().BindConfiguration("Gemini");
@@ -203,11 +203,11 @@ services.AddGeminiClient();
 
 Good to know:
 
-- Invalid options fail with `OptionsValidationException` at host startup, or when the client is first resolved outside a host.
-- The returned `IHttpClientBuilder` configures the `HttpClient`, for example `.ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(3))`. The default is 5 minutes.
+- The checks that throw `ArgumentException` in the constructor surface as `OptionsValidationException`, at host startup or when the client is first resolved outside a host. Other failures keep their own type, such as `InvalidOperationException` for a relative `Endpoint`. See [what is checked](errors.md#when-the-client-is-created).
+- The returned `IHttpClientBuilder` configures the `HttpClient`, for example `.ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(3))`. The default is 5 minutes, unless a resilience handler changes it. See [Resilience](#resilience).
 - A primary handler you attach must also disable redirects and cookies. `GeminiClient.CreateDefaultHandler()` creates one.
 - The registered `IChatClient` uses the default tool serializer options. For others, register your own `client.AsIChatClient(toolSerializerOptions: ...)`.
-- One client is registered. For a second endpoint or key, create another `GeminiClient` yourself.
+- One client is registered. A second `AddGeminiClient` call adds to the same options rather than creating another client. For a second endpoint or key, create another `GeminiClient` yourself.
 
 ## Resilience
 
@@ -224,5 +224,11 @@ services.AddGeminiClient(options => options.Model = "gemini-flash-latest")
         o.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(6); // At least twice AttemptTimeout
     });
 ```
+
+Before you add it, note three things. They were measured with version 10.0.0:
+
+- `AddStandardResilienceHandler()` sets `HttpClient.Timeout` to infinite, which also drops a `ConfigureHttpClient` timeout set before it. To keep a timeout, call `.ConfigureHttpClient(c => c.Timeout = ...)` after the handler.
+- Its timeouts only cover the wait for the response headers. Without `HttpClient.Timeout`, a response body that stalls waits until you cancel.
+- It retries POST requests, so a generation request can be sent, and billed, more than once.
 
 An HTTP handler only sees a stream up to its response headers. A failure after that, such as an in-stream error or `TimeoutException`, reaches your code while you enumerate. Retry it yourself and discard any partial output.

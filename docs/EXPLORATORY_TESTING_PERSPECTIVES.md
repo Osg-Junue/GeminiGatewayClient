@@ -1,7 +1,8 @@
 # GeminiGatewayClient 探索的テスト観点仕様書
-(GeminiGatewayClient Exploratory Testing Perspectives & Test Plan)
+(GeminiGatewayClient Exploratory Testing Perspectives)
 
-**ドキュメントバージョン**: 1.0.0  
+**ドキュメントバージョン**: 1.1.0  
+**対象バージョン**: 4.1.0  
 **対象プロジェクト**: `GeminiGatewayClient`  
 **検証対象テストプロジェクト**: `tests/GeminiGatewayClient.ExploratoryTests`  
 **関連プロジェクト**: `tests/GeminiGatewayClient.Tests` (単体テスト)
@@ -24,7 +25,7 @@
 
 #### 探索的テストが果たす中核的価値
 - **実 API のプロトコル互換性保証**:
-  モックでは見落とされがちな、Google API サーバー側の厳格なバリデーション（例: パラメータなし関数定義で空オブジェクト `{}` を送ると HTTP 400 が発生する仕様や、Thought Signature の整合性検証、非オブジェクト形式の関数戻り値の拒絶など）を実環境で検知・保証します。
+  モックでは見落とされがちな、Google API サーバー側の厳格なバリデーション（例: 引数なしの関数で空の `properties` を持つスキーマを送ると HTTP 400 になることがある点や、Thought Signature の整合性検証など）を実環境で確認します。
 - **LLM の非決定的な振る舞いに対する堅牢性検証**:
   LLM はプロンプトや文脈に応じて、単一ターンで並列に関数を呼び出したり、推論（Thinking）を行ったり、ツールエラーに対して代替手段を試みるなど、動的な振る舞いを示します。これらが高レイヤーの抽象化（特に MEAI の `FunctionInvokingChatClient`）を介して期待通りハンドリングされるかをエンドツーエンドで実証します。
 - **不変条件（Invariants）に基づく検証方針**:
@@ -66,7 +67,7 @@ public sealed class ExploratoryFactAttribute : FactAttribute
 | 項目 | 優先キー（Primary） | フォールバックキー（Fallback） | 参照スコープ |
 |---|---|---|---|
 | **API キー** | `GeminiAPIKey` | `GEMINI_API_KEY` | 1. `EnvironmentVariableTarget.Process`<br>2. `EnvironmentVariableTarget.User` (Windows のみ) |
-| **テスト対象モデル** | `GeminiTestModel` | `GEMINI_TEST_MODEL` | 1. `EnvironmentVariableTarget.Process`<br>2. `EnvironmentVariableTarget.User`<br>3. デフォルト値 (`gemini-3-flash-preview`) |
+| **テスト対象モデル** | `GeminiTestModel` | `GEMINI_TEST_MODEL` | 1. `EnvironmentVariableTarget.Process`<br>2. `EnvironmentVariableTarget.User` (Windows のみ)<br>3. デフォルト値 (`gemini-3-flash-preview`) |
 
 Windows ユーザー環境変数をフォールバック先としてサポートしているため、ターミナルや IDE 再起動後も API キーを安全に保持しつつ、Git コミット等のリポジトリ資産には一切クレデンシャルを含めない運用が可能です。
 
@@ -74,7 +75,7 @@ Windows ユーザー環境変数をフォールバック先としてサポート
 Gemini API の無料枠・プレビューモデルには 1 分間あたりのリクエスト数（RPM）およびトークン数（TPM）のレートリミットが存在します。探索的テストアセンブリ全体で直列実行を強制しています：
 - アセンブリレベル: `[assembly: CollectionBehavior(DisableTestParallelization = true)]`
 - コレクションレベル: `[CollectionDefinition(CollectionName, DisableParallelization = true)]`
-これにより、テスト間の並行実行による HTTP 429 (`RESOURCE_EXHAUSTED`) の発生を完全に防止しています。
+これにより、テストの並行実行が原因の HTTP 429 (`RESOURCE_EXHAUSTED`) を避けています。直列でも、利用枠の状況によっては 429 が発生することがあります。
 
 ---
 
@@ -97,18 +98,16 @@ Gemini API の無料枠・プレビューモデルには 1 分間あたりのリ
   - `IDAT` チャンク（先頭フィルタバイト `0x00` + RGB バイト列を `System.IO.Compression.ZLibStream` で Deflate 圧縮）
   - `IEND` チャンク
 - **音声データ (WAV)**:
-  RIFF/WAVE フォーマットに準拠した 44 バイトの標準ヘッダー + 16-bit リニア PCM モノラル音声バイト列（16kHz または 44.1kHz）を生成。無音（全ゼロ）または明瞭な正弦波（440Hz 基準音）を数学的に算出し、モデルが音声として認識できる有効な波形データを提供。
+  RIFF/WAVE フォーマットに準拠した 44 バイトの標準ヘッダーと、16-bit リニア PCM モノラルの音声バイト列を生成。16kHz、1 秒間の 440Hz の正弦波を算出して使用。
 - **文書データ (PDF)**:
   PDF 1.4 仕様に準拠したテキストレンダリング可能な最小構造のバイナリを動的生成。
   - ヘッダー: `%PDF-1.4`
   - オブジェクト 1: `/Type /Catalog /Pages 2 0 R`
   - オブジェクト 2: `/Type /Pages /Kids [3 0 R] /Count 1`
   - オブジェクト 3: `/Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >>`
-  - オブジェクト 4: コンテンツストリーム（`BT /F1 14 Tf 50 700 Td (検証用テキスト...) Tj ET`）
+  - オブジェクト 4: コンテンツストリーム（`BT /F1 14 Tf 50 700 Td (...) Tj ET`）
   - オブジェクト 5: 標準 Type 1 フォント `/Type /Font /Subtype /Type1 /BaseFont /Helvetica`
   - 相互参照テーブル (`xref`) および `trailer`、`startxref`、`%%EOF`
-- **テキスト / CSV / コード**:
-  `Encoding.UTF8.GetBytes(...)` によりインメモリで生成し、`Part.FromBytes` または `DataContent` に渡す。
 
 ---
 
@@ -129,7 +128,7 @@ Gemini API の無料枠・プレビューモデルには 1 分間あたりのリ
 [ GeminiChatClient ]            (GeminiGatewayClient: IChatClient)
         │
         ▼
-[ GeminiClient / HTTP ]         (Gemini REST API: models/gemini-3-flash-preview)
+[ GeminiClient / HTTP ]         (Gemini REST API)
 ```
 
 ---
@@ -145,38 +144,37 @@ Gemini API の無料枠・プレビューモデルには 1 分間あたりのリ
 3. **並列ツール呼び出し (Parallel Tool Invocation)**:
    Gemini モデルが 1 回のアシスタントターンで複数のツール呼び出し（複数の `FunctionCallContent`）を同時に返すパターン。
    - **検証ポイント**:
-     - 単一の質問（例:「東京と大阪の天気を同時に調べて」「フライトとホテルを同時に検索して」）に対して、Gemini が複数の `FunctionCall` を単一の `Candidate.Content.Parts` に含めて返却すること。
-     - `GeminiChatClient` がそれらを個別の `FunctionCallContent` としてマッピングし、FinishReason を `ChatFinishReason.ToolCalls` に設定すること。
-     - `FunctionInvokingChatClient` がこれら並列ツールを並行ディスパッチし、全ツールの結果を `ChatRole.Tool` のメッセージとして集約してモデルに差し戻すこと。
+     - 複数の対象を同時に調べる質問（TC-MEAI-01 では札幌と福岡）で、必要なツールがすべて実行されること。1 ターンで返るかどうかはモデルに依存するため、テストでは確認しません。
+     - `FunctionInvokingChatClient` がすべてのツールを実行し、結果をモデルへ返すこと。
      - モデルがすべての結果を統合した最終回答を出力すること。
 
 #### 2.1.2 引数なし関数 (Parameterless Functions) の仕様と検証
 - **背景と課題**:
-  Gemini REST API のスキーマバリデーションは非常に厳格であり、ツールの引数が存在しない場合に空の JSON スキーマオブジェクト `{ "type": "object", "properties": {} }` を送信すると、サーバーから `HTTP 400 Bad Request`（`"Invalid JSON payload received. Unknown property: properties"` 等）が返却されます。
+  ツールに引数がない場合、空の `properties` を持つスキーマ `{ "type": "object", "properties": {} }` は、Gemini に HTTP 400 で拒否されたことがあります。
 - **クライアント実装仕様**:
-  `ChatOptionsMapper.cs` の `ToParametersSchema` では、引数なし（またはプロパティが空）の関数について `FunctionDeclaration.ParametersJsonSchema` を明示的に `null` に設定します。
+  `ChatOptionsMapper.cs` の `ToParametersSchema` は、`properties` が空のスキーマでは `FunctionDeclaration.ParametersJsonSchema` を `null` にします。
 - **検証ポイント**:
-  - `AIFunctionFactory.Create(() => GetServerStatus(), "get_server_status")` のように、引数を一切持たない C# 関数を登録。
+  - `GetSystemStatus` のように、引数を持たない C# 関数を登録。
   - `FunctionInvokingChatClient` 経由で実行した際、HTTP 400 エラーが発生せず正常にツールが呼び出され、返却値が回答に反映されること。
 
 #### 2.1.3 複雑な型・列挙型・コレクションのスキーマ生成とバインディング
 実アプリケーションでは、ツールは単純な文字列や数値だけでなく、構造化されたオブジェクトやコレクションを受け取ります。
 - **検証対象の型バリエーション**:
-  1. **C# `enum`**: `enum PriorityLevel { Low, Normal, High, Urgent }`。JSON スキーマ側で `string` かつ `enum: ["Low", "Normal", "High", "Urgent"]` として展開され、モデルが適切な文字列を選択し、C# 側の引数に正しくアンボックスされること。
-  2. **コレクション型**: `List<string> productCodes` や `int[] quantities`。JSON スキーマで `type: "array", items: { type: "string" }` と定義され、モデルが配列 JSON を生成して正しくバインドされること。
-  3. **ネストされた複合型**: `DateRange { DateTime StartDate, DateTime EndDate }` や `CustomerFilter` クラス。
-  4. **デフォルト値付きオプション引数**: `int limit = 10`。
+  1. **C# `enum`**: `enum SupportPriority { Low, Normal, High, Urgent }`。モデルが選んだ値が C# 側の引数に正しく渡ること。
+  2. **コレクション型**: `List<string> Tags`。モデルが生成した配列が正しく渡ること。
+  3. **複合型**: `TicketFilter` レコード。
+  4. **デフォルト値を持つ引数**: `int MaxCount = 5`。プロンプトで指定した値 `3` が渡ること。
 - **戻り値のオブジェクトラップ仕様**:
-  Gemini API は、ツールのレスポンス電文 (`FunctionResponse.response`) が必ず **JSON Object** であることを要求します。スカラー値（`int`, `string`, `bool`）や配列（`string[]`）を直接返すと API エラーとなります。
-  `GeminiGatewayClient` の `ToolJsonConverter.ToResponseObject` は、非オブジェクトの戻り値を自動的に `{"result": value}` という形式のオブジェクトにラップして送信します。この透過的ラップが実 API 側で問題なく解釈されることを検証します。
+  Gemini API のツールのレスポンス電文 (`FunctionResponse.response`) は **JSON Object** です。
+  `GeminiGatewayClient` の `ToolJsonConverter.ToResponseObject` は、非オブジェクトの戻り値を自動的に `{"result": value}` という形式のオブジェクトにラップして送信します。このラップ自体は単体テストで確認します。
 
 #### 2.1.4 エラーハンドリングとモデルリカバリ (Error Handling & Recovery)
 外部 API やデータベース障害により、ツール内部でエラーが発生する場合があります。
 - **検証シナリオ**:
-  - 存在しないエンティティの照会ツール（例: `GetUserAccount("INVALID_ID")`）が、エラー情報オブジェクト `{"error": "AccountNotFound", "message": "ID INVALID_ID does not exist", "suggestedAction": "Please verify user ID"}` を返却する。
+  - `find_user_profile("USER-999")` が、`status`、`errorCode`、`message` を持つエラー情報を返却する。代替として `find_fallback_contact` も登録する。
   - `FunctionInvokingChatClient` はそのエラー情報を Gemini に戻す。
   - **期待されるモデルの振る舞い**:
-    モデルがクラッシュしたり例外を投げたりせず、ツールから返されたエラー内容を正しく理解し、ユーザーに対して「アカウントが見つかりませんでした。別の ID を入力してください」といった親切な代替説明を回答として提示できること。
+    例外で終了せず、モデルがエラーを踏まえて、見つからなかったことや代替の連絡先を回答できること。
 
 ---
 
@@ -184,17 +182,17 @@ Gemini API の無料枠・プレビューモデルには 1 分間あたりのリ
 
 ストリーミングとファンクションコールを併用する場合、以下の重要なライフサイクルが発生します：
 1. **ツール呼び出しフェーズ**:
-   モデルがツール呼び出しをストリーミング出力する際、引数の断片を含む `ChatResponseUpdate` が発行される。
+   モデルのツール呼び出しが、`FunctionCallContent` を含む `ChatResponseUpdate` として発行される。
 2. **自動実行とループバック**:
    `FunctionInvokingChatClient` がツールを実行し、その結果を持って再度モデルにリクエストを発行する。
 3. **最終回答ストリーミング**:
-   モデルがツール結果を踏まえたテキスト回答をトークン単位でストリーミング出力する。
+   モデルがツール結果を踏まえたテキスト回答をストリーミング出力する。
 4. **トークン二重計上の防止仕様**:
    `GeminiChatClient.cs` の `StreamCoreAsync` では、ストリーミング中の各チャンクで中間トークンを重複加算するのを防ぐため、ストリームの**末尾の単一更新**にのみ累積の `UsageContent` を付与して出力します。
 - **検証ポイント**:
-  - `IChatClient.GetStreamingResponseAsync` を `UseFunctionInvocation()` と併用した際、最終テキストがリアルタイムに逐次受信できること。
-  - 全ストリーム終了後に得られる `ChatResponse` において、`Usage.TotalTokenCount` や `Usage.InputTokenCount` が二重計上されず、適切な値となっていること。
-  - 内部思考モデル（Thinking モデル）を併用した場合に、ストリーミングチャンク間で `ThoughtSignature` が失われず保持されること。
+  - `IChatClient.GetStreamingResponseAsync` を `UseFunctionInvocation()` と併用した際、ツールの結果を反映した回答テキストを受信できること。
+  - 全ストリーム終了後に得られる `ChatResponse` で `Usage.TotalTokenCount` が 0 より大きいこと。二重計上の防止は単体テストで確認します。
+  - ストリーミングの応答を `ToChatResponse()` で結合しても `thoughtSignature` が失われないこと。
 
 ---
 
@@ -203,15 +201,17 @@ Gemini API の無料枠・プレビューモデルには 1 分間あたりのリ
 `ChatClientBuilder` は ASP.NET Core のミドルウェアと同様に、複数の `DelegatingChatClient` をスタックして強力な処理パイプラインを構成します。
 
 ```csharp
-IChatClient client = new ChatClientBuilder(geminiChatClient)
-    .Use(customAuditingMiddleware)    // 監査・呼び出しロギング
+// DelegatingChatClient の実装で包むと、FunctionInvokingChatClient の内側に置かれ、往復ごとに呼ばれる
+var telemetry = new TelemetryTrackingDelegatingChatClient(geminiChatClient);
+
+IChatClient client = new ChatClientBuilder(telemetry)
     .UseFunctionInvocation()          // 自動ファンクション呼び出し
     .Build();
 ```
 
 - **検証観点**:
   1. **多段ミドルウェアの連鎖実行**:
-     リクエストとレスポンスをインターセプトするカスタムデリゲーティングクライアントを挿入し、ツール呼び出しの各ラウンド（ユーザー発話時、ツール実行結果送信時、最終回答受信時）で適切にフックが実行され、内部カウントやログが記録されること。
+     `DelegatingChatClient` を `FunctionInvokingChatClient` の内側に置き、ツール呼び出しの往復ごとに呼ばれて、回数とトークン数を記録できること。
   2. **`GetService<T>` の透過性 (Service Provider Transparency)**:
      最外層のラッパーから `client.GetService<IGeminiClient>()` や `client.GetService<ChatClientMetadata>()` を呼び出した際に、パイプラインを透過して下位のターゲットインスタンスが正しく取得できること。
 
@@ -220,15 +220,14 @@ IChatClient client = new ChatClientBuilder(geminiChatClient)
 ### 2.4 構造化出力・マルチモーダル・ThinkingConfig（Thinking）とのツール併用
 
 1. **構造化出力 (`ChatResponseFormat.ForJsonSchema`)**:
-   `IChatClient` レイヤーから `ChatOptions.ResponseFormat` に JSON スキーマを指定した場合、`ChatOptionsMapper` が `GenerationConfig.ResponseJsonSchema` にマッピングし、モデルが指定した JSON スキーマ通りの出力を返すこと。
+   `ChatOptions.ResponseFormat` に指定した JSON スキーマが `GenerationConfig.ResponseJsonSchema` に変換されること。実 API では未検証です（第 5 章）。
 2. **マルチモーダル入力 (`DataContent`)**:
-   `ChatMessage` にテキストだけでなく `DataContent`（インライン画像や PDF、音声のバイト列）を含めて `IChatClient.GetResponseAsync` を呼び出した際、`ChatRequestMapper` が適切に `Part.FromBytes` に変換して実 API が内容を解析できること。
-3. **ThinkingConfig (Thinking) とファンクションコールの併用**:
-   - `gemini-3-flash-preview` 等の推論モデルで `RawRepresentationFactory` で `ThinkingConfig`（`ThinkingLevel.Low` 等）を指定し、かつ `UseFunctionInvocation()` を有効化。
-   - モデルがツール呼び出し前に推論（Thinking）を行い、ツール結果受信後にも推論を行って最終回答を導出するフローを検証。
+   `ChatMessage` の `DataContent` が `inlineData` のパートに変換されること。実 API では未検証です（第 5 章）。
+3. **ThinkingConfig (Thinking) とファンクションコールの併用**: `ChatOptions.Reasoning` でも指定できますが、探索的テストは `RawRepresentationFactory` のみを使います（第 5 章）。
+   - `RawRepresentationFactory` で `ThinkingConfig`（`ThinkingLevel.Low`、`IncludeThoughts = true`）を指定し、`UseFunctionInvocation()` を有効化。
    - **Thought Signature の保持**:
-     Gemini は推論過程の改ざんを防止するため、推論を含むメッセージに `thoughtSignature` を付与します。`FunctionInvokingChatClient` が複数ターンを往復する際、この署名が維持され、Google サーバーから「署名が無効または欠落している」というエラー（HTTP 400）が発生しないことを実証。
-4. **ToolMode の強制制御**:
+     `FunctionInvokingChatClient` が往復する間 `thoughtSignature` が維持され、署名の無効や欠落を示す HTTP 400 が発生しないこと。
+4. **ToolMode の強制制御**: `None` と `RequireAny` は実 API では未検証です（第 5 章）。
    - `ChatToolMode.Auto`: 通常の自動判断。
    - `ChatToolMode.None`: ツールが登録されていても一切のツール呼び出しを禁止し、テキスト回答を強制する。
    - `ChatToolMode.RequireAny`: いずれかのツールを必ず呼び出すよう強制する。
@@ -237,7 +236,7 @@ IChatClient client = new ChatClientBuilder(geminiChatClient)
 
 ## 3. GeminiGatewayClient ネイティブ機能のテスト観点体系
 
-`GeminiGatewayClient` の核となる `IGeminiClient` / `GeminiClient` は、Google Gemini REST API のフルスペックを直接操作する低レベルかつ高機能なインターフェースです。
+`GeminiGatewayClient` の核となる `IGeminiClient` / `GeminiClient` は、Gemini REST API の生成と埋め込みを直接操作するインターフェースです。
 
 ---
 
@@ -249,8 +248,7 @@ Gemini API は、画像だけでなく音声、PDF ドキュメント、ソー�
 [ In-Memory Byte Synthesis ]
   ├── PNG (RFC 2083)  ──► Part.FromBytes(data, MimeTypes.ImagePng)
   ├── WAV (PCM 16bit) ──► Part.FromBytes(data, MimeTypes.AudioWav)
-  ├── PDF (PDF-1.4)   ──► Part.FromBytes(data, MimeTypes.Pdf)
-  └── Code / Text     ──► Part.FromBytes(data, MimeTypes.TextPython)
+  └── PDF (PDF-1.4)   ──► Part.FromBytes(data, MimeTypes.Pdf)
                                 │
                                 ▼
                    [ GenerateContentRequest ]
@@ -261,21 +259,17 @@ Gemini API は、画像だけでなく音声、PDF ドキュメント、ソー�
 #### 3.1.1 メディア種別ごとの検証観点
 1. **音声入力 (`audio/wav`)**:
    - 16-bit リニア PCM WAV データをインメモリで生成し、`Part.FromBytes(..., MimeTypes.AudioWav)` として送信。
-   - モデルが音声を理解し、内容に関する質問（例:「この音声には何の音が録音されていますか？」）に対して応答できること。
+   - モデルが音声の特徴を説明し、プロンプトトークンが計上されること。
 2. **文書入力 (`application/pdf`)**:
-   - 表題や特定のキーワード、文章が描画された最小構造の PDF バイナリをインメモリで生成し、`Part.FromBytes(..., MimeTypes.Pdf)` として送信。
-   - モデルが PDF 内のテキスト構造を正しく抽出し、質問に対する的確な回答を行えること。
-3. **テキスト/コードファイル入力 (`text/plain`, `text/x-python`, `text/csv`)**:
-   - CSV データや Python スクリプトをバイナリ Part として直接提供し、モデルが構文解析・分析できること。
+   - `ALPHA-7729` という文字列を含む最小構造の PDF バイナリをインメモリで生成し、`Part.FromBytes(..., MimeTypes.Pdf)` として送信。
+   - モデルの回答に `ALPHA-7729` が含まれること。
+3. **テキスト/コードファイル入力 (`text/plain`, `text/x-python`, `text/csv`)**: 現在テストはありません（第 5 章）。
 
 #### 3.1.2 MediaResolution 制御とトークン消費量の検証
-- `GenerationConfig.MediaResolution` 設定値:
-  - `MediaResolution.Low`: 1 画像/フレームあたり約 64 トークン。低解像度でトークンを大幅に節約。
-  - `MediaResolution.Medium`: 1 画像/フレームあたり約 256 トークン。標準解像度。
-  - `MediaResolution.High`: 高解像度ズーム再サンプリング（最大 256 トークン×領域）。
+- `GenerationConfig.MediaResolution` には `Low`、`Medium`、`High` を指定できます。テストではトークン数の固定値を確認しません。
 - **検証ポイント**:
-  同一のインメモリ画像に対して `MediaResolution.Low` と `MediaResolution.Medium` をそれぞれ指定して `GenerateContentAsync` を呼び出し、レスポンスの `UsageMetadata.PromptTokenCount` を比較。
-  `Low` の方が明らかに少ないプロンプトトークン数を消費していることを実測値で検証。
+  同一の 512x512 のインメモリ画像に対して `MediaResolution.Low` と `MediaResolution.Medium` をそれぞれ指定して `GenerateContentAsync` を呼び出し、レスポンスの `UsageMetadata.PromptTokenCount` を比較。
+  `Low` のプロンプトトークン数が `Medium` より少ないことを検証。
 
 ---
 
@@ -288,15 +282,15 @@ Gemini は、モデル自身が Python コードを記述し、Google が管理�
   ```csharp
   var request = new GenerateContentRequest
   {
-      Contents = [Content.FromText("第30番目のフィボナッチ数を計算し、その素因数分解を行ってください。")],
+      Contents = [Content.FromText("Python で 1 から 100 までの 7 の倍数の合計を計算してください。")],
       Tools = [new Tool { CodeExecution = new CodeExecutionTool() }]
   };
   ```
 - **レスポンス Part の構成**:
-  モデルがコード実行を行った場合、返却される `Candidate.Content.Parts` には以下の順序で特別な Part が含まれます：
+  モデルがコード実行を行った場合、返却される `Candidate.Content.Parts` には以下の Part が含まれます：
   1. `Part.ExecutableCode`:
      - `Language`: `CodeExecutionLanguage.Python`
-     - `Code`: モデルが生成した Python スクリプト（例: `def fib(n): ...`）
+     - `Code`: モデルが生成した Python スクリプト
   2. `Part.CodeExecutionResult`:
      - `Outcome`: `CodeExecutionOutcome.Ok`（または `Failed`, `DeadlineExceeded`）
      - `Output`: サンドボックス内の `stdout` / `stderr` 出力テキスト
@@ -304,10 +298,10 @@ Gemini は、モデル自身が Python コードを記述し、Google が管理�
      - コード実行結果を踏まえた、ユーザー向けの最終的な自然言語回答。
 
 #### 3.2.2 検証ポイント
-- 複雑な数学的計算やアルゴリズム問題をプロンプトとして送信。
+- 1 から 100 までの 7 の倍数の合計を、コード実行ツールで求めるよう指示。
 - レスポンスの `Candidate.Content.Parts` 内に `ExecutableCode` および `CodeExecutionResult` が含まれていることを検証。
 - `ExecutableCode.Code` に有効な Python コードが含まれ、`CodeExecutionResult.Outcome == CodeExecutionOutcome.Ok` であることを確認。
-- 最終テキストに計算結果の正解が含まれていること。
+- 最終テキストに正解の `735` が含まれていること。
 
 ---
 
@@ -344,9 +338,8 @@ Gemini は、モデル自身が Python コードを記述し、Google が管理�
   };
   ```
 - **検証ポイント**:
-  - 実 API がこのネイティブスキーマ定義を正常に受理し、HTTP 400 を返さないこと。
-  - レスポンステキストが厳格にこのスキーマに適合する JSON 文字列として生成されること。
-  - C# の厳格なモデルクラスへ `JsonSerializer.Deserialize<T>` で例外なくマッピングできること。
+  - 実 API がネイティブのスキーマ定義を受理すること。テストでは `companyName`、`foundedYear`、`isPublic`、`headquarters` を持つスキーマを使います。
+  - 応答を C# のレコードへ `JsonSerializer.Deserialize<T>` で変換でき、値が妥当であること。
 
 ---
 
@@ -362,10 +355,10 @@ Gemini API では、大量のプロンプト（ドキュメント集、コード
 - **MEAI 連携**: `ChatOptions.RawRepresentationFactory` の `GenerateContentRequest.CachedContent` からのリクエストマッピングおよび `Usage.CachedInputTokenCount` への透過的マッピング。
 
 #### 3.4.2 探索的テストでの検証アプローチ
-キャッシュ作成は最小 32,768 トークン以上のプロンプトと時間課金が必要となるため、CI 上で一時キャッシュを都度作成することは現実的ではありません。
-したがって、探索的テストでは以下の 2 点を検証します：
-1. `CachedContent` プロパティを設定した際、電文が正しく JSON シリアライズされ、Google API サーバーへ伝播すること（実キー環境で存在しないキャッシュ ID を指定した場合、サーバーから「Cache not found (HTTP 404)」が正当に返ることを確認することで、電文到達性を実証）。
-2. キャッシュが有効なレスポンスを受信した際、`UsageMetadata.CachedContentTokenCount` が正しくパースされ、MEAI の `CachedInputTokenCount` に値が反映されること。
+キャッシュの作成には管理エンドポイントが必要で、このライブラリの対象外です。そのため、探索的テストでは実際のキャッシュを作成しません。
+検証は以下のように分かれています：
+1. **探索的テスト**: 存在しないキャッシュ名を指定すると、`GeminiApiException`（HTTP 400、403、404 のいずれか）になり、メッセージに `CachedContent` が含まれること。これで値がサーバーまで届いていることを確認します。
+2. **単体テスト**: `UsageMetadata.CachedContentTokenCount` が MEAI の `CachedInputTokenCount` に反映されること。
 
 ---
 
@@ -380,9 +373,9 @@ Gemini は、ヘイトスピーチ、ハラスメント、危険なコンテン�
 - **レスポンスフィードバック**:
   - `Candidate.SafetyRatings`: 各カテゴリにおける確率（`HarmProbability`）と深刻度（`HarmSeverity`）。
   - `PromptFeedback.BlockReason`: プロンプト全体が有害と判定された場合のブロック理由。
-  - `response.IsBlocked`(探索テスト内の拡張メソッド `ExploratoryResponseExtensions.IsBlocked`): `FinishReason.Safety` または `PromptFeedback.BlockReason` に基づくブロック判定ヘルパー。
+  - `GenerateContentResponse.IsBlocked`: プロンプトまたは最初の候補がブロックされたかを示すプロパティ。
 - **検証ポイント**:
-  カスタムのセーフティ閾値を設定したリクエストが実 API で正しく受け入れられ、無害なプロンプトに対して各カテゴリの `SafetyRating` リスト（評価スコア）がレスポンスに正しく返却されること。
+  閾値を指定したリクエストが受け入れられ、無害なプロンプトがブロックされず、`SafetyRatings` が返ること。
 
 ---
 
@@ -394,7 +387,7 @@ Gemini は、ヘイトスピーチ、ハラスメント、危険なコンテン�
 - `FunctionCallingMode.Any`: 登録されたツールのうち、いずれかのツール呼び出しを強制。
 - `FunctionCallingMode.None`: **ツール定義が存在する場合であっても、ツール呼び出しを厳格に禁止し、通常の自然言語テキスト回答を強制する**。
 - **検証ポイント (`FunctionCallingMode.None`)**:
-  ツール定義を多数含めたリクエストに対して `FunctionCallingMode.None` を指定。質問が「ツールを使わなければ答えられない」ような内容であっても、モデルは `FunctionCall` を 1 つも生成せず、自然言語で「ツールを呼び出すことができません」または推測のテキストを返すことを検証。
+  天気を取得するツールを宣言し、`FunctionCallingMode.None` を指定。通常ならツールを呼ぶ質問でも、`FunctionCall` が 0 個で、テキストの回答が返ることを検証。
 
 #### 3.6.2 グラウンディング統合
 - `Tool.GoogleSearch` (`GoogleSearchTool`):
@@ -404,214 +397,96 @@ Gemini は、ヘイトスピーチ、ハラスメント、危険なコンテン�
 
 ---
 
-## 4. 既存テストの網羅状況と差分分析（マトリクス表形式）
+## 4. 探索的テストの一覧
 
-現行の `tests/GeminiGatewayClient.ExploratoryTests` および `tests/GeminiGatewayClient.Tests` の網羅状況を調査し、実 API に対する探索的テストのギャップをマトリクス形式で整理しました。
+`tests/GeminiGatewayClient.ExploratoryTests` には 9 クラス、45 件のテストがあります。すべて `[ExploratoryFact]` で定義されています。この表はテストコードが何を確認するかを示すもので、最新の実行結果を示すものではありません。
 
-### 凡例
-- **Covered (網羅)**: 実 API に対する探索的テストが存在し、動作が確認されている。
-- **Partial (一部のみ)**: 単体テストまたは一部のユースケースのみ存在し、実 API 連携の重要な側面が未検証。
-- **Missing (不足)**: 実 API に対する探索的テストが一切存在しない。
+TC 番号は、テスト開始時に `LogSection` が出力する番号です。番号のないテストもあります。
 
-### 網羅状況マトリクス表
+### 4.1 `BasicGenerationExploratoryTests` (7 件)
 
-| No | 大分類 | 機能・検証観点 | API サーフェス | 単体テスト状況 | 探索的テスト現況 | ギャップ評価 | ギャップ ID |
-|:--:|:---|:---|:---:|:---:|:---:|:---:|:---:|
-| 1 | MEAI | 順次ファンクションコール (`UseFunctionInvocation`) | `IChatClient` | ✅ 網羅 | ✅ 4段階順次ツール検証済 (`ChatClientIntegrationExploratoryTests`) | Covered | - |
-| 2 | MEAI | ストリーミングファンクションコール | `IChatClient` | ✅ 網羅 | ✅ 2段階順次ストリーミング検証済 | Covered | - |
-| 3 | MEAI | **並列ファンクションコール自動実行** | `IChatClient` | ✅ 網羅 | ❌ ネイティブテストのみで MEAI 未検証 | **Missing** | **GAP-MEAI-01** |
-| 4 | MEAI | **複合型・列挙型・配列のツール引数バインディング** | `IChatClient` | ✅ 網羅 | ❌ プリミティブ（string/int）のみ検証 | **Missing** | **GAP-MEAI-02** |
-| 5 | MEAI | **ツール内部エラーとモデルのリカバリ** | `IChatClient` | ❌ 未作成 | ❌ 実 API 未検証 | **Missing** | **GAP-MEAI-03** |
-| 6 | MEAI | **ChatClientBuilder 多段ミドルウェア構築** | `IChatClient` | ❌ 未作成 | ❌ 単一 `UseFunctionInvocation` のみ | **Missing** | **GAP-MEAI-04** |
-| 7 | MEAI | **引数なし関数の自動呼び出し (空スキーマ回避)** | `IChatClient` | ✅ 網羅 | ❌ 実 API 未検証 | **Missing** | **GAP-MEAI-05** |
-| 8 | MEAI | **Thinking (ThinkingConfig) とツールの併用** | `IChatClient` | ✅ 網羅 | ❌ ツールなしの推論のみ検証 | **Missing** | **GAP-MEAI-06** |
-| 9 | MEAI | 構造化出力 (`ChatResponseFormat.ForJsonSchema`) | `IChatClient` | ✅ 網羅 | ❌ ネイティブのみで MEAI 未検証 | **Missing** | **GAP-MEAI-07** |
-| 10 | MEAI | マルチモーダル入力 (`DataContent`) | `IChatClient` | ✅ 網羅 | ❌ ネイティブのみで MEAI 未検証 | **Missing** | **GAP-MEAI-08** |
-| 11 | Native | テキスト生成 & 基本パラメータ | `IGeminiClient` | ✅ 網羅 | ✅ 検証済 (`BasicGenerationExploratoryTests`) | Covered | - |
-| 12 | Native | SSE ストリーミング | `IGeminiClient` | ✅ 網羅 | ✅ 検証済 | Covered | - |
-| 13 | Native | ThinkingConfig (推論制御) | `IGeminiClient` | ✅ 網羅 | ✅ トークン消費・トランケーション検証済 | Covered | - |
-| 14 | Native | インライン画像マルチモーダル (PNG) | `IGeminiClient` | ✅ 網羅 | ✅ 32x32 PNG 検証済 | Covered | - |
-| 15 | Native | **音声マルチモーダル (PCM WAV)** | `IGeminiClient` | ✅ 網羅 | ❌ 音声実 API 未検証 | **Missing** | **GAP-NAT-01** |
-| 16 | Native | **PDF ドキュメントマルチモーダル** | `IGeminiClient` | ✅ 網羅 | ❌ PDF 実 API 未検証 | **Missing** | **GAP-NAT-02** |
-| 17 | Native | **MediaResolution (Low vs Medium) とトークン** | `IGeminiClient` | ✅ 網羅 | ❌ トークン消費差の実測未検証 | **Missing** | **GAP-NAT-03** |
-| 18 | Native | **サーバーサイド Python コード実行 (`Tool.CodeExecution`)** | `IGeminiClient` | ✅ 網羅 | ❌ コード実行サンドボックス未検証 | **Missing** | **GAP-NAT-04** |
-| 19 | Native | **ネイティブ OpenAPI 3.03 Schema 構造化出力** | `IGeminiClient` | ✅ 網羅 | ❌ JsonElement のみで Schema 未検証 | **Missing** | **GAP-NAT-05** |
-| 20 | Native | **セーフティ設定 (`SafetySetting`) と SafetyRatings** | `IGeminiClient` | ✅ 網羅 | ❌ 実 API での評価値未検証 | **Missing** | **GAP-NAT-06** |
-| 21 | Native | **ツール呼び出し強制抑制 (`FunctionCallingMode.None`)** | `IGeminiClient` | ✅ 網羅 | ❌ Mode=Any のみで None 未検証 | **Missing** | **GAP-NAT-07** |
-| 22 | Native | **コンテキストキャッシュ電文伝播 (`CachedContent`)** | `IGeminiClient` | ✅ 網羅 | ❌ 実 API 未検証 | **Missing** | **GAP-NAT-08** |
-| 23 | Native | Google Search Grounding | `IGeminiClient` | ✅ 網羅 | ✅ GroundingMetadata 検証済 | Covered | - |
-| 24 | Native | URL Context Grounding | `IGeminiClient` | ✅ 網羅 | ✅ UrlContextMetadata 検証済 | Covered | - |
-| 25 | Native | Embeddings 単一 & バッチ生成 | `IGeminiClient` | ✅ 網羅 | ✅ コサイン類似度検証済 | Covered | - |
-| 26 | Native | 長期対話コンテキスト保持 (6ターン) | `IGeminiClient` | ✅ 網羅 | ✅ トークン単調増加検証済 | Covered | - |
+| テストメソッド | 主な確認内容 |
+|:---|:---|
+| `ModelDiscovery_ListsAvailableFlashModels_AndSelectsPreferredFlashModel` | モデル一覧を取得でき、対象モデルが決まること |
+| `SimplePrompt_GenerateContentAsync_ReturnsTextAndUsageMetadata` | テキスト、`FinishReason.Stop`、トークン数が返ること |
+| `Streaming_YieldsChunksInRealTime` | チャンクが届き、`FinishReason.Stop` とトークン数が含まれること |
+| `StructuredOutput_ResponseJsonSchema_DeserializesToStronglyTypedRecord` | `ResponseJsonSchema` の出力をレコードへ変換できること |
+| `ThinkingConfig_IncludeThoughts_ReturnsThoughtSummaryAndFinalAnswer` | `ThinkingConfig` を指定して最終回答を得られること |
+| `ThinkingConfig_ExhaustedMaxOutputTokens_HandlesEmptyPartsSafelyWithTryGetModelContent` | 出力上限で `FinishReason.MaxTokens` になり、その後の再リクエストで回答を得られること |
+| `Multimodal_InlinePngBytes_RecognizesImageColorAndShape` | 32x32 の PNG の内容を説明できること |
 
----
+### 4.2 `ChatClientIntegrationExploratoryTests` (11 件)
 
-## 5. 不足しているテスト観点の詳細と追加対象テストケース一覧
+| TC | テストメソッド | 主な確認内容 |
+|:---:|:---|:---|
+| - | `IChatClient_UseFunctionInvocation_AutomaticallyChainsFourLocalTools` | 4 つのツールが実行され、結果が回答に反映されること |
+| - | `IChatClient_UseFunctionInvocation_Streaming_StreamsFinalResponseAndSingleUsage` | ストリーミングで 2 回以上ツールが実行され、回答と `Usage` を得られること |
+| - | `IChatClient_MultiTurnTools_WithStronglyTypedReturnSchema_CollidingCallIds_AndRedactedArguments_Succeeds` | 戻り値スキーマ、再利用された `CallId`、伏せた引数を含む複数ターンが成功すること |
+| - | `IChatClient_ThinkingConfig_ReturnsReasoningContent` | `RawRepresentationFactory` の `ThinkingConfig` で推論トークンまたは推論内容を得られること |
+| - | `DependencyInjection_AddGeminiClient_WithDynamicApiKeyProviderAndCustomHeaders_WorksEndToEnd` | DI 登録したクライアントで `ApiKeyProvider` が呼び出しごとに使われること |
+| TC-MEAI-01 | `IChatClient_UseFunctionInvocation_ParallelToolCalls_ExecutesConcurrentlyAndSynthesizesAnswer` | 札幌と福岡の両方についてツールが実行され、回答に反映されること |
+| TC-MEAI-02 | `IChatClient_UseFunctionInvocation_ComplexParametersAndEnums_BindsCorrectly` | レコード、列挙型、リストの引数が正しく渡ること |
+| TC-MEAI-03 | `IChatClient_UseFunctionInvocation_ToolErrorPayload_ModelRecoversGracefully` | ツールのエラー内容を受けて、モデルが回答を返すこと |
+| TC-MEAI-04 | `IChatClient_ChatClientBuilder_MultiMiddlewarePipeline_TracksTelemetryAndPreservesGetService` | ミドルウェアが 2 回以上呼ばれ、`GetService<T>` が機能すること |
+| TC-MEAI-05 | `IChatClient_UseFunctionInvocation_CombinedWithThinking_PreservesThoughtSignatures` | `ThinkingConfig` とツールの併用で、署名エラーなく回答を得られること |
+| TC-MEAI-06 | `IChatClient_UseFunctionInvocation_ParameterlessFunction_ExecutesWithoutSchemaRejection` | 引数なしの関数が実行されること |
 
-Milestone 2 において `tests/GeminiGatewayClient.ExploratoryTests` に実装すべき具体的な追加テストケースの仕様を以下に定義します。
+### 4.3 `NativeCapabilitiesExploratoryTests` (8 件)
 
-すべてのテストケースは `[ExploratoryFact]` を使用し、`GeminiAPIKey` 未設定時はクリーンにスキップされ、設定時は実 API と通信して動作確認を行います。
+| TC | テストメソッド | 主な確認内容 |
+|:---:|:---|:---|
+| TC-NAT-01 | `Multimodal_InlineWavAudioBytes_RecognizesAudioSignal` | 16kHz、1 秒、440Hz の WAV について説明できること |
+| TC-NAT-02 | `Multimodal_InlinePdfDocumentBytes_ExtractsStructuredContent` | PDF から `ALPHA-7729` を読み取れること |
+| TC-NAT-03 | `Multimodal_MediaResolution_LowVsMedium_DemonstratesDifferentialTokenConsumption` | 512x512 の PNG で `Low` のプロンプトトークンが `Medium` より少ないこと |
+| TC-NAT-04 | `NativeTools_ServerSidePythonCodeExecution_ExecutesAlgorithmAndReturnsResult` | Python が実行され、回答に `735` が含まれること |
+| TC-NAT-05 | `StructuredOutput_NativeOpenApiSchema_ValidatesAndDeserializesContract` | `ResponseSchema` の出力をレコードへ変換できること |
+| TC-NAT-06 | `SafetySettings_CustomThresholds_ReturnsPopulatedSafetyRatings` | 閾値を指定した無害な質問がブロックされず、`SafetyRatings` が返ること |
+| TC-NAT-07 | `ToolConfig_FunctionCallingModeNone_SuppressesDeclaredTools` | `FunctionCallingMode.None` で `FunctionCall` が 0 個になること |
+| TC-NAT-08 | `ContextCaching_CachedContentWirePropagation_TransmitsResourceIdentifier` | 存在しないキャッシュで 400、403、404 のいずれかになり、メッセージに `CachedContent` が含まれること |
 
----
+### 4.4 その他のテストクラス (19 件)
 
-### 5.1 MEAI 連携の新規テストケース一覧 (`ChatClientIntegrationExploratoryTests.cs`)
-
-#### TC-MEAI-01: 並列ツール呼び出し自動ディスパッチの検証
-- **テストメソッド名**: `IChatClient_UseFunctionInvocation_ParallelToolCalls_DispatchesConcurrentlyAndSynthesizesAnswer`
-- **対象機能**: `FunctionInvokingChatClient` の並列ファンクションコール処理能力 (GAP-MEAI-01)
-- **前提条件・ツールセット**:
-  - `get_branch_weather(string branchCity)`: 支店名から現地の天気を返す。
-  - `get_branch_stock(string branchCity, string itemSku)`: 支店名と商品コードから在庫数を返す。
-- **入力プロンプト**:
-  「札幌支店 (`Sapporo`) と福岡支店 (`Fukuoka`) の両方について、現地の天気と商品 `SKU-DRIVE-2TB` の在庫数を**同時に**調べて比較報告してください。」
-- **期待される振る舞い・アサーション**:
-  1. Gemini が単一ターンで 2 つ以上のツール呼び出し（計 4 呼び出し、または 2 支店並列）を発行すること。
-  2. `FunctionInvokingChatClient` がそれらすべてを漏れなく実行し、実行トレースリストに全呼び出しが記録されていること。
-  3. 最終レスポンステキストに両支店の天気および在庫数の両方の情報が含まれていること。
-
-#### TC-MEAI-02: 複合型・列挙型・配列パラメータのスキーマ生成とバインディング検証
-- **テストメソッド名**: `IChatClient_UseFunctionInvocation_ComplexParametersAndEnums_BindsArgumentsCorrectly`
-- **対象機能**: `AIJsonUtilities.CreateJsonSchema` と `ToolJsonConverter` による高度な型バインディング (GAP-MEAI-02)
-- **前提条件・型定義**:
-  - `enum SupportPriority { Low, Normal, High, Urgent }`
-  - `record TicketFilter(string Department, SupportPriority Priority, List<string> Tags, int MaxCount = 5)`
-  - ツール関数: `query_support_tickets(TicketFilter filter)`
-- **入力プロンプト**:
-  「ITサポート部門 (`ITSupport`) のチケットで、優先度が `Urgent`、タグに `Network` と `Security` が付いているものを最大 3 件検索してください。」
-- **期待される振る舞い・アサーション**:
-  1. Gemini が C# 側の `TicketFilter` クラス定義に従った JSON オブジェクト引数を生成すること。
-  2. `SupportPriority.Urgent` が列挙型として正しくバインドされ、`Tags` リストに `"Network"` と `"Security"` が含まれ、`MaxCount` が 3 に設定されていること。
-  3. ツールが返した検索結果が最終回答に反映されること。
-
-#### TC-MEAI-03: ツールエラー発生時のモデル自律リカバリ検証
-- **テストメソッド名**: `IChatClient_UseFunctionInvocation_ToolErrorPayload_ModelRecoversGracefully`
-- **対象機能**: ツール例外・エラーペイロードに対する `FunctionInvokingChatClient` とモデルの回復力 (GAP-MEAI-03)
-- **前提条件・ツールセット**:
-  - `find_user_profile(string userId)`: `userId == "USER-999"` の場合に `new { status = "ERROR", errorCode = "USER_NOT_FOUND", message = "User USER-999 does not exist in directory" }` を返す。
-  - `find_fallback_contact(string department)`: 代替の部署連絡先を返す。
-- **入力プロンプト**:
-  「ユーザー `USER-999` の連絡先を調べてください。もしユーザーが見つからなければ、人事部 (`HR`) の連絡先窓口を調べて案内してください。」
-- **期待される振る舞い・アサーション**:
-  1. 最初に対象ユーザーの検索ツールが実行され、エラー結果がモデルに返ること。
-  2. モデルがエラーを理解し、例外で終了することなく、続いて代替ツール `find_fallback_contact` を呼び出すか、ユーザーが見つからなかった旨を明示して適切に回答すること。
-
-#### TC-MEAI-04: ChatClientBuilder 多段ミドルウェアパイプラインの検証
-- **テストメソッド名**: `IChatClient_ChatClientBuilder_CustomAuditingMiddleware_InterceptsAndTracksExecution`
-- **対象機能**: `ChatClientBuilder` によるミドルウェアスタックと `GetService<T>` の透過性 (GAP-MEAI-04)
-- **前提条件**:
-  - カスタムミドルウェア `AuditingChatClient : DelegatingChatClient` を実装。各 `GetResponseAsync` 呼び出しのリクエスト/レスポンス回数とトークン数を集計。
-  - パイプライン構成: `new ChatClientBuilder(geminiChatClient).Use(auditor).UseFunctionInvocation().Build()`
-- **期待される振る舞い・アサーション**:
-  1. ツール呼び出しを伴うリクエストにおいて、ミドルウェアが内部ターンを含む全往復を傍受し、カウントが 2 回以上記録されること。
-  2. `pipeline.GetService<ChatClientMetadata>()` と `pipeline.GetService<IGeminiClient>()` が `null` でなく、基盤のクライアントインスタンスが取得できること。
-
-#### TC-MEAI-05: 引数なし関数の自動呼び出し検証 (空スキーマの抑制)
-- **テストメソッド名**: `IChatClient_UseFunctionInvocation_ParameterlessFunction_ExecutesWithoutSchemaRejection`
-- **対象機能**: パラメータなし関数定義で `parametersJsonSchema == null` が適用され、HTTP 400 を回避できること (GAP-MEAI-05)
-- **前提条件**:
-  - `[Description("現在稼働中のゲートウェイサーバーのシステム稼働状況を取得します。")] object GetSystemStatus()`
-- **入力プロンプト**:
-  「現在のシステム稼働状況を確認して教えてください。」
-- **期待される振る舞い・アサーション**:
-  1. HTTP 400 Bad Request を発生させずに API 呼び出しが成功すること。
-  2. `GetSystemStatus` が実行され、その結果（稼働率やステータス）が回答に含まれること。
-
-#### TC-MEAI-06: 推論モデル (ThinkingConfig) とファンクションコールの併用検証
-- **テストメソッド名**: `IChatClient_UseFunctionInvocation_CombinedWithThinking_PreservesThoughtSignatures`
-- **対象機能**: 推論プロセスを伴うマルチターンツール呼び出しでの Thought Signature 整合性 (GAP-MEAI-06)
-- **前提条件**:
-  - `RawRepresentationFactory` で `ThinkingConfig { ThinkingLevel = ThinkingLevel.Low, IncludeThoughts = true }` を指定
-  - ツール関数と `UseFunctionInvocation()` を設定。
-- **入力プロンプト**:
-  論理的推論と数値計算を要するプロンプト。
-- **期待される振る舞い・アサーション**:
-  1. 内部ターンをまたぐ際に `ThoughtSignature` が適切に引き継がれ、署名検証エラー（HTTP 400）が発生しないこと。
-  2. 最終応答に推論トークンまたは推論内容（`TextReasoningContent`）が確認でき、最終回答が得られること。
+| クラス | テストメソッド | 主な確認内容 |
+|:---|:---|:---|
+| `FunctionCallingChainExploratoryTests` | `ComplexToolChain_ParallelAndSequentialCalls_CompletesBusinessTripWorkflow` | 3 ラウンド以上で 5 種類のツールが呼ばれ、回答に結果が含まれること |
+| | `ToolConfig_FunctionCallingModeAny_ForcesAllowedFunctionCall` | `FunctionCallingMode.Any` で指定した関数だけが呼ばれること |
+| `GroundingAndEmbeddingsExploratoryTests` | `GoogleSearchGrounding_NativeGeminiClient_PopulatesGroundingMetadataAndChunks` | `GroundingMetadata` が返ること |
+| | `GoogleSearchGrounding_IChatClient_HostedWebSearchTool_MapsCitationAnnotationsAndValidatesMultibyteSpans` | 引用の範囲がテキストの長さに収まること |
+| | `UrlContext_NativeGeminiClient_RetrievesUrlAndPopulatesUrlContextMetadata` | `UrlContextMetadata` が返ること |
+| | `EmbedContent_AndBatchEmbedContents_NativeGeminiClient_ComputesExpectedSemanticSimilarity` | 単一とバッチの埋め込みの次元数と類似度 |
+| | `IEmbeddingGenerator_ViaDependencyInjection_SingleAndBatchGeneration_WorksEndToEnd` | DI 登録した `IEmbeddingGenerator` の単一とバッチの生成 |
+| `GroundingOffsetsExploratoryTests` | `NonStreaming_RegionsMatchTheSegmentText` | 引用の範囲が Gemini の示す `Segment.Text` と一致すること |
+| | `Streaming_RegionsMatchTheSegmentText` | ストリーミングでも同様に一致すること |
+| | `ToolModeWithoutFunctionDeclarations_IsAccepted` | 関数なしで `ChatToolMode.Auto` を指定しても受け付けられること |
+| `LongConversationExploratoryTests` | `MultiTurn_NativeGeminiClient_RetainsAllConstraintsAcrossSixTurns` | 6 ターンの文脈が保たれ、プロンプトトークンが増えること |
+| | `MultiTurn_IChatClient_WithSimulatedJsonPersistence_ContinuesCleanlyAcrossTurns` | JSON に保存して復元した履歴で会話を続けられること |
+| | `MultiTurn_IChatClient_Streaming_PreservesThoughtSignatureAcrossToChatResponse_AndOmitsEmptyTextContent` | `ToChatResponse()` を経ても署名が残ること |
+| | `MultiTurn_NativeStreaming_ToModelContentAsync_KeepsPartsForSubsequentTurns` | `ToModelContentAsync()` の結果で会話を続けられること |
+| `RequestEncodingExploratoryTests` | `Generate_JapaneseSentAsUtf8_ReachesTheModelUnchanged` | 日本語などが UTF-8 で送られ、そのまま届くこと |
+| | `ChatStream_JapaneseSentAsUtf8_ReachesTheModelUnchanged` | `IChatClient` のストリーミングでも同様であること |
+| | `Embedding_JapaneseSentAsUtf8_IsAccepted` | 埋め込みでも UTF-8 で送られ、受け付けられること |
+| `StreamFormatExploratoryTests` | `Stream_WithoutAltSse_ReadsTheJsonArrayGeminiSends` | `alt=sse` が届かない場合の JSON 配列を読めること |
+| | `Stream_WithServerSentEventsOff_ReadsTheJsonArrayGeminiSends` | `UseServerSentEvents = false` でも同様に読めること |
 
 ---
 
-### 5.2 Native 機能の新規テストケース一覧 (`NativeCapabilitiesExploratoryTests.cs`)
+## 5. 実 API で未検証の観点
 
-#### TC-NAT-01: インライン PCM WAV 音声マルチモーダル認識の検証
-- **テストメソッド名**: `Multimodal_InlineWavAudio_RecognizesAudioData`
-- **対象機能**: `Part.FromBytes` による WAV 音声入力の理解 (GAP-NAT-01)
-- **インメモリ資産生成**:
-  44 バイトの RIFF/WAVE ヘッダー + 16kHz モノラル PCM データ（1 秒間の 440Hz 基準音 または 無音波形）を合成。
-- **リクエスト構成**:
-  `GenerateContentRequest` にテキスト「提供された音声ファイルの内容・長さを説明してください。」と合成 WAV バイト列 (`MimeTypes.AudioWav`) を添付。
-- **期待される振る舞い・アサーション**:
-  1. API がエラーなく応答を返すこと。
-  2. モデルが音声ファイルであることを認識し、音声に関する説明を出力すること。
+次の観点には、探索的テストがありません。単体テストがある観点は、モック応答での確認に限られます。
 
-#### TC-NAT-02: インライン PDF ドキュメント構造化抽出の検証
-- **テストメソッド名**: `Multimodal_InlinePdfDocument_ExtractsDocumentTextAndAnswersQuestion`
-- **対象機能**: `Part.FromBytes` による PDF ドキュメント解析 (GAP-NAT-02)
-- **インメモリ資産生成**:
-  「Gemini Gateway Client Specification v1.0, Confidential Code: ALPHA-7729」というテキストが描画された最小構造の PDF 1.4 バイナリをインメモリで合成。
-- **リクエスト構成**:
-  PDF バイナリ (`MimeTypes.Pdf`) と質問「PDF 内に記載されている Confidential Code の値を抽出してください。」を送信。
-- **期待される振る舞い・アサーション**:
-  1. モデルの回答に `"ALPHA-7729"` が明確に含まれていること。
-
-#### TC-NAT-03: MediaResolution (Low vs Medium) とトークン消費量の比較検証
-- **テストメソッド名**: `Multimodal_MediaResolution_LowVsMedium_ReflectsTokenConsumptionDifference`
-- **対象機能**: `GenerationConfig.MediaResolution` のトークン削減効果 (GAP-NAT-03)
-- **インメモリ資産生成**: 64x64 のインメモリ PNG 画像。
-- **テスト手順**:
-  1. `MediaResolution.Low` を設定して画像を送信し、`UsageMetadata.PromptTokenCount` ($T_{low}$) を取得。
-  2. `MediaResolution.Medium` を設定して同一画像を送信し、`UsageMetadata.PromptTokenCount` ($T_{med}$) を取得。
-- **期待される振る舞い・アサーション**:
-  $T_{low} < T_{med}$（`Low` 解像度の方がプロンプトトークン数が少ないこと）が実測されること。
-
-#### TC-NAT-04: サーバーサイド Python コード実行 (`Tool.CodeExecution`) の検証
-- **テストメソッド名**: `CodeExecution_ServerSidePython_ExecutesCodeAndIntegratesResult`
-- **対象機能**: `Tool.CodeExecution` と `Part.ExecutableCode` / `Part.CodeExecutionResult` のハンドリング (GAP-NAT-04)
-- **リクエスト構成**:
-  - `Tools = [new Tool { CodeExecution = new CodeExecutionTool() }]`
-  - プロンプト:「Python コードを実行して、1 から 100 までの整数のうち 7 の倍数の合計を求めてください。」
-- **期待される振る舞い・アサーション**:
-  1. 返却された `Candidate.Content.Parts` に `ExecutableCode` が含まれ、`Language == CodeExecutionLanguage.Python` であること。
-  2. `CodeExecutionResult` が含まれ、`Outcome == CodeExecutionOutcome.Ok` であること。
-  3. 最終回答に計算結果の正解（735）が含まれていること。
-
-#### TC-NAT-05: ネイティブ OpenAPI 3.03 Schema 構造化出力の検証
-- **テストメソッド名**: `StructuredOutput_NativeOpenApi3Schema_EnforcesJsonStructure`
-- **対象機能**: `GenerationConfig.ResponseSchema` と `SchemaType` による型安全な出力制約 (GAP-NAT-05)
-- **スキーマ定義**:
-  `SchemaType.Object` をルートとし、`companyName` (String), `foundedYear` (Integer), `isPublic` (Boolean), `headquarters` (String) を持つスキーマをネイティブ型で構築。
-- **期待される振る舞い・アサーション**:
-  1. レスポンスが完全な JSON 文字列として生成されること。
-  2. 指定スキーマに対応する C# レコード型に `JsonSerializer.Deserialize` で直接デシリアライズできること。
-
-#### TC-NAT-06: セーフティ設定 (`SafetySetting`) と SafetyRatings の検証
-- **テストメソッド名**: `SafetySettings_CustomThresholds_PopulatesCandidateSafetyRatings`
-- **対象機能**: `GenerateContentRequest.SafetySettings` の反映と `SafetyRating` の取得 (GAP-NAT-06)
-- **リクエスト構成**:
-  4 つの主要カテゴリ（ハラスメント、ヘイト、性的、危険）に対して `HarmBlockThreshold.BlockOnlyHigh` を明示的に設定して一般的な質問を送信。
-- **期待される振る舞い・アサーション**:
-  1. レスポンスの `Candidate.SafetyRatings` に各カテゴリの評価オブジェクトが複数含まれていること。
-  2. 各評価の `Category` が設定したカテゴリと一致し、`Probability` が設定されていること。
-  3. 正常な入力に対して `response.IsBlocked` が `false` であること。
-
-#### TC-NAT-07: ツール呼び出しの強制抑制 (`FunctionCallingMode.None`) の検証
-- **テストメソッド名**: `ToolConfig_FunctionCallingModeNone_SuppressesToolInvocation`
-- **対象機能**: `FunctionCallingMode.None` による自然言語出力の強制 (GAP-NAT-07)
-- **リクエスト構成**:
-  - 天気取得ツール `get_weather` を `GenerateContentRequest.Tools` に登録。
-  - `ToolConfig = new() { FunctionCallingConfig = new() { Mode = FunctionCallingMode.None } }` を指定。
-  - プロンプト:「東京の現在の天気を調べて教えてください。」
-- **期待される振る舞い・アサーション**:
-  1. 通常であればツールを呼ぶようなプロンプトであっても、返却される `Parts` 内に `FunctionCall` が **0 個** であること。
-  2. モデルが自然言語テキストのみで応答すること。
-
-#### TC-NAT-08: コンテキストキャッシュ電文伝播 (`CachedContent`) の検証
-- **テストメソッド名**: `ContextCaching_CachedContentResource_PropagatesToWire`
-- **対象機能**: `GenerateContentRequest.CachedContent` のシリアライズと電文伝播 (GAP-NAT-08)
-- **リクエスト構成**:
-  `request.CachedContent = "cachedContents/exploratory-nonexistent-cache-id"`
-- **期待される振る舞い・アサーション**:
-  1. クライアント側でパラメータが正しく電文に含まれて Google サーバーへ送信されること。
-  2. 実 API から「キャッシュが見つからない」ことを示す `GeminiApiException`（HTTP 404 または HTTP 400）がスローされ、その詳細メッセージに指定したキャッシュリソース名またはキャッシュ関連のメッセージが含まれていること（電文がサーバーに確実に到達したことの証明）。
+| 観点 | 現在の確認範囲 |
+|:---|:---|
+| `ChatOptions.Reasoning` | 単体テストのみ。探索的テストは `RawRepresentationFactory` の `ThinkingConfig` を使用 |
+| `ChatResponseFormat.ForJsonSchema` | 単体テストのみ。探索的テストはネイティブのスキーマ指定のみ |
+| `IChatClient` への `DataContent` 入力 | 単体テストのみ。探索的テストは `Part.FromBytes` のみ |
+| `ChatToolMode.None`、`RequireAny` | 単体テストのみ。探索的テストはネイティブの `FunctionCallingMode` と、関数なしの `ChatToolMode.Auto` のみ |
+| 有効なキャッシュでの `CachedContentTokenCount` | `CachedInputTokenCount` への変換は単体テストのみ。実 API では存在しないキャッシュの拒否だけを確認 |
+| ストリーミングの `Usage` の二重計上防止 | `UsageContent` の出力は単体テストで確認。実 API では `TotalTokenCount > 0` のみを確認 |
+| 1 ターンでの並列ツール呼び出し | TC-MEAI-01 は全呼び出しの実行だけを確認し、同じターンで返ることは確認していない |
+| `MediaResolution.High` | 単体テストはシリアライズのみ。探索的テストは `Low` と `Medium` のみ |
+| CSV、Python など、テキストファイルのインライン入力 | テストなし |
+| 有害な入力の実際のブロック | ブロック判定は単体テストのみ。TC-NAT-06 は無害な入力のみ |
+| 他社の履歴を Gemini へ渡す場合 | 探索的テストなし。[`IChatClient` の説明](usage/chat-client.md#histories-from-other-providers)にある動作は手動で確認 |
 
 ---
 
@@ -636,6 +511,6 @@ dotnet build tests/GeminiGatewayClient.ExploratoryTests/GeminiGatewayClient.Expl
 # 2. 既存単体テストの全件成功確認（リグレッション防止）
 dotnet test tests/GeminiGatewayClient.Tests/GeminiGatewayClient.Tests.csproj
 
-# 3. 探索的テストの実行（GeminiAPIKey が設定されている場合は実API実行、未設定時は全件スキップ）
+# 3. 探索的テストの実行（GeminiAPIKey または GEMINI_API_KEY があれば実 API を実行、なければ全件スキップ）
 dotnet test tests/GeminiGatewayClient.ExploratoryTests/GeminiGatewayClient.ExploratoryTests.csproj
 ```
