@@ -164,6 +164,8 @@ From the helpers:
 
 A gateway may report a failure with HTTP 200. Any `error` value other than `null` then fails the call, with `StatusCode` taken from `error.code` when it is between 400 and 599, and 500 otherwise. A 2xx status is never reported for such an error.
 
+This includes values that look empty, such as `false`, `""`, and `{}`, even next to a usable answer in `candidates`.
+
 ### Responses That Cannot Be Used
 
 These throw `GeminiApiException` with the 2xx status. Any body that arrived is in `ErrorContent`, which is `null` for an empty one:
@@ -207,10 +209,42 @@ These responses succeed, so check for them:
 | The output limit was reached | `FinishReason.MaxTokens`, with partial or no text | `response.FinishReason` |
 | Thinking used up the output limit | No parts, `response.Text` is `null` | `TryGetModelContent` returns `false` |
 | A function call failed | `FinishReason.MalformedFunctionCall` and others | `response.FinishReason`; `ChatResponse.FinishReason` is `null` |
+| A stream closed cleanly before the end | Partial text, and no chunk has a finish reason | [The last finish reason](#streams-that-end-early) |
+| A plain JSON error line in an event stream | Ignored, because it is not an event | [The last finish reason](#streams-that-end-early) |
 | A value the library does not know | `Unknown` | The enum value |
 | A field the library does not model | Nothing is lost | `ExtensionData` |
 
 With `IChatClient`, a block shows as `ChatFinishReason.ContentFilter`. See [Finish Reasons](chat-client.md#finish-reasons).
+
+### Streams That End Early
+
+A stream that is cut inside an event, or whose connection is lost, fails with an exception. A stream that a gateway closes cleanly between events does not, so partial text can look like a complete answer. The same goes for a line such as `{"error": ...}` sent without `data:`, which an event stream ignores. If more events follow that line, the stream can even finish normally.
+
+To detect an early end, keep the last finish reason:
+
+```csharp
+using GeminiGatewayClient;
+using GeminiGatewayClient.Models;
+
+FinishReason? finishReason = null;
+BlockReason? blockReason = null;
+
+await foreach (var chunk in client.StreamGenerateContentAsync("Hello", cancellationToken: ct))
+{
+    Console.Write(chunk.Text);
+    finishReason = chunk.FinishReason ?? finishReason;
+    blockReason = chunk.BlockReason ?? blockReason;
+}
+
+if (finishReason is null && blockReason is null)
+{
+    Console.Error.WriteLine("The stream ended without a finish reason, so the answer may be incomplete.");
+}
+```
+
+A blocked prompt has no candidates and so no finish reason, which is why the sample also checks `BlockReason`.
+
+With `IChatClient`, `FinishReason` can also be `null` for a failed function call or a reason with no mapping, so `null` alone does not prove an early end. Read the `GenerateContentResponse` chunks from `ChatResponseUpdate.RawRepresentation` to tell them apart.
 
 ## Telling Cancellation from a Timeout
 
