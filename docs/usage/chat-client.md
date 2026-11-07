@@ -163,6 +163,35 @@ Part kinds with no chat mapping, such as `toolCall`, need `RawRepresentation` an
 
 When trimming a history, remove a `FunctionCallContent` together with its `FunctionResultContent`.
 
+## Histories From Other Providers
+
+A `ChatMessage` history can move between `IChatClient` implementations, and text, function calls, and function results carry over. Two things need care, and the library does not change the history for you.
+
+**Remove reasoning before the history changes provider.** `TextReasoningContent.ProtectedData` is only valid for the provider that made it. Gemini answers another provider's value with a 400 `Invalid thought signature`, and other providers can reject a signature from Gemini too. A history can hold one even if thoughts were never requested, because streamed text with a signature adds a `TextReasoningContent` with empty text.
+
+```csharp
+using Microsoft.Extensions.AI;
+
+static List<ChatMessage> WithoutReasoning(IEnumerable<ChatMessage> history)
+{
+    var result = new List<ChatMessage>();
+    foreach (var message in history)
+    {
+        var contents = message.Contents.Where(c => c is not TextReasoningContent).ToList();
+        if (contents.Count > 0)
+        {
+            var copy = message.Clone();
+            copy.Contents = contents;
+            result.Add(copy);
+        }
+    }
+
+    return result;
+}
+```
+
+**Move to Gemini between turns, not during a tool call.** A function call made by another provider has no `thoughtSignature`. If the history ends with its result, Gemini answers with a 400 that says the function call is missing a `thought_signature`. The same history is accepted once a new user message follows.
+
 ## `GetService`
 
 `chatClient.GetService<ChatClientMetadata>()` returns the provider name `gemini`, the endpoint, and the default model. `GetService<IGeminiClient>()` returns the underlying client.

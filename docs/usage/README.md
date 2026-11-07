@@ -29,7 +29,7 @@ How to use `GeminiGatewayClient`, one topic per page. Every sample assumes the s
 
 | Page | Covers |
 |---|---|
-| [`IChatClient`](chat-client.md) | What maps to what, streaming, usage, persisting history |
+| [`IChatClient`](chat-client.md) | What maps to what, streaming, usage, persisting history, histories from other providers |
 | [Embeddings](embeddings.md) | `EmbedContentAsync`, `BatchEmbedContentsAsync`, `IEmbeddingGenerator` |
 | [Native AOT](native-aot.md) | Trimming and source-generated JSON for tools |
 
