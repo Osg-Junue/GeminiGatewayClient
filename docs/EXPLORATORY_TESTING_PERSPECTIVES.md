@@ -2,7 +2,7 @@
 (GeminiGatewayClient Exploratory Testing Perspectives)
 
 **ドキュメントバージョン**: 1.1.0  
-**対象バージョン**: 4.1.0  
+**対象バージョン**: 4.2.0  
 **対象プロジェクト**: `GeminiGatewayClient`  
 **検証対象テストプロジェクト**: `tests/GeminiGatewayClient.ExploratoryTests`  
 **関連プロジェクト**: `tests/GeminiGatewayClient.Tests` (単体テスト)
