@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [4.2.0] - 2026-11-17
 
 ### Added
 - **`GeminiChatPropertyNames.Thought`** (`gemini.thought`) marks content other than text that came from a `thought` part, such as an interim image of an image model. It tells that content apart from the final output, and the part goes back as a thought after chat history serialization drops `RawRepresentation`. Thought text stays a `TextReasoningContent` without the flag.
