@@ -8,7 +8,7 @@ All notable changes to this project are documented in this file.
 - **`GeminiChatPropertyNames.Thought`** (`gemini.thought`) marks content other than text that came from a `thought` part, such as an interim image of an image model. It tells that content apart from the final output, and the part goes back as a thought after chat history serialization drops `RawRepresentation`. Thought text stays a `TextReasoningContent` without the flag.
 
 ### Fixed
-- A response part with a `functionCall` that has no `name`, or a `fileData` that has no `fileUri`, no longer fails the whole response or stream. `FunctionCall.Name` and `FileData.FileUri` are empty in that case and are no longer `required` members.
+- A response part with a `functionCall` that has no `name`, or a `fileData` that has no `fileUri`, no longer fails the whole response or stream. `FunctionCall.Name` and `FileData.FileUri` are empty in that case and are no longer `required` members. Such a call cannot be answered: Gemini rejects a function result with an empty name with HTTP 400, which is what automatic function invocation then receives.
 - An enum sent as a flag, a fraction, or an object is read as `Unknown` on a JSON array stream too. It failed there while data was still arriving, although an event stream already accepted it.
 - An HTML page that a gateway sends in place of a stream is read only as far as the 64 KB kept in `ErrorContent`, not to its end. A single JSON object still has no size limit, because it may be a whole response.
 - Citations on a long response are converted from UTF-8 offsets to UTF-16 indices in one pass over the text, not one pass per citation.

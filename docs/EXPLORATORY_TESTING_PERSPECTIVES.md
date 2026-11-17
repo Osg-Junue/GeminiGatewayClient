@@ -399,7 +399,7 @@ Gemini は、ヘイトスピーチ、ハラスメント、危険なコンテン�
 
 ## 4. 探索的テストの一覧
 
-`tests/GeminiGatewayClient.ExploratoryTests` には 9 クラス、45 件のテストがあります。すべて `[ExploratoryFact]` で定義されています。この表はテストコードが何を確認するかを示すもので、最新の実行結果を示すものではありません。
+`tests/GeminiGatewayClient.ExploratoryTests` には 10 クラス、48 件のテストがあります。すべて `[ExploratoryFact]` で定義されています。この表はテストコードが何を確認するかを示すもので、最新の実行結果を示すものではありません。
 
 TC 番号は、テスト開始時に `LogSection` が出力する番号です。番号のないテストもあります。
 
@@ -444,12 +444,13 @@ TC 番号は、テスト開始時に `LogSection` が出力する番号です。
 | TC-NAT-07 | `ToolConfig_FunctionCallingModeNone_SuppressesDeclaredTools` | `FunctionCallingMode.None` で `FunctionCall` が 0 個になること |
 | TC-NAT-08 | `ContextCaching_CachedContentWirePropagation_TransmitsResourceIdentifier` | 存在しないキャッシュで 400、403、404 のいずれかになり、メッセージに `CachedContent` が含まれること |
 
-### 4.4 その他のテストクラス (19 件)
+### 4.4 その他のテストクラス (22 件)
 
 | クラス | テストメソッド | 主な確認内容 |
 |:---|:---|:---|
 | `FunctionCallingChainExploratoryTests` | `ComplexToolChain_ParallelAndSequentialCalls_CompletesBusinessTripWorkflow` | 3 ラウンド以上で 5 種類のツールが呼ばれ、回答に結果が含まれること |
 | | `ToolConfig_FunctionCallingModeAny_ForcesAllowedFunctionCall` | `FunctionCallingMode.Any` で指定した関数だけが呼ばれること |
+| | `FunctionResultWithoutAName_InTheHistory_IsRejectedByTheApi` | 名前が空の関数結果を含む履歴が、400 `INVALID_ARGUMENT` で拒否されること |
 | `GroundingAndEmbeddingsExploratoryTests` | `GoogleSearchGrounding_NativeGeminiClient_PopulatesGroundingMetadataAndChunks` | `GroundingMetadata` が返ること |
 | | `GoogleSearchGrounding_IChatClient_HostedWebSearchTool_MapsCitationAnnotationsAndValidatesMultibyteSpans` | 引用の範囲がテキストの長さに収まること |
 | | `UrlContext_NativeGeminiClient_RetrievesUrlAndPopulatesUrlContextMetadata` | `UrlContextMetadata` が返ること |
@@ -467,6 +468,8 @@ TC 番号は、テスト開始時に `LogSection` が出力する番号です。
 | | `Embedding_JapaneseSentAsUtf8_IsAccepted` | 埋め込みでも UTF-8 で送られ、受け付けられること |
 | `StreamFormatExploratoryTests` | `Stream_WithoutAltSse_ReadsTheJsonArrayGeminiSends` | `alt=sse` が届かない場合の JSON 配列を読めること |
 | | `Stream_WithServerSentEventsOff_ReadsTheJsonArrayGeminiSends` | `UseServerSentEvents = false` でも同様に読めること |
+| `StreamTimingExploratoryTests` | `Stream_ConsumerSlowerThanTheIdleTimeout_StillReceivesTheWholeAnswer` | 受け手が `StreamIdleTimeout` より長く止まっても、回答を最後まで受け取れること |
+| | `Stream_CanceledWhileTheAnswerIsArriving_EndsWithOperationCanceledAtOnce` | 受信中のキャンセルが、すぐに `OperationCanceledException` で終わること |
 
 ---
 
@@ -486,6 +489,10 @@ TC 番号は、テスト開始時に `LogSection` が出力する番号です。
 | `MediaResolution.High` | 単体テストはシリアライズのみ。探索的テストは `Low` と `Medium` のみ |
 | CSV、Python など、テキストファイルのインライン入力 | テストなし |
 | 有害な入力の実際のブロック | ブロック判定は単体テストのみ。TC-NAT-06 は無害な入力のみ |
+| `thought` の付いた画像などのパート | `GeminiChatPropertyNames.Thought` の付与と再送は単体テストのみ。画像を生成するモデルでの確認はなし |
+| 名前のない `functionCall`、`fileUri` のない `fileData` | 読み取りは単体テストのみ。実 API がこの形を返すことは確認していない。名前が空の関数結果を送り返した場合の拒否だけを実 API で確認 |
+| 文字列以外で届く列挙値、ストリームの代わりに届く HTML | 単体テストのみ。実 API からは再現できない |
+| 無応答による `StreamIdleTimeout` の発生 | 単体テストのみ。実 API では、受け手が遅い場合に発生しないことだけを確認 |
 | 他社の履歴を Gemini へ渡す場合 | 探索的テストなし。[`IChatClient` の説明](usage/chat-client.md#histories-from-other-providers)にある動作は手動で確認 |
 
 ---
