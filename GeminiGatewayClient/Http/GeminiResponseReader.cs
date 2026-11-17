@@ -58,8 +58,16 @@ internal static class GeminiResponseReader
         var first = await body.PeekAsync(cancellationToken).ConfigureAwait(false);
         if (first is (byte)'{' or (byte)'<')
         {
+            // A JSON object may be a whole response, of any size. An HTML page never is, and only its start is reported,
+            // so the rest of it is not read.
+            var limit = first == (byte)'<' ? GeminiErrorParser.MaxErrorBodyChars : long.MaxValue;
             using var buffer = new MemoryStream();
-            await body.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+            var block = new byte[16 * 1024];
+            for (int read; buffer.Length < limit && (read = await body.ReadAsync(block, cancellationToken).ConfigureAwait(false)) > 0;)
+            {
+                buffer.Write(block, 0, read);
+            }
+
             yield return ParseChunk(buffer.GetBuffer().AsSpan(0, (int)buffer.Length), statusCode);
             yield break;
         }

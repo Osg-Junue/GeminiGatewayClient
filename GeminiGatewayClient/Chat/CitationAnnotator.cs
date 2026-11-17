@@ -18,17 +18,18 @@ internal static class CitationAnnotator
     /// </summary>
     public static void Annotate(Candidate candidate, AIContent target, string text, List<GroundingChunk>? streamedChunks = null)
     {
+        var offsets = new Utf8Offsets(text);
         foreach (var citation in candidate.CitationMetadata?.Citations ?? [])
         {
             if (citation is not null)
             {
-                AddCitation(citation, target, text);
+                AddCitation(citation, target, offsets);
             }
         }
 
         if (candidate.GroundingMetadata is { } grounding)
         {
-            AddGrounding(grounding, target, text, streamedChunks);
+            AddGrounding(grounding, target, offsets, streamedChunks);
         }
     }
 
@@ -45,14 +46,14 @@ internal static class CitationAnnotator
         }
     }
 
-    private static void AddCitation(Citation citation, AIContent target, string text)
+    private static void AddCitation(Citation citation, AIContent target, Utf8Offsets offsets)
     {
         var annotation = new CitationAnnotation { Title = citation.Title, Url = ToUri(citation.Uri), RawRepresentation = citation };
-        AddRegion(annotation, text, citation.StartIndex, citation.EndIndex);
+        AddRegion(annotation, offsets, citation.StartIndex, citation.EndIndex);
         (target.Annotations ??= []).Add(annotation);
     }
 
-    private static void AddGrounding(GroundingMetadata grounding, AIContent target, string text, List<GroundingChunk>? streamedChunks)
+    private static void AddGrounding(GroundingMetadata grounding, AIContent target, Utf8Offsets offsets, List<GroundingChunk>? streamedChunks)
     {
         var firstNewChunk = streamedChunks?.Count ?? 0;
         streamedChunks?.AddRange(grounding.GroundingChunks);
@@ -77,14 +78,14 @@ internal static class CitationAnnotator
                     referenced.Add(index);
                     var annotation = GetOrAddChunkAnnotation(target, chunk);
                     annotation.Snippet ??= string.IsNullOrEmpty(segment?.Text) ? null : segment.Text;
-                    AddRegion(annotation, text, segment?.StartIndex, segment?.EndIndex);
+                    AddRegion(annotation, offsets, segment?.StartIndex, segment?.EndIndex);
                 }
             }
 
             if (!attached && segment is not null)
             {
                 var annotation = new CitationAnnotation { Snippet = segment.Text, RawRepresentation = support };
-                AddRegion(annotation, text, segment.StartIndex, segment.EndIndex);
+                AddRegion(annotation, offsets, segment.StartIndex, segment.EndIndex);
                 (target.Annotations ??= []).Add(annotation);
             }
         }
@@ -124,40 +125,64 @@ internal static class CitationAnnotator
     /// <summary>
     /// Records the span given by Gemini's UTF-8 byte offsets as UTF-16 indices.
     /// </summary>
-    private static void AddRegion(CitationAnnotation annotation, string text, int? startByte, int? endByte)
+    private static void AddRegion(CitationAnnotation annotation, Utf8Offsets offsets, int? startByte, int? endByte)
     {
-        var length = Encoding.UTF8.GetByteCount(text);
+        if (startByte is null && endByte is null)
+        {
+            return;
+        }
+
+        var length = offsets.Length;
         var start = startByte ?? 0;
-        if ((startByte is null && endByte is null) || start < 0 || start > length || endByte < start)
+        if (start < 0 || start > length || endByte < start)
         {
             return;
         }
 
         (annotation.AnnotatedRegions ??= []).Add(new TextSpanAnnotatedRegion
         {
-            StartIndex = ToUtf16Index(text, start),
-            EndIndex = ToUtf16Index(text, Math.Min(endByte ?? length, length))
+            StartIndex = offsets.ToUtf16Index(start),
+            EndIndex = offsets.ToUtf16Index(Math.Min(endByte ?? length, length))
         });
     }
 
     /// <summary>
-    /// Returns the UTF-16 index of the first character at or after <paramref name="utf8Offset"/>.
+    /// Converts UTF-8 byte offsets in a text to UTF-16 indices. The text is walked once, when the first offset is asked for,
+    /// because walking it for every citation would make a long response with many of them quadratic.
     /// </summary>
-    private static int ToUtf16Index(string text, int utf8Offset)
+    private sealed class Utf8Offsets(string text)
     {
-        var bytes = 0;
-        var chars = 0;
-        foreach (var rune in text.EnumerateRunes())
+        private int[]? _indices;
+
+        /// <summary>
+        /// The length of the text in UTF-8 bytes.
+        /// </summary>
+        public int Length => Indices.Length - 1;
+
+        private int[] Indices => _indices ??= Build();
+
+        /// <summary>
+        /// Returns the UTF-16 index of the first character at or after <paramref name="utf8Offset"/>.
+        /// </summary>
+        public int ToUtf16Index(int utf8Offset) => Indices[utf8Offset];
+
+        private int[] Build()
         {
-            if (bytes >= utf8Offset)
+            var indices = new int[Encoding.UTF8.GetByteCount(text) + 1];
+            var bytes = 0;
+            var chars = 0;
+            foreach (var rune in text.EnumerateRunes())
             {
-                break;
+                indices[bytes] = chars;
+                chars += rune.Utf16SequenceLength;
+
+                // An offset inside a character stands for the next one.
+                indices.AsSpan(bytes + 1, rune.Utf8SequenceLength - 1).Fill(chars);
+                bytes += rune.Utf8SequenceLength;
             }
 
-            bytes += rune.Utf8SequenceLength;
-            chars += rune.Utf16SequenceLength;
+            indices[bytes] = chars;
+            return indices;
         }
-
-        return chars;
     }
 }

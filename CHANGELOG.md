@@ -10,6 +10,9 @@ All notable changes to this project are documented in this file.
 ### Fixed
 - A response part with a `functionCall` that has no `name`, or a `fileData` that has no `fileUri`, no longer fails the whole response or stream. `FunctionCall.Name` and `FileData.FileUri` are empty in that case and are no longer `required` members.
 - An enum sent as a flag, a fraction, or an object is read as `Unknown` on a JSON array stream too. It failed there while data was still arriving, although an event stream already accepted it.
+- An HTML page that a gateway sends in place of a stream is read only as far as the 64 KB kept in `ErrorContent`, not to its end. A single JSON object still has no size limit, because it may be a whole response.
+- Citations on a long response are converted from UTF-8 offsets to UTF-16 indices in one pass over the text, not one pass per citation.
+- A streaming read times its idle wait with one timer for the whole body, not a new one for each read.
 
 ## [4.1.0] - 2026-11-06
 
