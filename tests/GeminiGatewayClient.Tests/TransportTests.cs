@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using GeminiGatewayClient.Http;
 using GeminiGatewayClient.Models;
 
 namespace GeminiGatewayClient.Tests;
@@ -81,6 +82,24 @@ public class TransportTests
         var bytes = Encoding.UTF8.GetBytes("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"🌸あ\"}]}}]}\n\n");
 
         Assert.Equal(["🌸あ"], await StreamTextsAsync(Stream(new TrickleStream(bytes))));
+    }
+
+    [Theory]
+    [InlineData("true")]
+    [InlineData("1.5")]
+    [InlineData("{\"x\":1}")]
+    public async Task JsonArrayStream_ReadsAnEnumOfTheWrongKindAsUnknown_WhileDataIsStillArriving(string finishReason)
+    {
+        // Longer than the serializer's buffer, so the first chunk is parsed before the stream has ended.
+        var padding = new string('a', 40_000);
+        var body = "[{\"candidates\":[{\"finishReason\":" + finishReason + ",\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}," +
+                   "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"" + padding + "\"}]}}]}]";
+        using var client = CreateClient(Stream(new TrickleStream(Encoding.UTF8.GetBytes(body)), "application/json"));
+
+        var chunks = await client.StreamGenerateContentAsync(Request()).ToListAsync();
+
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal(FinishReason.Unknown, chunks[0].FinishReason);
     }
 
     [Theory]
@@ -326,6 +345,38 @@ public class TransportTests
         var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Body("<html>maintenance</html>", "text/html")));
 
         Assert.Equal("<html>maintenance</html>", error.ErrorContent);
+    }
+
+    [Fact]
+    public async Task Stream_GatewayAnsweringWithAHugeHtmlPage_ReadsOnlyTheStartOfIt()
+    {
+        var page = new CountingStream(Encoding.UTF8.GetBytes("<html>" + new string('x', 1_000_000)));
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => StreamTextsAsync(Stream(page, "text/html")));
+
+        Assert.Equal(64 * 1024, error.ErrorContent!.Length);
+        Assert.InRange(page.BytesRead, 64 * 1024, 128 * 1024);
+    }
+
+    [Fact]
+    public async Task Stream_SingleJsonObjectLargerThanAnErrorBody_IsStillReadWhole()
+    {
+        var text = new string('a', 200_000);
+        var body = "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"" + text + "\"}]}}]}";
+
+        Assert.Equal([text], await StreamTextsAsync(Body(body, "application/json")));
+    }
+
+    [Fact]
+    public async Task ResponseBody_ReadIntoAnEmptyBuffer_DoesNotEndTheBody()
+    {
+        await using var body = new ResponseBodyStream(new MemoryStream("data: x"u8.ToArray()), idleTimeout: null, HttpStatusCode.OK);
+
+        Assert.Equal(0, await body.ReadAsync(Memory<byte>.Empty));
+        using var rest = new MemoryStream();
+        await body.CopyToAsync(rest);
+
+        Assert.Equal("data: x\n\n", Encoding.UTF8.GetString(rest.ToArray()));
     }
 
     [Fact]
@@ -759,6 +810,24 @@ public class TransportTests
     {
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
             base.ReadAsync(buffer[..Math.Min(1, buffer.Length)], cancellationToken);
+    }
+
+    /// <summary>
+    /// Counts the bytes that were read from it.
+    /// </summary>
+    private sealed class CountingStream(byte[] bytes) : MemoryStream(bytes)
+    {
+        public int BytesRead { get; private set; }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var read = await base.ReadAsync(buffer, cancellationToken);
+            BytesRead += read;
+            return read;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
     }
 
     /// <summary>

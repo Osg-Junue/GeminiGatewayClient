@@ -23,6 +23,9 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>gemini;google;generative-ai;llm;ai;ichatclient;iembeddinggenerator;embeddings;grounding;microsoft-extensions-ai;api-gateway;proxy;apim;cloudflare;aot</PackageTags>
     <Version>4.1.0</Version>
+    <!-- Fails the pack when the public API breaks compatibility with the last release. Raise the baseline after each release. -->
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>4.1.0</PackageValidationBaselineVersion>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
     <PackageRequireLicenseAcceptance>False</PackageRequireLicenseAcceptance>

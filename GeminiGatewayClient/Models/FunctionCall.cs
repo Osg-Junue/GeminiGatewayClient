@@ -18,9 +18,10 @@ public sealed class FunctionCall
 
     /// <summary>
     /// Required. Name of the function to call (matches a <see cref="FunctionDeclaration.Name"/>).
+    /// Empty when a response leaves it out, so that one incomplete part does not fail the whole response.
     /// </summary>
     [JsonPropertyName("name")]
-    public required string Name
+    public string Name
     {
         get;
         set => field = value ?? "";

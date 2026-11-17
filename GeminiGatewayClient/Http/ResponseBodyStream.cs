@@ -12,6 +12,7 @@ namespace GeminiGatewayClient.Http;
 internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, HttpStatusCode statusCode) : Stream
 {
     private readonly MemoryStream _head = new();
+    private CancellationTokenSource _idle = new();
     private ReadOnlyMemory<byte> _unread;
     private bool _ended;
 
@@ -71,7 +72,9 @@ internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, Ht
         if (_unread.IsEmpty)
         {
             var read = await ReadBodyAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (read > 0 || _ended)
+
+            // A read into an empty buffer returns nothing without the body having ended.
+            if (read > 0 || _ended || buffer.IsEmpty)
             {
                 return read;
             }
@@ -88,12 +91,15 @@ internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, Ht
 
     private async ValueTask<int> ReadBodyAsync(Memory<byte> buffer, CancellationToken cancellationToken)
     {
-        using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // One source times every read of the body, where a linked source and its timer for each read would be allocated
+        // once per chunk.
+        var idle = _idle;
         if (idleTimeout is { } timeout)
         {
             idle.CancelAfter(timeout);
         }
 
+        var registration = cancellationToken.UnsafeRegister(static source => ((CancellationTokenSource)source!).Cancel(), idle);
         try
         {
             var read = await inner.ReadAsync(buffer, idle.Token).ConfigureAwait(false);
@@ -113,6 +119,18 @@ internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, Ht
                 "Failed to read the Gemini response body.",
                 ex,
                 statusCode);
+        }
+        finally
+        {
+            registration.Dispose();
+
+            // Stops the timer, so that a slow consumer is not taken for an idle server. A source that was canceled
+            // stays canceled, and the next read needs a new one.
+            if (!idle.TryReset())
+            {
+                idle.Dispose();
+                _idle = new CancellationTokenSource();
+            }
         }
     }
 
@@ -136,6 +154,7 @@ internal sealed class ResponseBodyStream(Stream inner, TimeSpan? idleTimeout, Ht
         if (disposing)
         {
             inner.Dispose();
+            _idle.Dispose();
         }
 
         base.Dispose(disposing);

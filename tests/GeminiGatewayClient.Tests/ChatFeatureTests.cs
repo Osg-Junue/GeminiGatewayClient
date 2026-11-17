@@ -27,6 +27,8 @@ public class ChatFeatureTests
     [InlineData("こんにちは世界", 15, 21, 5, 7)]
     [InlineData("🌸a", 4, 5, 2, 3)]
     [InlineData("ab", 0, 2, 0, 2)]
+    [InlineData("こんにちは", 1, 4, 1, 2)]
+    [InlineData("ab", 1, 99, 1, 2)]
     public async Task Citation_OnASingleText_ConvertsUtf8OffsetsToUtf16(string text, int startByte, int endByte, int start, int end)
     {
         using var handler = new RecordingHandler(Grounded("{\"text\":\"" + text + "\"}", startByte, endByte));

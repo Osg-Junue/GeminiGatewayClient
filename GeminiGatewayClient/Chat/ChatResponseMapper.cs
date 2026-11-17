@@ -145,7 +145,7 @@ internal static class ChatResponseMapper
                 break;
 
             case { Text.Length: > 0 }:
-                contents.Add(WithSignature(new TextContent(part.Text) { RawRepresentation = part }, part));
+                contents.Add(WithPartMetadata(new TextContent(part.Text) { RawRepresentation = part }, part));
 
                 // Merging streamed text drops AdditionalProperties, so the signature also travels on a companion content.
                 if (isStreaming && !string.IsNullOrEmpty(part.ThoughtSignature))
@@ -158,15 +158,15 @@ internal static class ChatResponseMapper
                 break;
 
             case { InlineData: { Data.Length: > 0 } blob }:
-                contents.Add(WithSignature(new DataContent(blob.Data, ToValidMediaType(blob.MimeType)) { RawRepresentation = part }, part));
+                contents.Add(WithPartMetadata(new DataContent(blob.Data, ToValidMediaType(blob.MimeType)) { RawRepresentation = part }, part));
                 break;
 
             case { FileData: { FileUri.Length: > 0 } file } when Uri.TryCreate(file.FileUri, UriKind.RelativeOrAbsolute, out var fileUri):
-                contents.Add(WithSignature(new UriContent(fileUri, ToValidMediaType(file.MimeType)) { RawRepresentation = part }, part));
+                contents.Add(WithPartMetadata(new UriContent(fileUri, ToValidMediaType(file.MimeType)) { RawRepresentation = part }, part));
                 break;
 
             case { ExecutableCode: not null } or { CodeExecutionResult: not null }:
-                contents.Add(WithSignature(ToCodeExecutionContent(part), part));
+                contents.Add(WithPartMetadata(ToCodeExecutionContent(part), part));
                 break;
 
             // Part kinds without a chat mapping (for example toolCall) still have to reach the next turn.
@@ -185,12 +185,18 @@ internal static class ChatResponseMapper
     private static string ToValidMediaType(string? mediaType) =>
         MediaTypeHeaderValue.TryParse(mediaType, out _) ? mediaType! : MimeTypes.ApplicationOctetStream;
 
-    private static T WithSignature<T>(T content, Part part)
+    private static T WithPartMetadata<T>(T content, Part part)
         where T : AIContent
     {
         if (!string.IsNullOrEmpty(part.ThoughtSignature))
         {
             (content.AdditionalProperties ??= [])[GeminiChatPropertyNames.ThoughtSignature] = part.ThoughtSignature;
+        }
+
+        // Merging streamed text spreads the properties of the first text over the whole text, so text never carries the flag.
+        if (part.Thought == true && content is not TextContent)
+        {
+            (content.AdditionalProperties ??= [])[GeminiChatPropertyNames.Thought] = true;
         }
 
         return content;
@@ -210,7 +216,7 @@ internal static class ChatResponseMapper
             (content.AdditionalProperties ??= [])[GeminiChatPropertyNames.SynthesizedCallId] = true;
         }
 
-        return WithSignature(content, part);
+        return WithPartMetadata(content, part);
     }
 
     private static AIContent ToCodeExecutionContent(Part part)

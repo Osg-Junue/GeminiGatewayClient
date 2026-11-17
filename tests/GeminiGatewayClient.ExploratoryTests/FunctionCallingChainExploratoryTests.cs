@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Text.Json;
 using GeminiGatewayClient.ExploratoryTests.Infrastructure;
 using GeminiGatewayClient.Models;
@@ -190,6 +191,34 @@ public sealed class FunctionCallingChainExploratoryTests(ExploratoryTestFixture 
 
         var call = Assert.Single(response.FunctionCalls);
         Assert.Equal("get_security_audit_log", call.Name);
+    }
+
+    /// <summary>
+    /// A function call that arrives without a name is readable, but it cannot be answered: this is what sending its
+    /// result back does, as automatic function invocation would.
+    /// </summary>
+    [ExploratoryFact]
+    public async Task FunctionResultWithoutAName_InTheHistory_IsRejectedByTheApi()
+    {
+        LogSection("Function result without a name in the history");
+        using var client = CreateGeminiClient();
+
+        var request = new GenerateContentRequest
+        {
+            Contents =
+            [
+                Content.FromText("What is the weather in Tokyo?"),
+                Content.FromParts(Role.Model, new Part { FunctionCall = new FunctionCall { Args = JsonSerializer.SerializeToElement(new { city = "Tokyo" }) } }),
+                Content.FromParts(Role.User, new Part { FunctionResponse = new FunctionResponse { Name = "", Response = JsonSerializer.SerializeToElement(new { result = "Sunny" }) } })
+            ],
+            Tools = [new Tool { FunctionDeclarations = [new FunctionDeclaration { Name = "get_weather", Description = "Gets the weather of a city." }] }]
+        };
+
+        var error = await Assert.ThrowsAsync<GeminiApiException>(() => client.GenerateContentAsync(request));
+
+        Output.WriteLine($"{(int)error.StatusCode} {error.ErrorStatus}: {error.ErrorMessage}");
+        Assert.Equal(HttpStatusCode.BadRequest, error.StatusCode);
+        Assert.Equal("INVALID_ARGUMENT", error.ErrorStatus);
     }
 
     private static Tool BuildTravelWorkflowTools()

@@ -48,10 +48,10 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
     private static bool GetFlag(AdditionalPropertiesDictionary? properties, string key) =>
         properties is not null && properties.TryGetValue(key, out var value) && value is true or JsonElement { ValueKind: JsonValueKind.True };
 
-    private static Part WithMetadata(Part part, Part? raw, string? signature)
+    private static Part WithMetadata(Part part, Part? raw, string? signature, bool thought = false)
     {
         part.ThoughtSignature = signature;
-        part.Thought ??= raw?.Thought;
+        part.Thought ??= raw?.Thought ?? (thought ? true : null);
         part.VideoMetadata = raw?.VideoMetadata;
         part.ExtensionData = raw?.ExtensionData;
 
@@ -86,7 +86,7 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
         }
     }
 
-    private static void AppendCodeExecution(List<Part> parts, AIContent item, Part? raw, string? signature)
+    private static void AppendCodeExecution(List<Part> parts, AIContent item, Part? raw, string? signature, bool thought)
     {
         var properties = item.AdditionalProperties;
         var code = GetString(properties, GeminiChatPropertyNames.ExecutableCode);
@@ -97,12 +97,12 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
         if (code is not null || language is not null)
         {
             var executable = new ExecutableCode { Code = code, Language = Enum.TryParse<CodeExecutionLanguage>(language, ignoreCase: true, out var parsed) ? parsed : null };
-            parts.Add(WithMetadata(new Part { ExecutableCode = executable }, raw, signature));
+            parts.Add(WithMetadata(new Part { ExecutableCode = executable }, raw, signature, thought));
         }
         else if (output is not null || outcome is not null)
         {
             var result = new CodeExecutionResult { Output = output, Outcome = Enum.TryParse<CodeExecutionOutcome>(outcome, ignoreCase: true, out var parsed) ? parsed : null };
-            parts.Add(WithMetadata(new Part { CodeExecutionResult = result }, raw, signature));
+            parts.Add(WithMetadata(new Part { CodeExecutionResult = result }, raw, signature, thought));
         }
         else if (raw is not null)
         {
@@ -163,6 +163,7 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
     {
         var raw = item.RawRepresentation as Part;
         var signature = GetString(item.AdditionalProperties, GeminiChatPropertyNames.ThoughtSignature) ?? raw?.ThoughtSignature;
+        var thought = GetFlag(item.AdditionalProperties, GeminiChatPropertyNames.Thought);
 
         switch (item)
         {
@@ -178,17 +179,17 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
                 break;
 
             case DataContent data:
-                parts.Add(WithMetadata(Part.FromBytes(data.Data.Span, data.MediaType), raw, signature));
+                parts.Add(WithMetadata(Part.FromBytes(data.Data.Span, data.MediaType), raw, signature, thought));
                 break;
 
             case UriContent uri:
                 // A media type absent from the response was only filled in because UriContent requires one.
                 var mediaType = raw is { FileData.MimeType: null } || string.IsNullOrWhiteSpace(uri.MediaType) ? null : uri.MediaType;
-                parts.Add(WithMetadata(Part.FromUri(uri.Uri.OriginalString, mediaType), raw, signature));
+                parts.Add(WithMetadata(Part.FromUri(uri.Uri.OriginalString, mediaType), raw, signature, thought));
                 break;
 
             case FunctionCallContent call:
-                parts.Add(WithMetadata(ToFunctionCallPart(call), raw, signature));
+                parts.Add(WithMetadata(ToFunctionCallPart(call), raw, signature, thought));
                 break;
 
             case FunctionResultContent result:
@@ -200,7 +201,7 @@ internal sealed class ChatRequestMapper(JsonSerializerOptions toolSerializerOpti
                     $"HostedFileContent ('{file.FileId}') cannot be sent to Gemini. Use UriContent with the uploaded file's URI and media type.");
 
             default:
-                AppendCodeExecution(parts, item, raw, signature);
+                AppendCodeExecution(parts, item, raw, signature, thought);
                 break;
         }
     }
