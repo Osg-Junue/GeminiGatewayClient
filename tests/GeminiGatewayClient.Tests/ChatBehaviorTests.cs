@@ -101,6 +101,54 @@ public class ChatBehaviorTests
         Assert.Equal(2, result.Messages[0].Contents.Count);
     }
 
+    [Theory]
+    [InlineData("""{"functionCall":{"args":{"a":1}}}""")]
+    [InlineData("""{"fileData":{"mimeType":"image/png"}}""")]
+    public async Task PartWithoutItsNameOrUri_DoesNotFailTheResponse(string incompletePart)
+    {
+        var response = "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"hello\"}," + incompletePart + "]},\"finishReason\":\"STOP\"}]}";
+        using var singleHandler = new RecordingHandler(response);
+        using var streamHandler = new RecordingHandler("data: " + response + "\n\n", contentType: "text/event-stream");
+
+        var buffered = await CreateClient(singleHandler).AsIChatClient().GetResponseAsync("hi");
+        var streamed = await CreateClient(streamHandler).AsIChatClient().GetStreamingResponseAsync("hi").ToChatResponseAsync();
+
+        Assert.Equal("hello", buffered.Text);
+        Assert.Equal("hello", streamed.Text);
+    }
+
+    [Fact]
+    public async Task ThoughtImage_IsMarked_AndStaysAThoughtAfterHistorySerialization()
+    {
+        const string response = """{"candidates":[{"content":{"role":"model","parts":[{"thought":true,"thoughtSignature":"U0lH","inlineData":{"mimeType":"image/png","data":"AAEC"}},{"inlineData":{"mimeType":"image/png","data":"AAEC"}}]},"finishReason":"STOP"}]}""";
+        using var handler = new RecordingHandler(response);
+        var first = await CreateClient(handler).AsIChatClient().GetResponseAsync("hi");
+
+        var images = first.Messages[0].Contents.OfType<DataContent>().ToList();
+        Assert.Equal(2, images.Count);
+        Assert.True(images[0].AdditionalProperties?[GeminiChatPropertyNames.Thought] is true);
+        Assert.Null(images[1].AdditionalProperties);
+
+        var json = JsonSerializer.Serialize(first.Messages, AIJsonUtilities.DefaultOptions);
+        var restored = JsonSerializer.Deserialize<List<ChatMessage>>(json, AIJsonUtilities.DefaultOptions)!;
+        var parts = await SentParts([.. restored, new ChatMessage(ChatRole.User, "next")], contentIndex: 0);
+
+        Assert.True(parts[0].GetProperty("thought").GetBoolean());
+        Assert.Equal("U0lH", parts[0].GetProperty("thoughtSignature").GetString());
+        Assert.False(parts[1].TryGetProperty("thought", out _));
+    }
+
+    [Fact]
+    public async Task ThoughtFlag_IsNotPutOnText_WhichStreamingWouldSpreadOverTheWholeAnswer()
+    {
+        const string response = """{"candidates":[{"content":{"role":"model","parts":[{"thought":true,"text":"thinking"},{"text":"answer"}]},"finishReason":"STOP"}]}""";
+        using var handler = new RecordingHandler(response);
+
+        var result = await CreateClient(handler).AsIChatClient().GetResponseAsync("hi");
+
+        Assert.All(result.Messages[0].Contents, content => Assert.Null(content.AdditionalProperties));
+    }
+
     [Fact]
     public async Task MalformedFunctionCall_DoesNotClaimToolCalls()
     {

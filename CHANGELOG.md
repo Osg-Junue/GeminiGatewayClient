@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+- **`GeminiChatPropertyNames.Thought`** (`gemini.thought`) marks content other than text that came from a `thought` part, such as an interim image of an image model. It tells that content apart from the final output, and the part goes back as a thought after chat history serialization drops `RawRepresentation`. Thought text stays a `TextReasoningContent` without the flag.
+
+### Fixed
+- A response part with a `functionCall` that has no `name`, or a `fileData` that has no `fileUri`, no longer fails the whole response or stream. `FunctionCall.Name` and `FileData.FileUri` are empty in that case and are no longer `required` members.
+- An enum sent as a flag, a fraction, or an object is read as `Unknown` on a JSON array stream too. It failed there while data was still arriving, although an event stream already accepted it.
+
 ## [4.1.0] - 2026-11-06
 
 ### Added

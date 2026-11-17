@@ -19,6 +19,14 @@ public static class GeminiChatPropertyNames
     public const string ThoughtSignature = "gemini.thoughtSignature";
 
     /// <summary>
+    /// <c>AIContent.AdditionalProperties</c> flag set to <c>true</c> on content other than text that came from a part marked
+    /// <c>thought</c>, such as an interim image of an image model. It tells such content apart from the final output, and the part is
+    /// sent back as a thought after chat history serialization drops <c>RawRepresentation</c>. Thought text is a
+    /// <c>TextReasoningContent</c> and does not carry the flag.
+    /// </summary>
+    public const string Thought = "gemini.thought";
+
+    /// <summary>
     /// <c>FunctionCallContent.AdditionalProperties</c> key set to <c>true</c> when <c>CallId</c> was generated locally because
     /// the server did not return a function call ID. Such IDs are never sent back to the API.
     /// </summary>

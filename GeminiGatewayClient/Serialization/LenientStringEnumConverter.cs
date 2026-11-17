@@ -71,7 +71,8 @@ public sealed class LenientStringEnumConverter<[DynamicallyAccessedMembers(Dynam
             return s_fromNumeric.TryGetValue(numeric, out var candidate) ? candidate : s_unknownValue;
         }
 
-        reader.Skip();
+        // Skip() refuses a reader over a stream that has not ended, even though the whole value is already here.
+        reader.TrySkip();
         return s_unknownValue;
     }
 

@@ -84,6 +84,24 @@ public class TransportTests
     }
 
     [Theory]
+    [InlineData("true")]
+    [InlineData("1.5")]
+    [InlineData("{\"x\":1}")]
+    public async Task JsonArrayStream_ReadsAnEnumOfTheWrongKindAsUnknown_WhileDataIsStillArriving(string finishReason)
+    {
+        // Longer than the serializer's buffer, so the first chunk is parsed before the stream has ended.
+        var padding = new string('a', 40_000);
+        var body = "[{\"candidates\":[{\"finishReason\":" + finishReason + ",\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}," +
+                   "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"" + padding + "\"}]}}]}]";
+        using var client = CreateClient(Stream(new TrickleStream(Encoding.UTF8.GetBytes(body)), "application/json"));
+
+        var chunks = await client.StreamGenerateContentAsync(Request()).ToListAsync();
+
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal(FinishReason.Unknown, chunks[0].FinishReason);
+    }
+
+    [Theory]
     [InlineData("text/event-stream")]
     [InlineData("application/json")]
     [InlineData("application/octet-stream")]

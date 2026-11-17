@@ -17,9 +17,10 @@ public sealed class FileData
 
     /// <summary>
     /// Required. URI of the file (for example a File API URI or <c>gs://bucket/object</c>).
+    /// Empty when a response leaves it out, so that one incomplete part does not fail the whole response.
     /// </summary>
     [JsonPropertyName("fileUri")]
-    public required string FileUri
+    public string FileUri
     {
         get;
         set => field = value ?? "";

@@ -143,6 +143,7 @@ ChatResponse response = updates.ToChatResponse();
 |---|---|
 | `TextReasoningContent.ProtectedData` | A reasoning `thoughtSignature` |
 | `AdditionalProperties[GeminiChatPropertyNames.ThoughtSignature]` | The signature of a text, function call, or other part |
+| `AdditionalProperties[GeminiChatPropertyNames.Thought]` | A flag on content other than text that came from a `thought` part, such as an interim image |
 | `AdditionalProperties[GeminiChatPropertyNames.SynthesizedCallId]` | Marks a local `CallId` that is never sent back |
 | `AdditionalProperties[GeminiChatPropertyNames.SignatureCompanion]` | A flag: the `ProtectedData` of this content belongs to the preceding streamed text |
 | `AdditionalProperties[GeminiChatPropertyNames.ExecutableCode]` and the related keys | Code execution parts |
